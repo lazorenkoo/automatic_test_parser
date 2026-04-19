@@ -248,7 +248,7 @@ app.get('/quiz/:slug', (req, res) => {
     userAgent: req.get('user-agent'),
   });
 
-  res.type('html').send(renderHostedQuizHtml(quiz));
+  res.type('html').send(renderHostedQuizHtml(quiz, buildAbsoluteUrl(req, `/quiz/${quiz.slug}`)));
 });
 
 app.get('/api/download/:slug', (req, res) => {

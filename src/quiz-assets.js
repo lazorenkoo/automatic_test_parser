@@ -87,6 +87,8 @@ h1{
   background:#fffaf3;
   border-radius:18px;
   padding:12px 14px;
+  overflow-wrap:anywhere;
+  word-break:break-word;
 }
 .meta-chip span{
   display:block;
@@ -607,10 +609,11 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 `.trim();
 
-export function renderHostedQuizHtml(quiz) {
+export function renderHostedQuizHtml(quiz, quizUrl = null) {
   const title = htmlEscape(quiz.title);
   const bootstrap = safeJsonForScript({
     slug: quiz.slug,
+    quizUrl: quizUrl || '',
     title: quiz.title,
     questions: quiz.questions,
   });
@@ -629,7 +632,7 @@ export function renderHostedQuizHtml(quiz) {
       <span id="eyebrow" class="eyebrow">PDMU quiz link</span>
       <h1 id="pageTitle">${title}</h1>
       <div class="meta">
-        <div class="meta-chip"><span id="linkLabel">Ссылка</span>${htmlEscape(quiz.slug)}</div>
+        <div class="meta-chip"><span id="linkLabel">Ссылка</span>${htmlEscape(quizUrl || quiz.slug)}</div>
         <div class="meta-chip"><span id="countLabel">Вопросов</span><strong id="quizLength">${quiz.questions.length}</strong></div>
       </div>
     </section>
