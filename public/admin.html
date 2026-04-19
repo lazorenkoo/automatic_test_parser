@@ -12,12 +12,17 @@
       <form id="quizForm" class="card form-card">
         <div class="card-head">
           <h2>Создать тест</h2>
-          <p>Локальный парсер читает файл и собирает готовый quiz без внешнего API.</p>
         </div>
 
         <label class="field">
           <span>Файл с тестами</span>
-          <input id="sourceFile" name="sourceFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required />
+          <input
+            id="sourceFile"
+            name="sourceFile"
+            type="file"
+            accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            required
+          />
         </label>
 
         <div class="split">
@@ -30,25 +35,29 @@
             <span>Вариантов ответа в вопросе</span>
             <input id="optionCount" name="optionCount" type="number" min="2" max="10" value="5" required />
           </label>
+        </div>
 
-          <label class="field">
+        <div class="field">
+          <span>Количество вопросов</span>
+
+          <label class="choice-row">
+            <input id="useAllQuestions" name="useAllQuestions" type="checkbox" checked />
+            <span>Все вопросы</span>
+          </label>
+
+          <label id="questionLimitField" class="field nested-field hidden">
             <span>Сколько вопросов распарсить</span>
-            <input id="questionLimit" name="questionLimit" type="number" min="1" value="20" required />
+            <input id="questionLimit" name="questionLimit" type="number" min="1" value="20" />
           </label>
         </div>
 
-        <label class="field">
-          <span>Одноразовый пароль</span>
-          <input id="accessCode" name="accessCode" type="password" placeholder="Например: ABCD-EFGH-JKLM" required />
-        </label>
-
-        <button id="submitBtn" class="primary-btn" type="submit">Запустить обработку</button>
+        <button id="submitBtn" class="primary-btn" type="submit">Передать файл</button>
+        <a class="manager-link" href="/manager">Управление тестами</a>
       </form>
 
       <section class="card result-card">
         <div class="card-head">
           <h2>Результат</h2>
-          <p>Здесь появится готовая ссылка после обработки.</p>
         </div>
 
         <div id="statusBox" class="status idle">Ожидаю загрузку файла.</div>

@@ -46,6 +46,7 @@ const server = spawn(process.execPath, ['server.js'], {
     PORT: String(port),
     BASE_URL: `http://localhost:${port}`,
     ADMIN_SECRET: adminSecret,
+    TELEGRAM_BOT_ENABLED: '0',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -72,20 +73,35 @@ try {
 
   const code = codesPayload.codes[0];
   const fileBytes = await fs.readFile(copiedPath);
-  const form = new FormData();
-  form.append('sourceFile', new File([fileBytes], path.basename(copiedPath)));
-  form.append('answerIndex', '1');
-  form.append('optionCount', '4');
-  form.append('questionLimit', '3');
-  form.append('accessCode', code);
+  const parseForm = new FormData();
+  parseForm.append('sourceFile', new File([fileBytes], path.basename(copiedPath)));
+  parseForm.append('answerIndex', '1');
+  parseForm.append('optionCount', '4');
+  parseForm.append('questionMode', 'manual');
+  parseForm.append('questionLimit', '3');
 
-  const quizResponse = await fetch(`http://localhost:${port}/api/quizzes`, {
+  const parseResponse = await fetch(`http://localhost:${port}/api/parse`, {
     method: 'POST',
-    body: form,
+    body: parseForm,
+  });
+  const parsePayload = await parseResponse.json();
+  if (!parseResponse.ok) {
+    throw new Error(`parse failed: ${JSON.stringify(parsePayload)}`);
+  }
+
+  const quizResponse = await fetch(`http://localhost:${port}/api/quizzes/finalize`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      draftToken: parsePayload.draftToken,
+      accessCode: code,
+    }),
   });
   const quizPayload = await quizResponse.json();
   if (!quizResponse.ok) {
-    throw new Error(`quiz failed: ${JSON.stringify(quizPayload)}`);
+    throw new Error(`finalize failed: ${JSON.stringify(quizPayload)}`);
   }
 
   const publicResponse = await fetch(quizPayload.quizUrl);
@@ -95,6 +111,7 @@ try {
   console.log(JSON.stringify({
     code,
     extension: fakeExtension,
+    parsePayload,
     quizPayload,
     publicStatus: publicResponse.status,
     jsonStatus: jsonResponse.status,

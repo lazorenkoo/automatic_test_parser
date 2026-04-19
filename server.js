@@ -5,15 +5,26 @@ import multer from 'multer';
 import archiver from 'archiver';
 import {
   createAccessCodes,
-  finalizeQuizFromReservation,
+  createQuizDraft,
+  finalizeQuizFromDraftReservation,
   getDbMeta,
   getQuizBySlug,
+  listQuizzesForAdmin,
+  recordQuizVisit,
   releaseReservation,
   reserveAccessCode,
+  setQuizBanStatus,
 } from './src/db.js';
 import { parseQuizFromFile, SUPPORTED_UPLOAD_EXTENSIONS } from './src/parser.js';
+import { startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
-import { buildAbsoluteUrl, normalizeUploadedFilename, sanitizeText } from './src/utils.js';
+import {
+  buildAbsoluteUrl,
+  htmlEscape,
+  normalizeUploadedFilename,
+  randomToken,
+  sanitizeText,
+} from './src/utils.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -35,6 +46,10 @@ app.get('/', (_req, res) => {
   res.sendFile(path.resolve('public/admin.html'));
 });
 
+app.get('/manager', (_req, res) => {
+  res.sendFile(path.resolve('public/manager.html'));
+});
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -44,15 +59,15 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.post('/api/quizzes', upload.fields([
+app.post('/api/parse', upload.fields([
   { name: 'sourceFile', maxCount: 1 },
   { name: 'pdf', maxCount: 1 },
 ]), async (req, res, next) => {
   const file = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
   const answerIndex = Number(req.body.answerIndex);
   const optionCount = Number(req.body.optionCount);
-  const questionLimit = Number(req.body.questionLimit);
-  const accessCode = String(req.body.accessCode || '');
+  const questionMode = String(req.body.questionMode || 'manual');
+  const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
   const originalFilename = normalizeUploadedFilename(file?.originalname || '');
   const extension = path.extname(originalFilename).toLowerCase();
 
@@ -74,8 +89,51 @@ app.post('/api/quizzes', upload.fields([
     return res.status(400).json({ error: `Правильный вариант должен быть от 1 до ${optionCount}.` });
   }
 
-  if (!Number.isInteger(questionLimit) || questionLimit < 1) {
+  if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
     return res.status(400).json({ error: 'Количество вопросов должно быть больше 0.' });
+  }
+
+  try {
+    const parsedQuiz = await parseQuizFromFile({
+      buffer: file.buffer,
+      filename: originalFilename,
+      answerIndex,
+      limit: questionMode === 'all' ? null : questionLimit,
+      optionCount,
+    });
+
+    const requestedCount = questionMode === 'all'
+      ? parsedQuiz.questions.length
+      : questionLimit;
+
+    const draft = createQuizDraft({
+      title: sanitizeText(parsedQuiz.title) || 'Medical quiz',
+      sourceFilename: originalFilename,
+      answerIndex,
+      requestedCount,
+      questions: parsedQuiz.questions,
+      rawModelJson: parsedQuiz.rawModelJson,
+    });
+
+    return res.status(201).json({
+      draftToken: draft.draftToken,
+      title: sanitizeText(parsedQuiz.title) || 'Medical quiz',
+      parsedCount: parsedQuiz.questions.length,
+      requestedCount,
+      questionMode,
+      notes: parsedQuiz.notes,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/quizzes/finalize', async (req, res, next) => {
+  const accessCode = String(req.body.accessCode || '');
+  const draftToken = String(req.body.draftToken || '');
+
+  if (!draftToken) {
+    return res.status(400).json({ error: 'Нет черновика. Сначала передайте файл заново.' });
   }
 
   const reservation = reserveAccessCode(accessCode);
@@ -84,26 +142,12 @@ app.post('/api/quizzes', upload.fields([
   }
 
   try {
-    const parsedQuiz = await parseQuizFromFile({
-      buffer: file.buffer,
-      filename: originalFilename,
-      answerIndex,
-      limit: questionLimit,
-      optionCount,
-    });
-
-    const savedQuiz = finalizeQuizFromReservation({
+    const savedQuiz = finalizeQuizFromDraftReservation({
       reservationToken: reservation.reservationToken,
-      title: sanitizeText(parsedQuiz.title) || 'Medical quiz',
-      sourceFilename: originalFilename,
-      answerIndex,
-      requestedCount: questionLimit,
-      questions: parsedQuiz.questions,
-      rawModelJson: parsedQuiz.rawModelJson,
+      draftToken,
     });
 
     const quiz = getQuizBySlug(savedQuiz.slug);
-
     return res.status(201).json({
       slug: savedQuiz.slug,
       title: quiz.title,
@@ -111,7 +155,6 @@ app.post('/api/quizzes', upload.fields([
       quizUrl: buildAbsoluteUrl(req, `/quiz/${savedQuiz.slug}`),
       downloadUrl: buildAbsoluteUrl(req, `/api/download/${savedQuiz.slug}`),
       apiUrl: buildAbsoluteUrl(req, `/api/quizzes/${savedQuiz.slug}`),
-      notes: parsedQuiz.notes,
     });
   } catch (error) {
     releaseReservation(reservation.reservationToken);
@@ -123,6 +166,10 @@ app.get('/api/quizzes/:slug', (req, res) => {
   const quiz = getQuizBySlug(req.params.slug);
   if (!quiz) {
     return res.status(404).json({ error: 'Тест не найден.' });
+  }
+
+  if (quiz.bannedAt) {
+    return res.status(410).json({ error: 'Тест заблокирован администратором.' });
   }
 
   return res.json({
@@ -143,6 +190,23 @@ app.get('/quiz/:slug', (req, res) => {
     return res.status(404).type('text/plain').send('Quiz not found');
   }
 
+  if (quiz.bannedAt) {
+    return res.status(410).type('html').send(renderUnavailableQuizHtml(quiz.title));
+  }
+
+  let deviceId = getCookieValue(req, 'pdmu_device_id');
+  if (!deviceId) {
+    deviceId = randomToken();
+    setDeviceCookie(res, deviceId);
+  }
+
+  recordQuizVisit({
+    quizId: quiz.id,
+    deviceId,
+    ip: getClientIp(req),
+    userAgent: req.get('user-agent'),
+  });
+
   res.type('html').send(renderHostedQuizHtml(quiz));
 });
 
@@ -150,6 +214,10 @@ app.get('/api/download/:slug', (req, res) => {
   const quiz = getQuizBySlug(req.params.slug);
   if (!quiz) {
     return res.status(404).json({ error: 'Тест не найден.' });
+  }
+
+  if (quiz.bannedAt) {
+    return res.status(410).json({ error: 'Тест заблокирован администратором.' });
   }
 
   const bundle = buildZipBundle(quiz);
@@ -169,14 +237,30 @@ app.get('/api/download/:slug', (req, res) => {
   archive.finalize();
 });
 
-app.post('/api/admin/codes', (req, res) => {
-  const headerSecret = String(req.get('X-Admin-Secret') || '');
-  const expectedSecret = String(process.env.ADMIN_SECRET || '');
+app.get('/api/admin/quizzes', requireAdminSecret, (req, res) => {
+  const quizzes = listQuizzesForAdmin().map((quiz) => ({
+    ...quiz,
+    quizUrl: buildAbsoluteUrl(req, `/quiz/${quiz.slug}`),
+  }));
 
-  if (!expectedSecret || headerSecret !== expectedSecret) {
-    return res.status(403).json({ error: 'Неверный admin secret.' });
+  res.json({ quizzes });
+});
+
+app.post('/api/admin/quizzes/:slug/ban', requireAdminSecret, (req, res) => {
+  const banned = req.body?.banned !== false;
+  const quiz = setQuizBanStatus(req.params.slug, banned);
+
+  if (!quiz) {
+    return res.status(404).json({ error: 'Тест не найден.' });
   }
 
+  return res.json({
+    slug: quiz.slug,
+    bannedAt: quiz.bannedAt,
+  });
+});
+
+app.post('/api/admin/codes', requireAdminSecret, (req, res) => {
   const count = Number(req.body.count || 1);
   const label = req.body.label ? String(req.body.label) : null;
   const codes = createAccessCodes(count, label);
@@ -191,11 +275,83 @@ app.use((error, _req, res, _next) => {
     });
   }
 
+  const statusCode = Number(error?.statusCode || 500);
   const message = error?.message || 'Внутренняя ошибка сервера.';
-  return res.status(500).json({ error: message });
+  return res.status(statusCode).json({ error: message });
 });
 
 app.listen(port, () => {
   console.log(`PDMU Quiz Service listening on http://localhost:${port}`);
   console.log(`SQLite: ${getDbMeta().dbPath}`);
+  startTelegramBot();
 });
+
+function requireAdminSecret(req, res, next) {
+  const headerSecret = String(req.get('X-Admin-Secret') || '');
+  const expectedSecret = String(process.env.ADMIN_SECRET || '');
+
+  if (!expectedSecret || headerSecret !== expectedSecret) {
+    return res.status(403).json({ error: 'Неверный admin secret.' });
+  }
+
+  return next();
+}
+
+function getCookieValue(req, key) {
+  const cookieHeader = String(req.get('cookie') || '');
+  if (!cookieHeader) {
+    return '';
+  }
+
+  const cookies = cookieHeader.split(';');
+  for (const entry of cookies) {
+    const [rawName, ...rest] = entry.split('=');
+    if (String(rawName || '').trim() !== key) {
+      continue;
+    }
+
+    return decodeURIComponent(rest.join('=').trim());
+  }
+
+  return '';
+}
+
+function setDeviceCookie(res, deviceId) {
+  const maxAge = 60 * 60 * 24 * 365;
+  res.append('Set-Cookie', [
+    `pdmu_device_id=${encodeURIComponent(deviceId)}`,
+    'Path=/',
+    `Max-Age=${maxAge}`,
+    'HttpOnly',
+    'SameSite=Lax',
+  ].join('; '));
+}
+
+function getClientIp(req) {
+  const forwardedFor = String(req.get('x-forwarded-for') || '').split(',')[0].trim();
+  return forwardedFor || req.ip || '';
+}
+
+function renderUnavailableQuizHtml(title) {
+  const safeTitle = htmlEscape(sanitizeText(title) || 'Тест');
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${safeTitle}</title>
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:"Outfit","Segoe UI",sans-serif;background:linear-gradient(160deg,#f8f4ee 0%,#f3ede2 100%);color:#1f2937}
+    .card{max-width:560px;margin:20px;padding:28px;border-radius:24px;background:#fffdf8;border:1px solid #eadfcf;box-shadow:0 18px 48px rgba(31,41,55,.08)}
+    h1{margin:0 0 12px;font-size:32px}
+    p{margin:0;color:#6b7280;font-size:18px;line-height:1.5}
+  </style>
+</head>
+<body>
+  <section class="card">
+    <h1>Тест недоступен</h1>
+    <p>Этот тест был отключен администратором.</p>
+  </section>
+</body>
+</html>`;
+}

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDMU Quiz Manager</title>
+  <link rel="stylesheet" href="/admin.css" />
+  <link rel="stylesheet" href="/manager.css" />
+</head>
+<body>
+  <main class="page">
+    <section class="manager-shell">
+      <section class="card">
+        <div class="card-head">
+          <h2>Управление тестами</h2>
+          <p>Здесь можно смотреть, сколько разных устройств заходило в каждый тест, и вручную банить или возвращать тест.</p>
+        </div>
+
+        <div class="manager-toolbar">
+          <label class="field manager-secret-field">
+            <span>Admin secret</span>
+            <input id="adminSecret" type="password" placeholder="Введите ADMIN_SECRET" />
+          </label>
+
+          <div class="manager-actions">
+            <button id="saveSecretBtn" class="secondary-btn" type="button">Сохранить секрет</button>
+            <button id="refreshBtn" class="primary-btn" type="button">Обновить список</button>
+          </div>
+        </div>
+
+        <div id="managerStatus" class="status idle">Введите admin secret и нажмите "Обновить список".</div>
+      </section>
+
+      <section id="managerList" class="manager-list"></section>
+    </section>
+  </main>
+
+  <script src="/manager.js"></script>
+</body>
+</html>

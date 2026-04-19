@@ -56,6 +56,9 @@ body{
   gap:8px;
   margin-bottom:16px;
 }
+.nested-field{
+  margin-bottom:0;
+}
 .field span{
   font-size:14px;
   font-weight:700;
@@ -73,8 +76,23 @@ body{
 }
 .split{
   display:grid;
-  grid-template-columns:repeat(3, minmax(0,1fr));
+  grid-template-columns:repeat(2, minmax(0,1fr));
   gap:14px;
+}
+.choice-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:12px 14px;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:#fffaf3;
+  font-weight:600;
+}
+.choice-row input{
+  width:18px;
+  height:18px;
+  accent-color:var(--accent);
 }
 .primary-btn,
 .secondary-btn{
@@ -93,6 +111,18 @@ body{
   width:100%;
   background:linear-gradient(135deg, var(--accent), #d97706);
   color:#fff;
+}
+.manager-link{
+  display:inline-flex;
+  justify-content:center;
+  align-items:center;
+  margin-top:12px;
+  color:var(--accent-2);
+  font-weight:700;
+  text-decoration:none;
+}
+.manager-link:hover{
+  text-decoration:underline;
 }
 .secondary-btn{
   background:linear-gradient(135deg, var(--accent-2), #0f766e);
@@ -144,6 +174,36 @@ body{
   word-break:break-all;
   line-height:1.45;
 }
+.notes-box{
+  margin:14px 0;
+  padding:14px;
+  border-radius:16px;
+  background:#f6f3ee;
+  border:1px solid var(--line);
+}
+.notes-box p{
+  margin:0 0 8px;
+}
+.notes-box p:last-child{
+  margin-bottom:0;
+}
+.activation-box{
+  margin-top:14px;
+  padding:16px;
+  border-radius:18px;
+  background:#eef8f6;
+  border:1px solid #bde6df;
+}
+.activation-text{
+  margin:0 0 14px;
+  color:#0f766e !important;
+  font-weight:700;
+  line-height:1.5;
+}
+.access-form{
+  display:grid;
+  gap:12px;
+}
 .warning-box{
   margin-top:14px;
   padding:16px;
@@ -193,6 +253,10 @@ body{
   .field{
     margin-bottom:14px;
   }
+  .choice-row{
+    border-radius:14px;
+    padding:13px 14px;
+  }
   .field span{
     font-size:13px;
   }
@@ -209,9 +273,15 @@ body{
     padding:14px 16px;
     border-radius:14px;
   }
+  .manager-link{
+    width:100%;
+    margin-top:10px;
+  }
   .status,
   .result-box,
-  .warning-box{
+  .warning-box,
+  .activation-box,
+  .notes-box{
     padding:14px;
     border-radius:16px;
   }
