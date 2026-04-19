@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: pdmu-quiz-service
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: BASE_URL
+        sync: false
+      - key: ADMIN_SECRET
+        sync: false
+      - key: MAX_UPLOAD_MB
+        value: "20"
