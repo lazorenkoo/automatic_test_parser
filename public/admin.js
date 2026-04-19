@@ -2,25 +2,123 @@ const quizForm = document.getElementById('quizForm');
 const submitBtn = document.getElementById('submitBtn');
 const statusBox = document.getElementById('statusBox');
 const resultBox = document.getElementById('resultBox');
+const sourceFileInput = document.getElementById('sourceFile');
+const answerFileInput = document.getElementById('answerFile');
 const answerIndexSelect = document.getElementById('answerIndex');
 const optionCountInput = document.getElementById('optionCount');
 const useAllQuestionsInput = document.getElementById('useAllQuestions');
 const questionLimitField = document.getElementById('questionLimitField');
 const questionLimitInput = document.getElementById('questionLimit');
+const answerModeSingleInput = document.getElementById('answerModeSingle');
+const answerModeFileInput = document.getElementById('answerModeFile');
+const singleAnswerField = document.getElementById('singleAnswerField');
+const answerFileField = document.getElementById('answerFileField');
+const langRuBtn = document.getElementById('langRuBtn');
+const langUkBtn = document.getElementById('langUkBtn');
 
+const LANGUAGE_STORAGE_KEY = 'pdmu-ui-language';
+
+const translations = {
+  ru: {
+    pageTitle: 'PDMU Quiz Builder',
+    'form.title': 'Создать тест',
+    'form.source_file': 'Файл с тестами',
+    'form.option_count': 'Вариантов ответа в вопросе',
+    'form.answer_mode': 'Режим правильных ответов',
+    'form.answer_mode_single': 'Один и тот же вариант для всех',
+    'form.answer_mode_file': 'Отдельный файл с ответами',
+    'form.answer_index': 'Правильный вариант',
+    'form.answer_file': 'Файл с ответами',
+    'form.question_count': 'Количество вопросов',
+    'form.use_all_questions': 'Все вопросы',
+    'form.question_limit': 'Сколько вопросов взять',
+    'form.submit': 'Передать файл',
+    'result.title': 'Результат',
+    'status.idle': 'Ожидаю загрузку файла.',
+    answerFilePlaceholder: 'Поддерживаются .txt, .pdf, .doc, .docx',
+    accessTitle: 'Введите код доступа',
+    accessText: 'Введите одноразовый код, чтобы получить доступ к готовой ссылке.',
+    accessLabel: 'Одноразовый код',
+    accessPlaceholder: 'Например: ABCD-EFGH-JKLM',
+    accessButton: 'Получить ссылку',
+    parseLoading: 'Файл обрабатывается локальным парсером. Это может занять немного времени.',
+    parseSuccess: 'Тест готов.',
+    finalizeLoading: 'Проверяю код и готовлю ссылку.',
+    finalizeSuccess: 'Ссылка готова.',
+    chooseFileError: 'Сначала выберите файл с тестами.',
+    answerFileRequiredError: 'Нужно загрузить отдельный файл с ответами.',
+    draftMissing: 'Черновик не найден. Передайте файл заново.',
+    parseDefaultError: 'Не удалось обработать файл.',
+    finalizeDefaultError: 'Не удалось получить ссылку.',
+    notesTitle: 'Что заметил парсер',
+    parsedCount: 'Вопросов найдено: <strong>{count}</strong>',
+    adminContact: 'Связь с админом: <strong>{contact}</strong>',
+    warningText: 'ВНИМАНИЕ: если по этой ссылке будет вход более чем с {limit} устройств, ссылка будет удалена.',
+    warningButton: 'Понятно',
+    siteTypeSingle: 'Одиночный',
+    siteTypeGroup: 'Групповой',
+  },
+  uk: {
+    pageTitle: 'PDMU Quiz Builder',
+    'form.title': 'Створити тест',
+    'form.source_file': 'Файл із тестами',
+    'form.option_count': 'Варіантів відповіді в питанні',
+    'form.answer_mode': 'Режим правильних відповідей',
+    'form.answer_mode_single': 'Один і той самий варіант для всіх',
+    'form.answer_mode_file': 'Окремий файл із відповідями',
+    'form.answer_index': 'Правильний варіант',
+    'form.answer_file': 'Файл із відповідями',
+    'form.question_count': 'Кількість питань',
+    'form.use_all_questions': 'Усі питання',
+    'form.question_limit': 'Скільки питань взяти',
+    'form.submit': 'Передати файл',
+    'result.title': 'Результат',
+    'status.idle': 'Очікую на завантаження файла.',
+    answerFilePlaceholder: 'Підтримуються .txt, .pdf, .doc, .docx',
+    accessTitle: 'Введіть код доступу',
+    accessText: 'Введіть одноразовий код, щоб отримати доступ до готового посилання.',
+    accessLabel: 'Одноразовий код',
+    accessPlaceholder: 'Наприклад: ABCD-EFGH-JKLM',
+    accessButton: 'Отримати посилання',
+    parseLoading: 'Файл обробляється локальним парсером. Це може зайняти трохи часу.',
+    parseSuccess: 'Тест готовий.',
+    finalizeLoading: 'Перевіряю код і готую посилання.',
+    finalizeSuccess: 'Посилання готове.',
+    chooseFileError: 'Спочатку виберіть файл із тестами.',
+    answerFileRequiredError: 'Потрібно завантажити окремий файл із відповідями.',
+    draftMissing: 'Чернетку не знайдено. Передайте файл ще раз.',
+    parseDefaultError: 'Не вдалося обробити файл.',
+    finalizeDefaultError: 'Не вдалося отримати посилання.',
+    notesTitle: 'Що помітив парсер',
+    parsedCount: 'Питань знайдено: <strong>{count}</strong>',
+    adminContact: 'Зв\'язок з адміном: <strong>{contact}</strong>',
+    warningText: 'УВАГА: якщо за цим посиланням буде вхід більш ніж з {limit} пристроїв, посилання буде видалено.',
+    warningButton: 'Зрозуміло',
+    siteTypeSingle: 'Одиночний',
+    siteTypeGroup: 'Груповий',
+  },
+};
+
+let currentLanguage = resolveInitialLanguage();
 let currentDraftToken = '';
 let currentDraftPayload = null;
 
+applyLanguage(currentLanguage);
 syncAnswerIndexOptions();
 syncQuestionLimitMode();
+syncAnswerMode();
 
 optionCountInput.addEventListener('input', syncAnswerIndexOptions);
 useAllQuestionsInput.addEventListener('change', syncQuestionLimitMode);
+answerModeSingleInput.addEventListener('change', syncAnswerMode);
+answerModeFileInput.addEventListener('change', syncAnswerMode);
+langRuBtn.addEventListener('click', () => setLanguage('ru'));
+langUkBtn.addEventListener('click', () => setLanguage('uk'));
 
 quizForm.addEventListener('submit', async (event) => {
   event.preventDefault();
 
-  setStatus('loading', 'Файл распознается локальным парсером. Это может занять немного времени.');
+  setStatus('loading', t('parseLoading'));
   resultBox.classList.add('hidden');
   resultBox.innerHTML = '';
   submitBtn.disabled = true;
@@ -28,20 +126,31 @@ quizForm.addEventListener('submit', async (event) => {
   currentDraftPayload = null;
 
   try {
-    const formData = new FormData();
-    const sourceFile = document.getElementById('sourceFile').files?.[0];
+    const sourceFile = sourceFileInput.files?.[0];
+    const answerMode = getAnswerMode();
 
     if (!sourceFile) {
-      throw new Error('Сначала выберите файл.');
+      throw new Error(t('chooseFileError'));
     }
 
+    const formData = new FormData();
     formData.append('sourceFile', sourceFile);
-    formData.append('answerIndex', answerIndexSelect.value);
-    formData.append('optionCount', optionCountInput.value);
+    formData.append('optionCount', String(optionCountInput.value || 5));
     formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
+    formData.append('answerMode', answerMode);
+
+    if (answerMode === 'single') {
+      formData.append('answerIndex', String(answerIndexSelect.value || 1));
+    } else {
+      const answerFile = answerFileInput.files?.[0];
+      if (!answerFile) {
+        throw new Error(t('answerFileRequiredError'));
+      }
+      formData.append('answerFile', answerFile);
+    }
 
     if (!useAllQuestionsInput.checked) {
-      formData.append('questionLimit', questionLimitInput.value);
+      formData.append('questionLimit', String(questionLimitInput.value || ''));
     }
 
     const response = await fetch('/api/parse', {
@@ -51,19 +160,54 @@ quizForm.addEventListener('submit', async (event) => {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || 'Не удалось распарсить файл.');
+      throw new Error(payload.error || t('parseDefaultError'));
     }
 
     currentDraftToken = payload.draftToken;
     currentDraftPayload = payload;
-    setStatus('success', 'Тест готов.');
+    setStatus('success', t('parseSuccess'));
     renderDraftResult(payload);
   } catch (error) {
-    setStatus('error', error.message || 'Произошла ошибка.');
+    setStatus('error', error.message || t('parseDefaultError'));
   } finally {
     submitBtn.disabled = false;
   }
 });
+
+function setLanguage(language) {
+  if (!translations[language]) {
+    return;
+  }
+
+  currentLanguage = language;
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  applyLanguage(language);
+
+  if (!currentDraftToken || !currentDraftPayload) {
+    return;
+  }
+
+  const hasQuizUrl = Boolean(currentDraftPayload.quizUrl);
+  if (hasQuizUrl) {
+    renderFinalResult(currentDraftPayload);
+  } else {
+    renderDraftResult(currentDraftPayload);
+  }
+}
+
+function applyLanguage(language) {
+  document.documentElement.lang = language === 'uk' ? 'uk' : 'ru';
+  document.title = t('pageTitle');
+
+  for (const node of document.querySelectorAll('[data-i18n]')) {
+    const key = node.getAttribute('data-i18n');
+    node.textContent = t(key);
+  }
+
+  answerFileInput.setAttribute('title', t('answerFilePlaceholder'));
+  langRuBtn.classList.toggle('active', language === 'ru');
+  langUkBtn.classList.toggle('active', language === 'uk');
+}
 
 function setStatus(kind, message) {
   statusBox.className = `status ${kind}`;
@@ -73,26 +217,33 @@ function setStatus(kind, message) {
 function renderDraftResult(payload) {
   resultBox.classList.remove('hidden');
 
-  const notesHtml = Array.isArray(payload.notes) && payload.notes.length
+  const notes = Array.isArray(payload.notes) ? payload.notes.filter(Boolean) : [];
+  const adminContact = String(payload.adminContactTg || '').trim();
+  const notesHtml = notes.length
     ? `
       <div class="notes-box">
-        ${payload.notes.map((note) => `<p>${escapeHtml(note)}</p>`).join('')}
+        <p><strong>${escapeHtml(t('notesTitle'))}</strong></p>
+        ${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join('')}
       </div>
     `
+    : '';
+  const adminContactHtml = adminContact
+    ? `<p class="admin-contact">${formatHtml(t('adminContact'), { contact: adminContact })}</p>`
     : '';
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
-    <p>Вопросов найдено: <strong>${payload.parsedCount}</strong></p>
+    <p>${formatHtml(t('parsedCount'), { count: String(payload.parsedCount || 0) })}</p>
+    ${adminContactHtml}
     ${notesHtml}
     <div class="activation-box">
-      <p class="activation-text">Введите одноразовый код, чтобы открыть доступ к готовой ссылке.</p>
+      <p class="activation-text">${escapeHtml(t('accessText'))}</p>
       <form id="accessForm" class="access-form">
         <label class="field">
-          <span>Одноразовый код</span>
-          <input id="accessCode" name="accessCode" type="password" placeholder="Например: ABCD-EFGH-JKLM" required />
+          <span>${escapeHtml(t('accessLabel'))}</span>
+          <input id="accessCode" name="accessCode" type="password" placeholder="${escapeAttr(t('accessPlaceholder'))}" required />
         </label>
-        <button id="activateBtn" class="secondary-btn" type="submit">Получить ссылку</button>
+        <button id="activateBtn" class="secondary-btn" type="submit">${escapeHtml(t('accessButton'))}</button>
       </form>
     </div>
   `;
@@ -105,14 +256,14 @@ async function handleFinalizeSubmit(event) {
   event.preventDefault();
 
   if (!currentDraftToken) {
-    setStatus('error', 'Черновик не найден. Распарсите файл заново.');
+    setStatus('error', t('draftMissing'));
     return;
   }
 
   const accessCodeInput = document.getElementById('accessCode');
   const activateBtn = document.getElementById('activateBtn');
 
-  setStatus('loading', 'Проверяю код и готовлю ссылку.');
+  setStatus('loading', t('finalizeLoading'));
   activateBtn.disabled = true;
 
   try {
@@ -129,29 +280,33 @@ async function handleFinalizeSubmit(event) {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || 'Не удалось получить ссылку.');
+      throw new Error(payload.error || t('finalizeDefaultError'));
     }
 
     currentDraftToken = '';
-    setStatus('success', 'Ссылка готова.');
-    renderFinalResult(payload, currentDraftPayload);
+    currentDraftPayload = payload;
+    setStatus('success', t('finalizeSuccess'));
+    renderFinalResult(payload);
   } catch (error) {
-    setStatus('error', error.message || 'Произошла ошибка.');
+    setStatus('error', error.message || t('finalizeDefaultError'));
     activateBtn.disabled = false;
   }
 }
 
-function renderFinalResult(payload, draftPayload) {
+function renderFinalResult(payload) {
   resultBox.classList.remove('hidden');
+
+  const warningLimit = Number(payload.warningDeviceLimit || 2);
+  const localizedQuizUrl = addLanguageToUrl(payload.quizUrl);
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
-    <p>Вопросов найдено: <strong>${payload.parsedCount}</strong></p>
+    <p>${formatHtml(t('parsedCount'), { count: String(payload.parsedCount || 0) })}</p>
     <div class="warning-box">
-      <p class="warning-text">ВНИМАНИЕ: если по этой ссылке будет вход более чем с 3 устройств, ссылка будет удалена.</p>
-      <button id="revealQuizLinkBtn" class="primary-btn warning-btn" type="button">Понятно</button>
+      <p class="warning-text">${escapeHtml(t('warningText', { limit: String(warningLimit) }))}</p>
+      <button id="revealQuizLinkBtn" class="primary-btn warning-btn" type="button">${escapeHtml(t('warningButton'))}</button>
     </div>
     <div id="quizLinkBox" class="hidden">
-      <p><a href="${escapeAttr(payload.quizUrl)}" target="_blank" rel="noreferrer">${escapeHtml(payload.quizUrl)}</a></p>
+      <p><a href="${escapeAttr(localizedQuizUrl)}" target="_blank" rel="noreferrer">${escapeHtml(localizedQuizUrl)}</a></p>
     </div>
   `;
 
@@ -189,6 +344,52 @@ function syncQuestionLimitMode() {
   if (!useAll && !questionLimitInput.value) {
     questionLimitInput.value = '20';
   }
+}
+
+function syncAnswerMode() {
+  const answerMode = getAnswerMode();
+  const useFile = answerMode === 'file';
+
+  singleAnswerField.classList.toggle('hidden', useFile);
+  answerFileField.classList.toggle('hidden', !useFile);
+  answerIndexSelect.disabled = useFile;
+  answerFileInput.disabled = !useFile;
+  answerFileInput.required = useFile;
+}
+
+function getAnswerMode() {
+  return answerModeFileInput.checked ? 'file' : 'single';
+}
+
+function resolveInitialLanguage() {
+  const savedLanguage = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  if (savedLanguage === 'ru' || savedLanguage === 'uk') {
+    return savedLanguage;
+  }
+
+  return 'ru';
+}
+
+function addLanguageToUrl(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ''), window.location.origin);
+    url.searchParams.set('lang', currentLanguage);
+    return url.toString();
+  } catch {
+    return String(rawUrl || '');
+  }
+}
+
+function t(key, params = {}) {
+  const dictionary = translations[currentLanguage] || translations.ru;
+  const fallbackDictionary = translations.ru;
+  const template = dictionary[key] || fallbackDictionary[key] || key;
+
+  return String(template).replace(/\{(\w+)\}/g, (_match, token) => String(params[token] ?? `{${token}}`));
+}
+
+function formatHtml(template, params = {}) {
+  return String(template).replace(/\{(\w+)\}/g, (_match, token) => escapeHtml(String(params[token] ?? `{${token}}`)));
 }
 
 function escapeHtml(value) {

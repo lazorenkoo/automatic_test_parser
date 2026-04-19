@@ -47,6 +47,7 @@ http://localhost:3000
 - `ADMIN_SECRET` - секрет для admin API
 - `MAX_UPLOAD_MB` - максимальный размер файла
 - `CODE_RESERVATION_MINUTES` - сколько держать код зарезервированным на время обработки
+- `UNLIMITED_EVA_ACCESS_CODE` - секретный постоянный код для бесконечного создания сайтов; такие сайты помечаются как тип `1` с описанием `ЕВА`
 - `TELEGRAM_BOT_ENABLED` - `1`, чтобы включить Telegram-бота
 - `TELEGRAM_BOT_TOKEN` - токен бота из BotFather
 - `TELEGRAM_ADMIN_USER_ID` - ваш Telegram user id

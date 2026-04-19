@@ -20,6 +20,9 @@ fs.mkdirSync(dataDir, { recursive: true });
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 
+const unlimitedAccessCode = normalizeCode(process.env.UNLIMITED_EVA_ACCESS_CODE || '');
+const unlimitedAccessLabel = 'ЕВА';
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS access_codes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +30,8 @@ db.exec(`
     label TEXT,
     site_type TEXT,
     client_tg_username TEXT,
+    expected_question_count INTEGER,
+    is_reusable INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     reserved_at INTEGER,
     reservation_token TEXT UNIQUE,
@@ -45,6 +50,7 @@ db.exec(`
     questions_json TEXT NOT NULL,
     raw_model_json TEXT NOT NULL,
     created_at INTEGER NOT NULL,
+    banned_at INTEGER,
     code_id INTEGER NOT NULL,
     FOREIGN KEY(code_id) REFERENCES access_codes(id)
   );
@@ -81,12 +87,48 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_quiz_devices_quiz_id ON quiz_devices(quiz_id);
 `);
 
-ensureQuizColumns();
-ensureAccessCodeColumns();
+ensureColumn('access_codes', 'site_type', 'TEXT');
+ensureColumn('access_codes', 'client_tg_username', 'TEXT');
+ensureColumn('access_codes', 'expected_question_count', 'INTEGER');
+ensureColumn('access_codes', 'is_reusable', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('quizzes', 'banned_at', 'INTEGER');
 
 const insertCodeStmt = db.prepare(`
-  INSERT INTO access_codes (code_hash, label, site_type, client_tg_username, created_at)
-  VALUES (?, ?, ?, ?, ?)
+  INSERT INTO access_codes (
+    code_hash,
+    label,
+    site_type,
+    client_tg_username,
+    expected_question_count,
+    is_reusable,
+    created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?)
+`);
+
+const upsertReusableCodeStmt = db.prepare(`
+  INSERT INTO access_codes (
+    code_hash,
+    label,
+    site_type,
+    client_tg_username,
+    expected_question_count,
+    is_reusable,
+    created_at,
+    reserved_at,
+    reservation_token,
+    used_at,
+    used_by_quiz_id
+  ) VALUES (?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL)
+  ON CONFLICT(code_hash) DO UPDATE SET
+    label = excluded.label,
+    site_type = excluded.site_type,
+    client_tg_username = excluded.client_tg_username,
+    expected_question_count = excluded.expected_question_count,
+    is_reusable = 1,
+    reserved_at = NULL,
+    reservation_token = NULL,
+    used_at = NULL,
+    used_by_quiz_id = NULL
 `);
 
 const clearExpiredReservationsStmt = db.prepare(`
@@ -101,12 +143,18 @@ const reserveCodeStmt = db.prepare(`
   UPDATE access_codes
   SET reserved_at = ?, reservation_token = ?
   WHERE code_hash = ?
-    AND used_at IS NULL
+    AND (used_at IS NULL OR is_reusable = 1)
     AND reservation_token IS NULL
 `);
 
 const selectReservedCodeStmt = db.prepare(`
-  SELECT id
+  SELECT
+    id,
+    label,
+    site_type AS siteType,
+    client_tg_username AS clientTgUsername,
+    expected_question_count AS expectedQuestionCount,
+    is_reusable AS isReusable
   FROM access_codes
   WHERE reservation_token = ?
 `);
@@ -119,10 +167,16 @@ const releaseReservationStmt = db.prepare(`
 `);
 
 const findCodeByTokenStmt = db.prepare(`
-  SELECT id
+  SELECT
+    id,
+    label,
+    site_type AS siteType,
+    client_tg_username AS clientTgUsername,
+    expected_question_count AS expectedQuestionCount,
+    is_reusable AS isReusable
   FROM access_codes
   WHERE reservation_token = ?
-    AND used_at IS NULL
+    AND (used_at IS NULL OR is_reusable = 1)
 `);
 
 const insertQuizStmt = db.prepare(`
@@ -146,10 +200,28 @@ const markCodeUsedStmt = db.prepare(`
   WHERE id = ?
 `);
 
+const releaseReusableCodeStmt = db.prepare(`
+  UPDATE access_codes
+  SET reserved_at = NULL, reservation_token = NULL
+  WHERE id = ?
+`)
+
+const unlinkCodeFromQuizStmt = db.prepare(`
+  UPDATE access_codes
+  SET used_by_quiz_id = NULL
+  WHERE used_by_quiz_id = ?
+`);
+
 const getQuizBySlugStmt = db.prepare(`
-  SELECT *
-  FROM quizzes
-  WHERE slug = ?
+  SELECT
+    q.*,
+    c.site_type AS siteType,
+    c.client_tg_username AS clientTgUsername,
+    c.expected_question_count AS expectedQuestionCount,
+    c.label AS codeLabel
+  FROM quizzes q
+  LEFT JOIN access_codes c ON c.id = q.code_id
+  WHERE q.slug = ?
 `);
 
 const clearExpiredDraftsStmt = db.prepare(`
@@ -204,11 +276,13 @@ const listQuizzesForAdminStmt = db.prepare(`
     q.title,
     q.source_filename AS sourceFilename,
     q.parsed_count AS parsedCount,
+    q.requested_count AS requestedCount,
     q.created_at AS createdAt,
     q.banned_at AS bannedAt,
     c.label AS codeLabel,
     c.site_type AS siteType,
     c.client_tg_username AS clientTgUsername,
+    c.expected_question_count AS expectedQuestionCount,
     COUNT(d.id) AS deviceCount,
     MAX(d.last_seen_at) AS lastSeenAt
   FROM quizzes q
@@ -218,16 +292,16 @@ const listQuizzesForAdminStmt = db.prepare(`
   ORDER BY q.created_at DESC
 `);
 
-const updateQuizBanStatusBySlugStmt = db.prepare(`
-  UPDATE quizzes
-  SET banned_at = ?
-  WHERE slug = ?
-`);
-
 const updateQuizBanStatusByIdStmt = db.prepare(`
   UPDATE quizzes
   SET banned_at = ?
   WHERE id = ?
+`);
+
+const updateQuizBanStatusBySlugStmt = db.prepare(`
+  UPDATE quizzes
+  SET banned_at = ?
+  WHERE slug = ?
 `);
 
 const getQuizDevicesStmt = db.prepare(`
@@ -242,6 +316,18 @@ const getQuizDevicesStmt = db.prepare(`
   ORDER BY last_seen_at DESC, first_seen_at DESC
 `);
 
+const deleteQuizDevicesByQuizIdStmt = db.prepare(`
+  DELETE FROM quiz_devices
+  WHERE quiz_id = ?
+`);
+
+const deleteQuizByIdStmt = db.prepare(`
+  DELETE FROM quizzes
+  WHERE id = ?
+`);
+
+syncUnlimitedEvaAccessCode();
+
 export function getDbMeta() {
   return {
     dataDir,
@@ -255,6 +341,7 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
   const codes = [];
   const siteType = normalizeSiteType(metadata.siteType);
   const clientTgUsername = normalizeClientUsername(metadata.clientTgUsername);
+  const expectedQuestionCount = normalizeExpectedQuestionCount(metadata.expectedQuestionCount);
 
   const tx = db.transaction(() => {
     while (codes.length < total) {
@@ -262,7 +349,15 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
       const codeHash = hashCode(code);
 
       try {
-        insertCodeStmt.run(codeHash, label, siteType, clientTgUsername, createdAt);
+        insertCodeStmt.run(
+          codeHash,
+          sanitizeNullableValue(label),
+          siteType,
+          clientTgUsername,
+          expectedQuestionCount,
+          0,
+          createdAt,
+        );
         codes.push(code);
       } catch (error) {
         if (error.code !== 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -301,6 +396,11 @@ export function reserveAccessCode(plainCode) {
     return {
       codeId: row.id,
       reservationToken,
+      label: row.label || null,
+      siteType: row.siteType || null,
+      clientTgUsername: row.clientTgUsername || null,
+      expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
+      isReusable: Number(row.isReusable || 0) === 1,
     };
   });
 
@@ -357,15 +457,24 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken 
 
     const codeRow = findCodeByTokenStmt.get(reservationToken);
     if (!codeRow) {
-      const error = new Error('Код больше не доступен. Попробуйте получить новый.');
+      const error = new Error('Код больше не доступен. Попросите новый.');
       error.statusCode = 409;
       throw error;
     }
 
     const draftRow = getDraftByTokenStmt.get(draftToken);
     if (!draftRow) {
-      const error = new Error('Черновик больше не доступен. Распарсите файл заново.');
+      const error = new Error('Черновик больше не доступен. Передайте файл заново.');
       error.statusCode = 410;
+      throw error;
+    }
+
+    const expectedQuestionCount = codeRow.expectedQuestionCount ? Number(codeRow.expectedQuestionCount) : null;
+    const parsedCount = Number(draftRow.parsed_count || 0);
+
+    if (expectedQuestionCount && parsedCount > expectedQuestionCount) {
+      const error = new Error(`Найдено вопросов: ${parsedCount}. Этот код рассчитан максимум на ${expectedQuestionCount}. Попросите новый код у администратора.`);
+      error.statusCode = 422;
       throw error;
     }
 
@@ -380,19 +489,27 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken 
       draftRow.source_filename,
       draftRow.answer_index,
       draftRow.requested_count,
-      draftRow.parsed_count,
+      parsedCount,
       draftRow.questions_json,
       draftRow.raw_model_json,
       createdAt,
       codeRow.id,
     );
 
-    markCodeUsedStmt.run(createdAt, quizInsert.lastInsertRowid, codeRow.id);
+    if (Number(codeRow.isReusable || 0) === 1) {
+      releaseReusableCodeStmt.run(codeRow.id);
+    } else {
+      markCodeUsedStmt.run(createdAt, quizInsert.lastInsertRowid, codeRow.id);
+    }
     deleteDraftByTokenStmt.run(draftToken);
 
     return {
       id: Number(quizInsert.lastInsertRowid),
       slug,
+      siteType: codeRow.siteType || null,
+      clientTgUsername: codeRow.clientTgUsername || null,
+      expectedQuestionCount,
+      codeLabel: codeRow.label || null,
     };
   });
 
@@ -430,6 +547,7 @@ export function listQuizzesForAdmin() {
     createdAt: Number(row.createdAt || 0),
     bannedAt: row.bannedAt ? Number(row.bannedAt) : null,
     deviceCount: Number(row.deviceCount || 0),
+    expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
     lastSeenAt: row.lastSeenAt ? Number(row.lastSeenAt) : null,
     devices: getQuizDevicesStmt.all(row.id).map((device) => ({
       ...device,
@@ -437,16 +555,6 @@ export function listQuizzesForAdmin() {
       lastSeenAt: Number(device.lastSeenAt || 0),
     })),
   }));
-}
-
-export function setQuizBanStatus(slug, banned) {
-  const bannedAt = banned ? nowMs() : null;
-  const result = updateQuizBanStatusBySlugStmt.run(bannedAt, slug);
-  if (result.changes !== 1) {
-    return null;
-  }
-
-  return getQuizBySlug(slug);
 }
 
 export function setQuizBanStatusById(quizId, banned) {
@@ -464,26 +572,35 @@ export function setQuizBanStatusById(quizId, banned) {
   return listQuizzesForAdmin().find((quiz) => quiz.id === numericQuizId) || null;
 }
 
-function ensureQuizColumns() {
-  const quizColumns = db.prepare(`PRAGMA table_info(quizzes)`).all();
-  const quizColumnNames = new Set(quizColumns.map((column) => String(column.name)));
-
-  if (!quizColumnNames.has('banned_at')) {
-    db.exec(`ALTER TABLE quizzes ADD COLUMN banned_at INTEGER`);
+export function setQuizBanStatus(slug, banned) {
+  const bannedAt = banned ? nowMs() : null;
+  const result = updateQuizBanStatusBySlugStmt.run(bannedAt, slug);
+  if (result.changes !== 1) {
+    return null;
   }
+
+  return getQuizBySlug(slug);
 }
 
-function ensureAccessCodeColumns() {
-  const accessCodeColumns = db.prepare(`PRAGMA table_info(access_codes)`).all();
-  const accessCodeColumnNames = new Set(accessCodeColumns.map((column) => String(column.name)));
-
-  if (!accessCodeColumnNames.has('site_type')) {
-    db.exec(`ALTER TABLE access_codes ADD COLUMN site_type TEXT`);
+export function deleteQuizById(quizId) {
+  const numericQuizId = Number(quizId);
+  if (!Number.isInteger(numericQuizId) || numericQuizId < 1) {
+    return null;
   }
 
-  if (!accessCodeColumnNames.has('client_tg_username')) {
-    db.exec(`ALTER TABLE access_codes ADD COLUMN client_tg_username TEXT`);
+  const quiz = listQuizzesForAdmin().find((item) => item.id === numericQuizId);
+  if (!quiz) {
+    return null;
   }
+
+  const tx = db.transaction(() => {
+    deleteQuizDevicesByQuizIdStmt.run(numericQuizId);
+    unlinkCodeFromQuizStmt.run(numericQuizId);
+    deleteQuizByIdStmt.run(numericQuizId);
+  });
+
+  tx();
+  return quiz;
 }
 
 function mapQuizRow(row) {
@@ -497,10 +614,37 @@ function mapQuizRow(row) {
     parsedCount: row.parsed_count,
     questions: JSON.parse(row.questions_json),
     rawModelJson: JSON.parse(row.raw_model_json),
-    createdAt: row.created_at,
-    codeId: row.code_id,
+    createdAt: Number(row.created_at || 0),
     bannedAt: row.banned_at ? Number(row.banned_at) : null,
+    codeId: row.code_id,
+    siteType: row.siteType || null,
+    clientTgUsername: row.clientTgUsername || null,
+    expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
+    codeLabel: row.codeLabel || null,
   };
+}
+
+function syncUnlimitedEvaAccessCode() {
+  if (!unlimitedAccessCode) {
+    return;
+  }
+
+  upsertReusableCodeStmt.run(
+    hashCode(unlimitedAccessCode),
+    unlimitedAccessLabel,
+    '1',
+    null,
+    null,
+    nowMs(),
+  );
+}
+
+function ensureColumn(tableName, columnName, columnType) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  const names = new Set(columns.map((column) => String(column.name)));
+  if (!names.has(columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+  }
 }
 
 function sanitizeNullableValue(value) {
@@ -510,10 +654,23 @@ function sanitizeNullableValue(value) {
 
 function normalizeSiteType(value) {
   const normalized = String(value || '').trim();
-  return normalized || null;
+  return normalized === '1' || normalized === '2' ? normalized : null;
 }
 
 function normalizeClientUsername(value) {
   const normalized = String(value || '').trim().toLowerCase().replace(/^@+/, '');
   return normalized ? `@${normalized}` : null;
+}
+
+function normalizeExpectedQuestionCount(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isInteger(numericValue) || numericValue < 1) {
+    return null;
+  }
+
+  return numericValue;
 }

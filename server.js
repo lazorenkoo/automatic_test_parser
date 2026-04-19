@@ -6,16 +6,21 @@ import archiver from 'archiver';
 import {
   createAccessCodes,
   createQuizDraft,
+  deleteQuizById,
   finalizeQuizFromDraftReservation,
   getDbMeta,
   getQuizBySlug,
-  listQuizzesForAdmin,
   recordQuizVisit,
   releaseReservation,
   reserveAccessCode,
   setQuizBanStatus,
 } from './src/db.js';
-import { parseQuizFromFile, SUPPORTED_UPLOAD_EXTENSIONS } from './src/parser.js';
+import {
+  parseAnswerKeyFromFile,
+  parseQuizFromFile,
+  SUPPORTED_ANSWER_EXTENSIONS,
+  SUPPORTED_UPLOAD_EXTENSIONS,
+} from './src/parser.js';
 import { startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
 import {
@@ -46,36 +51,36 @@ app.get('/', (_req, res) => {
   res.sendFile(path.resolve('public/admin.html'));
 });
 
-app.get('/manager', (_req, res) => {
-  res.sendFile(path.resolve('public/manager.html'));
-});
-
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     dbPath: getDbMeta().dbPath,
-    parser: 'local-v1',
+    parser: 'local-v2',
     supportedFileTypes: SUPPORTED_UPLOAD_EXTENSIONS,
+    supportedAnswerFileTypes: SUPPORTED_ANSWER_EXTENSIONS,
   });
 });
 
 app.post('/api/parse', upload.fields([
   { name: 'sourceFile', maxCount: 1 },
+  { name: 'answerFile', maxCount: 1 },
   { name: 'pdf', maxCount: 1 },
 ]), async (req, res, next) => {
-  const file = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
+  const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
+  const answerFile = req.files?.answerFile?.[0] || null;
+  const answerMode = String(req.body.answerMode || 'single');
   const answerIndex = Number(req.body.answerIndex);
   const optionCount = Number(req.body.optionCount);
   const questionMode = String(req.body.questionMode || 'manual');
   const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
-  const originalFilename = normalizeUploadedFilename(file?.originalname || '');
-  const extension = path.extname(originalFilename).toLowerCase();
+  const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
+  const sourceExtension = path.extname(originalFilename).toLowerCase();
 
-  if (!file) {
+  if (!sourceFile) {
     return res.status(400).json({ error: 'Нужно загрузить файл с тестами.' });
   }
 
-  if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(extension)) {
+  if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
     return res.status(400).json({
       error: `Поддерживаются только файлы ${SUPPORTED_UPLOAD_EXTENSIONS.join(', ')}.`,
     });
@@ -85,8 +90,26 @@ app.post('/api/parse', upload.fields([
     return res.status(400).json({ error: 'Количество вариантов ответа должно быть от 2 до 10.' });
   }
 
-  if (!Number.isInteger(answerIndex) || answerIndex < 1 || answerIndex > optionCount) {
+  if (!['single', 'file'].includes(answerMode)) {
+    return res.status(400).json({ error: 'Неверный режим ответов.' });
+  }
+
+  if (answerMode === 'single' && (!Number.isInteger(answerIndex) || answerIndex < 1 || answerIndex > optionCount)) {
     return res.status(400).json({ error: `Правильный вариант должен быть от 1 до ${optionCount}.` });
+  }
+
+  if (answerMode === 'file') {
+    if (!answerFile) {
+      return res.status(400).json({ error: 'Нужно загрузить отдельный файл с ответами.' });
+    }
+
+    const answerFilename = normalizeUploadedFilename(answerFile.originalname || '');
+    const answerExtension = path.extname(answerFilename).toLowerCase();
+    if (!SUPPORTED_ANSWER_EXTENSIONS.includes(answerExtension)) {
+      return res.status(400).json({
+        error: `Поддерживаются только файлы ответов ${SUPPORTED_ANSWER_EXTENSIONS.join(', ')}.`,
+      });
+    }
   }
 
   if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
@@ -94,12 +117,20 @@ app.post('/api/parse', upload.fields([
   }
 
   try {
+    const parsedAnswerKey = answerMode === 'file'
+      ? await parseAnswerKeyFromFile({
+        buffer: answerFile.buffer,
+        filename: normalizeUploadedFilename(answerFile.originalname || ''),
+      })
+      : null;
+
     const parsedQuiz = await parseQuizFromFile({
-      buffer: file.buffer,
+      buffer: sourceFile.buffer,
       filename: originalFilename,
-      answerIndex,
+      answerIndex: answerMode === 'single' ? answerIndex : 1,
       limit: questionMode === 'all' ? null : questionLimit,
       optionCount,
+      answerKey: parsedAnswerKey,
     });
 
     const requestedCount = questionMode === 'all'
@@ -109,7 +140,7 @@ app.post('/api/parse', upload.fields([
     const draft = createQuizDraft({
       title: sanitizeText(parsedQuiz.title) || 'Medical quiz',
       sourceFilename: originalFilename,
-      answerIndex,
+      answerIndex: answerMode === 'single' ? answerIndex : 0,
       requestedCount,
       questions: parsedQuiz.questions,
       rawModelJson: parsedQuiz.rawModelJson,
@@ -121,7 +152,9 @@ app.post('/api/parse', upload.fields([
       parsedCount: parsedQuiz.questions.length,
       requestedCount,
       questionMode,
+      answerMode,
       notes: parsedQuiz.notes,
+      adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
     });
   } catch (error) {
     return next(error);
@@ -155,6 +188,11 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
       quizUrl: buildAbsoluteUrl(req, `/quiz/${savedQuiz.slug}`),
       downloadUrl: buildAbsoluteUrl(req, `/api/download/${savedQuiz.slug}`),
       apiUrl: buildAbsoluteUrl(req, `/api/quizzes/${savedQuiz.slug}`),
+      siteType: savedQuiz.siteType,
+      siteTypeLabel: formatSiteType(savedQuiz.siteType),
+      warningDeviceLimit: getDeviceWarningLimit(savedQuiz.siteType),
+      clientTgUsername: savedQuiz.clientTgUsername,
+      expectedQuestionCount: savedQuiz.expectedQuestionCount,
     });
   } catch (error) {
     releaseReservation(reservation.reservationToken);
@@ -181,6 +219,9 @@ app.get('/api/quizzes/:slug', (req, res) => {
     parsedCount: quiz.parsedCount,
     createdAt: quiz.createdAt,
     questions: quiz.questions,
+    siteType: quiz.siteType,
+    siteTypeLabel: formatSiteType(quiz.siteType),
+    clientTgUsername: quiz.clientTgUsername,
   });
 });
 
@@ -221,7 +262,6 @@ app.get('/api/download/:slug', (req, res) => {
   }
 
   const bundle = buildZipBundle(quiz);
-
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', `attachment; filename="${bundle.folder}.zip"`);
 
@@ -237,13 +277,17 @@ app.get('/api/download/:slug', (req, res) => {
   archive.finalize();
 });
 
-app.get('/api/admin/quizzes', requireAdminSecret, (req, res) => {
-  const quizzes = listQuizzesForAdmin().map((quiz) => ({
-    ...quiz,
-    quizUrl: buildAbsoluteUrl(req, `/quiz/${quiz.slug}`),
-  }));
+app.post('/api/admin/codes', requireAdminSecret, (req, res) => {
+  const count = Number(req.body.count || 1);
+  const label = req.body.label ? String(req.body.label) : null;
+  const metadata = {
+    siteType: req.body.siteType,
+    clientTgUsername: req.body.clientTgUsername,
+    expectedQuestionCount: req.body.expectedQuestionCount,
+  };
+  const codes = createAccessCodes(count, label, metadata);
 
-  res.json({ quizzes });
+  return res.status(201).json({ codes });
 });
 
 app.post('/api/admin/quizzes/:slug/ban', requireAdminSecret, (req, res) => {
@@ -260,12 +304,17 @@ app.post('/api/admin/quizzes/:slug/ban', requireAdminSecret, (req, res) => {
   });
 });
 
-app.post('/api/admin/codes', requireAdminSecret, (req, res) => {
-  const count = Number(req.body.count || 1);
-  const label = req.body.label ? String(req.body.label) : null;
-  const codes = createAccessCodes(count, label);
+app.delete('/api/admin/quizzes/:id', requireAdminSecret, (req, res) => {
+  const quiz = deleteQuizById(req.params.id);
+  if (!quiz) {
+    return res.status(404).json({ error: 'Тест не найден.' });
+  }
 
-  return res.status(201).json({ codes });
+  return res.json({
+    id: quiz.id,
+    slug: quiz.slug,
+    title: quiz.title,
+  });
 });
 
 app.use((error, _req, res, _next) => {
@@ -354,4 +403,17 @@ function renderUnavailableQuizHtml(title) {
   </section>
 </body>
 </html>`;
+}
+
+function normalizePublicUsername(value) {
+  const normalized = String(value || '').trim().replace(/^@+/, '');
+  return normalized ? `@${normalized}` : '';
+}
+
+function formatSiteType(siteType) {
+  return String(siteType || '') === '2' ? 'Групповой' : 'Одиночный';
+}
+
+function getDeviceWarningLimit(siteType) {
+  return String(siteType || '') === '2' ? 20 : 2;
 }

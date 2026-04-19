@@ -77,9 +77,10 @@ h1{
 .hidden{display:none}
 .meta{
   display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  grid-template-columns:1fr;
   gap:12px;
   margin:18px 0 10px;
+  max-width:420px;
 }
 .meta-chip{
   border:1px solid var(--line);
@@ -205,9 +206,9 @@ h1{
     line-height:1.05;
   }
   .meta{
-    grid-template-columns:1fr;
     gap:10px;
     margin-top:14px;
+    max-width:none;
   }
   .meta-chip{
     padding:11px 12px;
@@ -271,22 +272,63 @@ h1{
 export const quizAppJs = `
 'use strict';
 
-const bootstrapQuestions = typeof window !== 'undefined' && window.QUIZ_BOOTSTRAP
-  ? window.QUIZ_BOOTSTRAP.questions
-  : (typeof QUESTIONS !== 'undefined' ? QUESTIONS : []);
+const LANGUAGE_STORAGE_KEY = 'pdmu-ui-language';
 
-const titleText = typeof window !== 'undefined' && window.QUIZ_BOOTSTRAP
-  ? window.QUIZ_BOOTSTRAP.title
-  : 'Medical Quiz';
+const bootstrapData = typeof window !== 'undefined' && window.QUIZ_BOOTSTRAP
+  ? window.QUIZ_BOOTSTRAP
+  : {};
+
+const bootstrapQuestions = Array.isArray(bootstrapData.questions) ? bootstrapData.questions : (typeof QUESTIONS !== 'undefined' ? QUESTIONS : []);
+const titleText = bootstrapData.title || 'Medical Quiz';
+
+const i18n = {
+  ru: {
+    eyebrow: 'PDMU quiz link',
+    linkLabel: 'Ссылка',
+    countLabel: 'Вопросов',
+    intro: 'Можно перемешать порядок вопросов. Варианты ответов будут перемешаны автоматически.',
+    shuffle: 'Перемешать вопросы',
+    start: 'Начать',
+    questionShort: 'Вопрос',
+    questionCounter: 'Вопрос {current} из {total}',
+    finish: 'Завершить сейчас',
+    next: 'Следующий',
+    results: 'Результаты',
+    restart: 'Пройти еще раз',
+    summary: 'Итог: {correct} / {answered} · {time}',
+    correct: 'Правильно',
+    wrong: 'Ошибка',
+    time: 'Время',
+  },
+  uk: {
+    eyebrow: 'PDMU quiz link',
+    linkLabel: 'Посилання',
+    countLabel: 'Питань',
+    intro: 'Можна перемішати порядок питань. Варіанти відповідей будуть перемішані автоматично.',
+    shuffle: 'Перемішати питання',
+    start: 'Почати',
+    questionShort: 'Питання',
+    questionCounter: 'Питання {current} із {total}',
+    finish: 'Завершити зараз',
+    next: 'Наступне',
+    results: 'Результати',
+    restart: 'Пройти ще раз',
+    summary: 'Підсумок: {correct} / {answered} · {time}',
+    correct: 'Правильно',
+    wrong: 'Помилка',
+    time: 'Час',
+  },
+};
 
 const state = {
-  questions: Array.isArray(bootstrapQuestions) ? bootstrapQuestions : [],
+  questions: bootstrapQuestions,
   order: [],
   optsOrder: [],
   chosenAt: [],
   cur: 0,
   startedAt: null,
   shuffleQuestions: false,
+  language: resolveLanguage(),
 };
 
 const els = {
@@ -306,7 +348,80 @@ const els = {
   startBtn: document.getElementById('startBtn'),
   restartBtn: document.getElementById('restartBtn'),
   quizLength: document.getElementById('quizLength'),
+  eyebrow: document.getElementById('eyebrow'),
+  linkLabel: document.getElementById('linkLabel'),
+  introText: document.getElementById('introText'),
+  shuffleLabel: document.getElementById('shuffleLabel'),
+  resultsTitle: document.getElementById('resultsTitle'),
+  countLabel: document.getElementById('countLabel'),
 };
+
+function t(key, params = {}) {
+  const dict = i18n[state.language] || i18n.ru;
+  const template = dict[key] || i18n.ru[key] || key;
+  return String(template).replace(/\\{(\\w+)\\}/g, (_, token) => String(params[token] ?? '{' + token + '}'));
+}
+
+function resolveLanguage() {
+  const url = new URL(window.location.href);
+  const queryLanguage = url.searchParams.get('lang');
+  if (queryLanguage === 'ru' || queryLanguage === 'uk') {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, queryLanguage);
+    return queryLanguage;
+  }
+
+  const savedLanguage = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  if (savedLanguage === 'ru' || savedLanguage === 'uk') {
+    return savedLanguage;
+  }
+
+  return 'ru';
+}
+
+function applyLanguage() {
+  document.documentElement.lang = state.language === 'uk' ? 'uk' : 'ru';
+  document.title = titleText;
+
+  if (els.eyebrow) {
+    els.eyebrow.textContent = t('eyebrow');
+  }
+  if (els.linkLabel) {
+    els.linkLabel.textContent = t('linkLabel');
+  }
+  if (els.countLabel) {
+    els.countLabel.textContent = t('countLabel');
+  }
+  if (els.introText) {
+    els.introText.textContent = t('intro');
+  }
+  if (els.shuffleLabel) {
+    els.shuffleLabel.textContent = t('shuffle');
+  }
+  if (els.startBtn) {
+    els.startBtn.textContent = t('start');
+  }
+  if (els.finish) {
+    els.finish.textContent = t('finish');
+  }
+  if (els.next) {
+    els.next.textContent = t('next');
+  }
+  if (els.resultsTitle) {
+    els.resultsTitle.textContent = t('results');
+  }
+  if (els.restartBtn) {
+    els.restartBtn.textContent = t('restart');
+  }
+
+  if (els.questionCounter && !els.quiz.classList.contains('hidden')) {
+    els.questionCounter.textContent = t('questionCounter', {
+      current: state.cur + 1,
+      total: state.questions.length,
+    });
+  } else if (els.questionCounter) {
+    els.questionCounter.textContent = t('questionShort');
+  }
+}
 
 function show(node) {
   node.classList.remove('hidden');
@@ -318,9 +433,9 @@ function hide(node) {
 
 function shuffleArray(items) {
   const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[randomIndex]] = [copy[randomIndex], copy[index]];
   }
   return copy;
 }
@@ -329,23 +444,26 @@ function msToClock(ms) {
   const totalSeconds = Math.round(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return \`\${minutes}м \${seconds}с\`;
+  return state.language === 'uk'
+    ? minutes + ' хв ' + seconds + ' с'
+    : minutes + 'м ' + seconds + 'с';
 }
 
 function startQuiz() {
-  const n = state.questions.length;
-  state.order = [...Array(n).keys()];
+  const totalQuestions = state.questions.length;
+  state.order = [...Array(totalQuestions).keys()];
   state.shuffleQuestions = Boolean(els.shuffle?.checked);
+
   if (state.shuffleQuestions) {
     state.order = shuffleArray(state.order);
   }
 
-  state.optsOrder = Array.from({ length: n }, (_, index) => {
-    const base = [...Array(state.questions[index].options.length).keys()];
-    return shuffleArray(base);
+  state.optsOrder = Array.from({ length: totalQuestions }, (_, questionIndex) => {
+    const optionIndexes = [...Array(state.questions[questionIndex].options.length).keys()];
+    return shuffleArray(optionIndexes);
   });
 
-  state.chosenAt = Array(n).fill(null);
+  state.chosenAt = Array(totalQuestions).fill(null);
   state.cur = 0;
   state.startedAt = Date.now();
 
@@ -357,11 +475,14 @@ function startQuiz() {
 
 function renderQuestion() {
   const visibleIndex = state.cur;
-  const qIndex = state.order[visibleIndex];
-  const question = state.questions[qIndex];
-  const optionOrder = state.optsOrder[qIndex];
+  const questionIndex = state.order[visibleIndex];
+  const question = state.questions[questionIndex];
+  const optionOrder = state.optsOrder[questionIndex];
 
-  els.questionCounter.textContent = \`Вопрос \${visibleIndex + 1} из \${state.questions.length}\`;
+  els.questionCounter.textContent = t('questionCounter', {
+    current: visibleIndex + 1,
+    total: state.questions.length,
+  });
   els.qText.textContent = question.q;
   els.options.innerHTML = '';
 
@@ -370,7 +491,7 @@ function renderQuestion() {
     button.type = 'button';
     button.className = 'option';
     button.textContent = question.options[sourceOptionIndex];
-    button.addEventListener('click', () => selectOption(qIndex, renderedOptionIndex));
+    button.addEventListener('click', () => selectOption(questionIndex, renderedOptionIndex));
     els.options.appendChild(button);
   });
 
@@ -430,7 +551,7 @@ function showResults() {
 
     const block = document.createElement('div');
     block.className = 'result-item';
-    block.innerHTML = \`<div class="small">\${chosenRenderedIndex === correctRenderedIndex ? 'CORRECT' : 'WRONG'}</div><div style="font-weight:700;margin:6px 0 10px">\${question.q}</div>\`;
+    block.innerHTML = '<div class="small">' + (chosenRenderedIndex === correctRenderedIndex ? t('correct') : t('wrong')) + '</div><div style="font-weight:700;margin:6px 0 10px">' + question.q + '</div>';
 
     const group = document.createElement('div');
     group.className = 'options';
@@ -452,13 +573,18 @@ function showResults() {
     els.list.appendChild(block);
   });
 
-  els.sum.textContent = \`Итог: \${correct} / \${answered.length} · ⏱ \${msToClock(Date.now() - (state.startedAt || Date.now()))}\`;
+  els.sum.textContent = t('summary', {
+    correct,
+    answered: answered.length,
+    time: msToClock(Date.now() - (state.startedAt || Date.now())),
+  });
 }
 
 function resetQuiz() {
   hide(els.quiz);
   hide(els.results);
   show(els.start);
+  applyLanguage();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -471,6 +597,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (els.quizLength) {
     els.quizLength.textContent = String(state.questions.length);
   }
+
+  applyLanguage();
 
   els.startBtn?.addEventListener('click', startQuiz);
   els.next?.addEventListener('click', nextQuestion);
@@ -498,21 +626,21 @@ export function renderHostedQuizHtml(quiz) {
 <body>
   <div class="shell">
     <section class="hero">
-      <span class="eyebrow">PDMU quiz link</span>
+      <span id="eyebrow" class="eyebrow">PDMU quiz link</span>
       <h1 id="pageTitle">${title}</h1>
       <div class="meta">
-        <div class="meta-chip"><span>Ссылка</span>${htmlEscape(quiz.slug)}</div>
-        <div class="meta-chip"><span>Вопросов</span><strong id="quizLength">${quiz.questions.length}</strong></div>
+        <div class="meta-chip"><span id="linkLabel">Ссылка</span>${htmlEscape(quiz.slug)}</div>
+        <div class="meta-chip"><span id="countLabel">Вопросов</span><strong id="quizLength">${quiz.questions.length}</strong></div>
       </div>
     </section>
 
     <section id="start" class="card">
       <h2 id="quizTitle" class="title">${title}</h2>
-      <p class="lead">Можно перемешать порядок вопросов. Варианты ответов будут перемешаны автоматически.</p>
+      <p id="introText" class="lead">Можно перемешать порядок вопросов. Варианты ответов будут перемешаны автоматически.</p>
       <div class="controls" style="justify-content:flex-start">
         <label class="small" style="display:flex;align-items:center;gap:10px;font-size:14px">
           <input type="checkbox" id="shuffle" />
-          Перемешать вопросы
+          <span id="shuffleLabel">Перемешать вопросы</span>
         </label>
       </div>
       <div class="controls">
@@ -532,7 +660,7 @@ export function renderHostedQuizHtml(quiz) {
     </section>
 
     <section id="results" class="card hidden">
-      <h2 class="title">Результаты</h2>
+      <h2 id="resultsTitle" class="title">Результаты</h2>
       <div id="sum" class="summary"></div>
       <div id="resultsList" class="results-list"></div>
       <div class="controls">
@@ -562,22 +690,21 @@ export function buildZipBundle(quiz) {
 <body>
   <div class="shell">
     <section class="hero">
-      <span class="eyebrow">PDMU export</span>
+      <span id="eyebrow" class="eyebrow">PDMU export</span>
       <h1 id="pageTitle">${htmlEscape(quiz.title)}</h1>
-      <p class="lead">Статический экспорт теста, совместимый с форматом шаблонного zip-архива.</p>
       <div class="meta">
-        <div class="meta-chip"><span>Папка</span>${htmlEscape(folder)}</div>
-        <div class="meta-chip"><span>Вопросов</span><strong id="quizLength">${quiz.questions.length}</strong></div>
+        <div class="meta-chip"><span id="linkLabel">Ссылка</span>${htmlEscape(folder)}</div>
+        <div class="meta-chip"><span id="countLabel">Вопросов</span><strong id="quizLength">${quiz.questions.length}</strong></div>
       </div>
     </section>
 
     <section id="start" class="card">
       <h2 id="quizTitle" class="title">${htmlEscape(quiz.title)}</h2>
-      <p class="lead">Можно перемешать порядок вопросов. Варианты ответов будут перемешаны автоматически.</p>
+      <p id="introText" class="lead">Можно перемешать порядок вопросов. Варианты ответов будут перемешаны автоматически.</p>
       <div class="controls" style="justify-content:flex-start">
         <label class="small" style="display:flex;align-items:center;gap:10px;font-size:14px">
           <input type="checkbox" id="shuffle" />
-          Перемешать вопросы
+          <span id="shuffleLabel">Перемешать вопросы</span>
         </label>
       </div>
       <div class="controls">
@@ -597,7 +724,7 @@ export function buildZipBundle(quiz) {
     </section>
 
     <section id="results" class="card hidden">
-      <h2 class="title">Результаты</h2>
+      <h2 id="resultsTitle" class="title">Результаты</h2>
       <div id="sum" class="summary"></div>
       <div id="resultsList" class="results-list"></div>
       <div class="controls">

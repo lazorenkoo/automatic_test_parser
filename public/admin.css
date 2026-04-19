@@ -3,7 +3,6 @@
 :root{
   --bg:#f5efe4;
   --bg-2:#fbf7f0;
-  --panel:rgba(255,253,249,.82);
   --card:#fffdf8;
   --line:#e7d9c4;
   --text:#1f2937;
@@ -31,6 +30,35 @@ body{
   padding-right:max(16px, env(safe-area-inset-right));
   padding-bottom:max(40px, env(safe-area-inset-bottom));
 }
+.page-topbar{
+  display:flex;
+  justify-content:flex-end;
+  margin-bottom:12px;
+}
+.language-switcher{
+  display:inline-flex;
+  gap:8px;
+  padding:8px;
+  border:1px solid var(--line);
+  border-radius:999px;
+  background:rgba(255,253,249,.85);
+  box-shadow:var(--shadow);
+}
+.lang-btn{
+  appearance:none;
+  border:none;
+  border-radius:999px;
+  padding:10px 16px;
+  background:transparent;
+  color:var(--muted);
+  font:inherit;
+  font-weight:700;
+  cursor:pointer;
+}
+.lang-btn.active{
+  background:linear-gradient(135deg, var(--accent), #d97706);
+  color:#fff;
+}
 .grid{
   display:grid;
   grid-template-columns:1.2fr .8fr;
@@ -46,10 +74,6 @@ body{
 .card-head h2{
   margin:0 0 6px;
   font-size:24px;
-}
-.card-head p{
-  margin:0 0 20px;
-  color:var(--muted);
 }
 .field{
   display:grid;
@@ -76,8 +100,12 @@ body{
 }
 .split{
   display:grid;
-  grid-template-columns:repeat(2, minmax(0,1fr));
-  gap:14px;
+  grid-template-columns:1fr;
+  gap:6px;
+}
+.choice-stack{
+  display:grid;
+  gap:10px;
 }
 .choice-row{
   display:flex;
@@ -111,18 +139,6 @@ body{
   width:100%;
   background:linear-gradient(135deg, var(--accent), #d97706);
   color:#fff;
-}
-.manager-link{
-  display:inline-flex;
-  justify-content:center;
-  align-items:center;
-  margin-top:12px;
-  color:var(--accent-2);
-  font-weight:700;
-  text-decoration:none;
-}
-.manager-link:hover{
-  text-decoration:underline;
 }
 .secondary-btn{
   background:linear-gradient(135deg, var(--accent-2), #0f766e);
@@ -195,10 +211,18 @@ body{
   border:1px solid #bde6df;
 }
 .activation-text{
-  margin:0 0 14px;
+  margin:0 0 10px;
   color:#0f766e !important;
   font-weight:700;
   line-height:1.5;
+}
+.admin-contact{
+  margin:0 0 14px;
+  font-size:15px;
+  line-height:1.5;
+}
+.admin-contact strong{
+  color:var(--text);
 }
 .access-form{
   display:grid;
@@ -230,7 +254,6 @@ body{
 }
 @media (max-width:960px){
   .grid{grid-template-columns:1fr}
-  .split{grid-template-columns:1fr}
 }
 @media (max-width:640px){
   .page{
@@ -245,10 +268,6 @@ body{
   }
   .card-head h2{
     font-size:21px;
-  }
-  .card-head p{
-    font-size:15px;
-    margin-bottom:16px;
   }
   .field{
     margin-bottom:14px;
@@ -273,10 +292,6 @@ body{
     padding:14px 16px;
     border-radius:14px;
   }
-  .manager-link{
-    width:100%;
-    margin-top:10px;
-  }
   .status,
   .result-box,
   .warning-box,
@@ -289,7 +304,8 @@ body{
     font-size:18px;
     line-height:1.2;
   }
-  .result-box p{
+  .result-box p,
+  .admin-contact{
     font-size:15px;
     line-height:1.45;
   }

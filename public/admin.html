@@ -8,14 +8,21 @@
 </head>
 <body>
   <main class="page">
+    <div class="page-topbar">
+      <div class="language-switcher" aria-label="Language switcher">
+        <button id="langRuBtn" class="lang-btn active" type="button">Рус</button>
+        <button id="langUkBtn" class="lang-btn" type="button">Укр</button>
+      </div>
+    </div>
+
     <section class="grid">
       <form id="quizForm" class="card form-card">
         <div class="card-head">
-          <h2>Создать тест</h2>
+          <h2 data-i18n="form.title">Создать тест</h2>
         </div>
 
         <label class="field">
-          <span>Файл с тестами</span>
+          <span data-i18n="form.source_file">Файл с тестами</span>
           <input
             id="sourceFile"
             name="sourceFile"
@@ -27,40 +34,63 @@
 
         <div class="split">
           <label class="field">
-            <span>Правильный вариант</span>
-            <select id="answerIndex" name="answerIndex" required></select>
-          </label>
-
-          <label class="field">
-            <span>Вариантов ответа в вопросе</span>
+            <span data-i18n="form.option_count">Вариантов ответа в вопросе</span>
             <input id="optionCount" name="optionCount" type="number" min="2" max="10" value="5" required />
           </label>
+
+          <div class="field">
+            <span data-i18n="form.answer_mode">Режим правильных ответов</span>
+            <div class="choice-stack">
+              <label class="choice-row">
+                <input id="answerModeSingle" name="answerMode" type="radio" value="single" checked />
+                <span data-i18n="form.answer_mode_single">Один и тот же вариант для всех</span>
+              </label>
+              <label class="choice-row">
+                <input id="answerModeFile" name="answerMode" type="radio" value="file" />
+                <span data-i18n="form.answer_mode_file">Отдельный файл с ответами</span>
+              </label>
+            </div>
+          </div>
         </div>
 
+        <div id="singleAnswerField" class="field">
+          <span data-i18n="form.answer_index">Правильный вариант</span>
+          <select id="answerIndex" name="answerIndex" required></select>
+        </div>
+
+        <label id="answerFileField" class="field hidden">
+          <span data-i18n="form.answer_file">Файл с ответами</span>
+          <input
+            id="answerFile"
+            name="answerFile"
+            type="file"
+            accept=".txt,.pdf,.doc,.docx,text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          />
+        </label>
+
         <div class="field">
-          <span>Количество вопросов</span>
+          <span data-i18n="form.question_count">Количество вопросов</span>
 
           <label class="choice-row">
             <input id="useAllQuestions" name="useAllQuestions" type="checkbox" checked />
-            <span>Все вопросы</span>
+            <span data-i18n="form.use_all_questions">Все вопросы</span>
           </label>
 
           <label id="questionLimitField" class="field nested-field hidden">
-            <span>Сколько вопросов распарсить</span>
+            <span data-i18n="form.question_limit">Сколько вопросов распарсить</span>
             <input id="questionLimit" name="questionLimit" type="number" min="1" value="20" />
           </label>
         </div>
 
-        <button id="submitBtn" class="primary-btn" type="submit">Передать файл</button>
-        <a class="manager-link" href="/manager">Управление тестами</a>
+        <button id="submitBtn" class="primary-btn" type="submit" data-i18n="form.submit">Передать файл</button>
       </form>
 
       <section class="card result-card">
         <div class="card-head">
-          <h2>Результат</h2>
+          <h2 data-i18n="result.title">Результат</h2>
         </div>
 
-        <div id="statusBox" class="status idle">Ожидаю загрузку файла.</div>
+        <div id="statusBox" class="status idle" data-i18n="status.idle">Ожидаю загрузку файла.</div>
         <div id="resultBox" class="result-box hidden"></div>
       </section>
     </section>
