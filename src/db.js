@@ -34,6 +34,7 @@ db.exec(`
     price REAL NOT NULL DEFAULT 0,
     is_reusable INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
+    revoked_at INTEGER,
     reserved_at INTEGER,
     reservation_token TEXT UNIQUE,
     used_at INTEGER,
@@ -95,6 +96,7 @@ ensureColumn('access_codes', 'client_tg_username', 'TEXT');
 ensureColumn('access_codes', 'expected_question_count', 'INTEGER');
 ensureColumn('access_codes', 'price', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('access_codes', 'is_reusable', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('access_codes', 'revoked_at', 'INTEGER');
 ensureColumn('quizzes', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quiz_drafts', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quizzes', 'banned_at', 'INTEGER');
@@ -108,8 +110,9 @@ const insertCodeStmt = db.prepare(`
     expected_question_count,
     price,
     is_reusable,
-    created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    created_at,
+    revoked_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
 `);
 
 const upsertReusableCodeStmt = db.prepare(`
@@ -134,6 +137,7 @@ const upsertReusableCodeStmt = db.prepare(`
     expected_question_count = excluded.expected_question_count,
     price = excluded.price,
     is_reusable = 1,
+    revoked_at = NULL,
     reserved_at = NULL,
     reservation_token = NULL,
     used_at = NULL,
@@ -152,6 +156,7 @@ const reserveCodeStmt = db.prepare(`
   UPDATE access_codes
   SET reserved_at = ?, reservation_token = ?
   WHERE code_hash = ?
+    AND revoked_at IS NULL
     AND (used_at IS NULL OR is_reusable = 1)
     AND reservation_token IS NULL
 `);
@@ -164,7 +169,8 @@ const selectReservedCodeStmt = db.prepare(`
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
     price,
-    is_reusable AS isReusable
+    is_reusable AS isReusable,
+    revoked_at AS revokedAt
   FROM access_codes
   WHERE reservation_token = ?
 `);
@@ -184,10 +190,35 @@ const findCodeByTokenStmt = db.prepare(`
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
     price,
-    is_reusable AS isReusable
+    is_reusable AS isReusable,
+    revoked_at AS revokedAt
   FROM access_codes
   WHERE reservation_token = ?
+    AND revoked_at IS NULL
     AND (used_at IS NULL OR is_reusable = 1)
+`);
+
+const revokeAccessCodeStmt = db.prepare(`
+  UPDATE access_codes
+  SET revoked_at = ?, reserved_at = NULL, reservation_token = NULL
+  WHERE code_hash = ?
+    AND revoked_at IS NULL
+`);
+
+const findAccessCodeByHashStmt = db.prepare(`
+  SELECT
+    id,
+    label,
+    site_type AS siteType,
+    client_tg_username AS clientTgUsername,
+    expected_question_count AS expectedQuestionCount,
+    price,
+    is_reusable AS isReusable,
+    revoked_at AS revokedAt,
+    used_at AS usedAt,
+    used_by_quiz_id AS usedByQuizId
+  FROM access_codes
+  WHERE code_hash = ?
 `);
 
 const insertQuizStmt = db.prepare(`
@@ -417,6 +448,83 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
 
   tx();
   return codes;
+}
+
+export function createReusableAccessCode(label = null, metadata = {}) {
+  const createdAt = nowMs();
+  const siteType = normalizeSiteType(metadata.siteType);
+  const clientTgUsername = normalizeClientUsername(metadata.clientTgUsername);
+  const expectedQuestionCount = normalizeExpectedQuestionCount(metadata.expectedQuestionCount);
+  const price = normalizePrice(metadata.price);
+
+  let code = '';
+  while (!code) {
+    const candidate = generateAccessCode();
+    const candidateHash = hashCode(candidate);
+    if (findAccessCodeByHashStmt.get(candidateHash)) {
+      continue;
+    }
+
+    try {
+      upsertReusableCodeStmt.run(
+        candidateHash,
+        sanitizeNullableValue(label),
+        siteType,
+        clientTgUsername,
+        expectedQuestionCount,
+        price,
+        createdAt,
+      );
+      code = candidate;
+    } catch (error) {
+      if (error.code !== 'SQLITE_CONSTRAINT_UNIQUE') {
+        throw error;
+      }
+    }
+  }
+
+  return code;
+}
+
+export function revokeAccessCode(plainCode) {
+  const normalized = normalizeCode(plainCode);
+  if (!normalized) {
+    return null;
+  }
+
+  const codeHash = hashCode(normalized);
+  const existing = findAccessCodeByHashStmt.get(codeHash);
+  if (!existing) {
+    return null;
+  }
+
+  if (existing.revokedAt) {
+    return {
+      id: Number(existing.id),
+      label: existing.label || null,
+      siteType: existing.siteType || null,
+      clientTgUsername: existing.clientTgUsername || null,
+      expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
+      price: Number(existing.price || 0),
+      isReusable: Number(existing.isReusable || 0) === 1,
+      revokedAt: Number(existing.revokedAt),
+      alreadyRevoked: true,
+    };
+  }
+
+  revokeAccessCodeStmt.run(nowMs(), codeHash);
+  const updated = findAccessCodeByHashStmt.get(codeHash);
+  return {
+    id: Number(updated.id),
+    label: updated.label || null,
+    siteType: updated.siteType || null,
+    clientTgUsername: updated.clientTgUsername || null,
+    expectedQuestionCount: updated.expectedQuestionCount ? Number(updated.expectedQuestionCount) : null,
+    price: Number(updated.price || 0),
+    isReusable: Number(updated.isReusable || 0) === 1,
+    revokedAt: updated.revokedAt ? Number(updated.revokedAt) : null,
+    alreadyRevoked: false,
+  };
 }
 
 export function reserveAccessCode(plainCode) {

@@ -1,6 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import {
   createAccessCodes,
+  createReusableAccessCode,
   deleteQuizById,
   fixQuizReviewBlock,
   getQuizById,
@@ -8,6 +9,7 @@ import {
   getDbMeta,
   listQuizzesForAdmin,
   replaceQuizQuestion,
+  revokeAccessCode,
   setQuizBanStatusById,
 } from './db.js';
 
@@ -33,10 +35,17 @@ export function startTelegramBot() {
   const helpText = [
     'Команды бота:',
     '/code <type> <questions> [price] <tg_user> [label] - создать 1 код',
+    '/reusecode <type> <questions> [price] <tg_user> [label] - создать многоразовый код',
     '/codes <count> <type> <questions> [price] <tg_user> [label] - создать несколько кодов',
+    '/delcode <CODE> - отключить код, чтобы он больше не создавал сайты',
     '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01] - список сайтов',
     '/search <text> - поиск сайтов по @user, slug или названию',
     '/site <id> - подробности по одному сайту',
+    '/review <id> - сводка по тесту и проблемным блокам',
+    '/review <id> q <number> - показать конкретный вопрос',
+    '/review <id> block <number> - показать проблемный блок',
+    '/fixblock <id> <block> <correct> <question> || <answer1> || ... - добавить вопрос из блока',
+    '/setq <id> <question> <correct> <new question> || <answer1> || ... - заменить вопрос',
     '/money - сумма по ценам всех созданных сайтов за историю',
     '/ban <id> - забанить один сайт',
     '/ban <type> <N> - забанить сайты типа 1 или 2, где устройств больше N',
@@ -50,10 +59,15 @@ export function startTelegramBot() {
 
   bot.setMyCommands([
     { command: 'code', description: 'Создать 1 код доступа' },
+    { command: 'reusecode', description: 'Создать многоразовый код' },
     { command: 'codes', description: 'Создать несколько кодов' },
+    { command: 'delcode', description: 'Отключить код доступа' },
     { command: 'sites', description: 'Список сайтов' },
     { command: 'search', description: 'Поиск среди сайтов' },
     { command: 'site', description: 'Детали по сайту' },
+    { command: 'review', description: 'Разбор теста и проблемных блоков' },
+    { command: 'fixblock', description: 'Добавить вопрос из проблемного блока' },
+    { command: 'setq', description: 'Заменить готовый вопрос' },
     { command: 'money', description: 'Сумма по ценам сайтов' },
     { command: 'ban', description: 'Забанить сайт' },
     { command: 'unban', description: 'Вернуть сайт' },
@@ -125,6 +139,27 @@ export function startTelegramBot() {
     await bot.sendMessage(msg.chat.id, formatCreatedCodesMessage([code], parsed));
   });
 
+  bot.onText(/^\/reusecode(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseSingleCodeArgs(match?.[1], 'reusecode');
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const code = createReusableAccessCode(parsed.label, {
+      siteType: parsed.siteType,
+      clientTgUsername: parsed.clientUsername,
+      expectedQuestionCount: parsed.questionCount,
+      price: parsed.price,
+    });
+
+    await bot.sendMessage(msg.chat.id, formatCreatedCodesMessage([code], { ...parsed, isReusable: true }));
+  });
+
   bot.onText(/^\/codes(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
     if (!(await ensureAuthorized(bot, msg, adminUserId))) {
       return;
@@ -144,6 +179,33 @@ export function startTelegramBot() {
     });
 
     await bot.sendMessage(msg.chat.id, formatCreatedCodesMessage(codes, parsed));
+  });
+
+  bot.onText(/^\/delcode(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const code = String(match?.[1] || '').trim();
+    if (!code) {
+      await bot.sendMessage(msg.chat.id, 'Формат: /delcode <CODE>');
+      return;
+    }
+
+    const result = revokeAccessCode(code);
+    if (!result) {
+      await bot.sendMessage(msg.chat.id, 'Код не найден.');
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, [
+      result.alreadyRevoked ? 'Код уже был отключен.' : 'Код отключен.',
+      `Тип: ${formatSiteType(result.siteType)}`,
+      `Количество тестов: ${result.expectedQuestionCount || '—'}`,
+      `Клиент: ${result.clientTgUsername || 'не привязан'}`,
+      `Цена: ${formatPrice(result.price)}`,
+      result.label ? `Label: ${result.label}` : null,
+    ].filter(Boolean).join('\n'));
   });
 
   bot.onText(/^\/sites(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -426,12 +488,14 @@ function isPrivateChat(msg) {
   return msg.chat?.type === 'private';
 }
 
-function parseSingleCodeArgs(rawValue) {
+function parseSingleCodeArgs(rawValue, commandName = 'code') {
   const parts = tokenizeArgs(rawValue);
   if (parts.length < 3) {
     return {
       ok: false,
-      error: 'Формат: /code <type> <questions> [price] <tg_user> [label]\nПримеры:\n/code 1 50 300 @ivan client-a\n/code 1 50 @ivan client-a',
+      error: commandName === 'reusecode'
+        ? 'Формат: /reusecode <type> <questions> [price] <tg_user> [label]\nПримеры:\n/reusecode 1 50 300 @ivan client-a\n/reusecode 1 50 @ivan client-a'
+        : 'Формат: /code <type> <questions> [price] <tg_user> [label]\nПримеры:\n/code 1 50 300 @ivan client-a\n/code 1 50 @ivan client-a',
     };
   }
 
@@ -830,6 +894,7 @@ function applyFilterPart(filters, part) {
 
 function formatCreatedCodesMessage(codes, parsed) {
   const common = [
+    parsed.isReusable ? 'Режим: Многоразовый код' : null,
     `Количество тестов: ${parsed.questionCount}`,
     `Цена: ${formatPrice(parsed.price)}`,
     `Клиент: ${parsed.clientUsername}`,
