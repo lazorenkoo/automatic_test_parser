@@ -143,6 +143,7 @@ app.post('/api/parse', upload.fields([
       answerIndex: answerMode === 'single' ? answerIndex : 0,
       requestedCount,
       questions: parsedQuiz.questions,
+      reviewBlocks: parsedQuiz.reviewBlocks,
       rawModelJson: parsedQuiz.rawModelJson,
     });
 

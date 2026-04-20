@@ -56,6 +56,7 @@ export async function parseQuizFromFile({
 
   let questions = parsed.questions;
   const notes = [...parsed.notes];
+  const reviewBlocks = Array.isArray(parsed.reviewBlocks) ? parsed.reviewBlocks : [];
 
   if (answerKey) {
     const resolved = applyAnswerKeyToQuestions(questions, answerKey);
@@ -72,9 +73,11 @@ export async function parseQuizFromFile({
       extractedCharacters: normalizedText.length,
       acceptedQuestions: questions.length,
       droppedBlocks: parsed.droppedBlocks,
+      reviewBlockCount: reviewBlocks.length,
       answerMode: answerKey ? 'file' : 'single',
     },
     notes,
+    reviewBlocks,
   };
 }
 
@@ -188,6 +191,7 @@ function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount })
   const lines = Array.isArray(linesInput) ? linesInput : splitIntoLines(linesInput);
   const questions = [];
   const notes = [];
+  const reviewBlocks = [];
   let droppedBlocks = 0;
   let current = null;
 
@@ -209,6 +213,7 @@ function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount })
         }
       } else {
         droppedBlocks += 1;
+        reviewBlocks.push(createReviewBlock([current.q, ...current.options], 'incomplete-line-markers'));
       }
 
       current = createQuestionState(questionMatch.text);
@@ -228,6 +233,7 @@ function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount })
           }
         } else {
           droppedBlocks += 1;
+          reviewBlocks.push(createReviewBlock([current.q, ...current.options], 'overflow-line-markers'));
         }
 
         current = createQuestionState(questionMatch.text);
@@ -246,6 +252,7 @@ function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount })
   if (current && questions.length < limit) {
     if (!pushCompletedQuestion(questions, current, answerIndex, optionCount)) {
       droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock([current.q, ...current.options], 'tail-line-markers'));
     }
   }
 
@@ -259,6 +266,7 @@ function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount })
     parser: 'line-markers',
     questions: questions.slice(0, limit),
     notes,
+    reviewBlocks,
     droppedBlocks,
     qualityScore: questions.length * 10 - droppedBlocks,
   };
@@ -293,12 +301,14 @@ function parseQuestionsFromExplicitNumbers(linesInput, { answerIndex, limit, opt
   }
 
   const questions = [];
+  const reviewBlocks = [];
   let droppedBlocks = 0;
 
   for (const block of blocks) {
     const parsedBlock = parseExplicitNumberBlock(block.lines, optionCount);
     if (!parsedBlock) {
       droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock(block.lines, 'explicit-number-block'));
       continue;
     }
 
@@ -323,6 +333,7 @@ function parseQuestionsFromExplicitNumbers(linesInput, { answerIndex, limit, opt
     parser: 'explicit-numbers',
     questions,
     notes,
+    reviewBlocks,
     droppedBlocks,
     qualityScore: questions.length * 20 - droppedBlocks,
   };
@@ -496,12 +507,14 @@ function parseQuestionsFromLineBlocks(linesInput, { answerIndex, limit, optionCo
   }
 
   const questions = [];
+  const reviewBlocks = [];
   let droppedBlocks = 0;
 
   for (const block of blocks) {
     const parsedBlock = parseLineBlock(block.lines, optionCount);
     if (!parsedBlock) {
       droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock(block.lines, 'line-block'));
       continue;
     }
 
@@ -527,6 +540,7 @@ function parseQuestionsFromLineBlocks(linesInput, { answerIndex, limit, optionCo
     parser: 'line-blocks',
     questions,
     notes,
+    reviewBlocks,
     droppedBlocks,
     qualityScore: questions.length * 12 - droppedBlocks,
   };
@@ -536,6 +550,7 @@ function parseQuestionsFromParagraphs(textInput, { answerIndex, limit, optionCou
   const paragraphs = Array.isArray(textInput) ? textInput : splitIntoParagraphs(textInput);
   const questions = [];
   const notes = [];
+  const reviewBlocks = [];
   let droppedBlocks = 0;
 
   for (let index = 0; index < paragraphs.length; index += 1) {
@@ -548,12 +563,14 @@ function parseQuestionsFromParagraphs(textInput, { answerIndex, limit, optionCou
     const options = paragraphs.slice(index + 1, index + 1 + optionCount);
     if (options.length < optionCount) {
       droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock([current, ...options], 'paragraph-short-options'));
       break;
     }
 
     const cleanOptions = options.map((option) => sanitizeText(option)).filter(Boolean);
     if (cleanOptions.length !== optionCount || cleanOptions.some(looksLikeQuestionParagraph)) {
       droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock([current, ...options], 'paragraph-structure'));
       continue;
     }
 
@@ -579,6 +596,7 @@ function parseQuestionsFromParagraphs(textInput, { answerIndex, limit, optionCou
     parser: 'paragraphs',
     questions,
     notes,
+    reviewBlocks,
     droppedBlocks,
     qualityScore: questions.length * 8 - droppedBlocks,
   };
@@ -588,6 +606,7 @@ function parseQuestionsFromQuestionTails(linesInput, { answerIndex, limit, optio
   const lines = Array.isArray(linesInput) ? linesInput : splitIntoLines(linesInput);
   const questions = [];
   const notes = [];
+  const reviewBlocks = [];
   let droppedBlocks = 0;
   let currentQuestionLines = [];
 
@@ -637,12 +656,17 @@ function parseQuestionsFromQuestionTails(linesInput, { answerIndex, limit, optio
 
     if (!optionBlock) {
       droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock([
+        ...currentQuestionLines,
+        ...lines.slice(index + 1, index + 1 + optionCount),
+      ], 'question-tail-no-options'));
       currentQuestionLines = [];
       continue;
     }
 
     if (!questionText) {
       droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock(currentQuestionLines, 'question-tail-empty-question'));
       currentQuestionLines = [];
       continue;
     }
@@ -671,6 +695,7 @@ function parseQuestionsFromQuestionTails(linesInput, { answerIndex, limit, optio
     parser: 'question-tails',
     questions,
     notes,
+    reviewBlocks,
     droppedBlocks,
     qualityScore: questions.length * 14 - droppedBlocks,
   };
@@ -848,6 +873,12 @@ function parseExplicitNumberBlock(lines, optionCount) {
 }
 
 function collectSequentialOptions(lines, startIndex, optionCount) {
+  return collectSequentialOptionsStrict(lines, startIndex, optionCount)
+    || collectSequentialOptionsFlexible(lines, startIndex, optionCount)
+    || recoverSequentialOptionsWindow(lines, startIndex, optionCount);
+}
+
+function collectSequentialOptionsStrict(lines, startIndex, optionCount) {
   const options = [];
   let index = startIndex;
 
@@ -859,11 +890,11 @@ function collectSequentialOptions(lines, startIndex, optionCount) {
       continue;
     }
 
+    const optionMatch = matchOptionStart(line, optionCount);
     if (looksLikeQuestionTail(line)) {
       return null;
     }
 
-    const optionMatch = matchOptionStart(line, optionCount);
     const optionText = sanitizeText(optionMatch ? optionMatch.text : line);
     if (!optionText) {
       index += 1;
@@ -882,6 +913,215 @@ function collectSequentialOptions(lines, startIndex, optionCount) {
     options,
     nextIndex: index,
   };
+}
+
+function collectSequentialOptionsFlexible(lines, startIndex, optionCount) {
+  const options = [];
+  let index = startIndex;
+  let currentOption = '';
+
+  while (index < lines.length) {
+    const line = lines[index];
+
+    if (!line || shouldIgnoreLine(line) || isLikelyTopicHeading(line)) {
+      index += 1;
+      continue;
+    }
+
+    const optionMatch = matchOptionStart(line, optionCount);
+    const optionText = sanitizeText(optionMatch ? optionMatch.text : line);
+    if (!optionText) {
+      index += 1;
+      continue;
+    }
+
+    const looksLikeNextQuestion = looksLikeQuestionTail(optionText) && looksLikePromptSentence(optionText);
+    if (looksLikeNextQuestion) {
+      break;
+    }
+
+    if (!currentOption) {
+      currentOption = optionText;
+      index += 1;
+      continue;
+    }
+
+    if (optionMatch) {
+      options.push(currentOption);
+      currentOption = optionText;
+      index += 1;
+      if (options.length >= optionCount) {
+        break;
+      }
+      continue;
+    }
+
+    if (shouldContinueOptionText(currentOption, optionText)) {
+      currentOption = joinFragments(currentOption, optionText);
+      index += 1;
+      continue;
+    }
+
+    options.push(currentOption);
+    currentOption = optionText;
+    index += 1;
+    if (options.length >= optionCount) {
+      break;
+    }
+  }
+
+  if (currentOption && options.length < optionCount) {
+    options.push(currentOption);
+  }
+
+  if (options.length !== optionCount) {
+    return null;
+  }
+
+  return {
+    options,
+    nextIndex: index,
+  };
+}
+
+function shouldContinueOptionText(currentOption, nextLine) {
+  const current = sanitizeText(currentOption);
+  const next = sanitizeText(nextLine);
+
+  if (!current || !next) {
+    return false;
+  }
+
+  if (/[,;:(\/\[]$/u.test(current) || new RegExp(`[${DASH_CHARS}]$`).test(current)) {
+    return true;
+  }
+
+  if (/^[a-zа-яіїєґ]/u.test(next)) {
+    return true;
+  }
+
+  return false;
+}
+
+function recoverSequentialOptionsWindow(lines, startIndex, optionCount) {
+  const windowEntries = [];
+
+  for (let index = startIndex; index < lines.length && windowEntries.length < optionCount + 6; index += 1) {
+    const line = lines[index];
+    if (!line || shouldIgnoreLine(line) || isLikelyTopicHeading(line)) {
+      continue;
+    }
+
+    windowEntries.push({
+      index,
+      line: sanitizeText(line),
+    });
+  }
+
+  for (let takeCount = optionCount; takeCount <= Math.min(windowEntries.length, optionCount + 3); takeCount += 1) {
+    const optionEntries = windowEntries.slice(0, takeCount);
+    const trailingEntries = windowEntries.slice(takeCount);
+    const options = partitionRecoveredOptions(optionEntries, optionCount);
+
+    if (!options) {
+      continue;
+    }
+
+    if (trailingEntries.length && !looksLikePotentialQuestionStart(trailingEntries[0], trailingEntries[1])) {
+      continue;
+    }
+
+    return {
+      options,
+      nextIndex: trailingEntries.length ? trailingEntries[0].index : optionEntries.at(-1).index + 1,
+    };
+  }
+
+  return null;
+}
+
+function partitionRecoveredOptions(entries, optionCount) {
+  const memo = new Map();
+
+  function solve(position, groupsLeft) {
+    const key = `${position}:${groupsLeft}`;
+    if (memo.has(key)) {
+      return memo.get(key);
+    }
+
+    if (groupsLeft === 0) {
+      return position === entries.length ? [] : null;
+    }
+
+    const remaining = entries.length - position;
+    if (remaining < groupsLeft || remaining > groupsLeft * 3) {
+      return null;
+    }
+
+    for (let groupSize = 1; groupSize <= Math.min(3, remaining); groupSize += 1) {
+      const chunk = entries.slice(position, position + groupSize).map((entry) => entry.line);
+      if (!isValidRecoveredOptionChunk(chunk)) {
+        continue;
+      }
+
+      const optionText = sanitizeText(chunk.join(' '));
+      if (!optionText || (looksLikeQuestionTail(optionText) && looksLikePromptSentence(optionText))) {
+        continue;
+      }
+
+      const tail = solve(position + groupSize, groupsLeft - 1);
+      if (tail) {
+        const resolved = [optionText, ...tail];
+        memo.set(key, resolved);
+        return resolved;
+      }
+    }
+
+    memo.set(key, null);
+    return null;
+  }
+
+  return solve(0, optionCount);
+}
+
+function isValidRecoveredOptionChunk(chunk) {
+  if (!Array.isArray(chunk) || !chunk.length) {
+    return false;
+  }
+
+  if (chunk.length === 1) {
+    return true;
+  }
+
+  for (let index = 1; index < chunk.length; index += 1) {
+    if (!shouldContinueOptionText(chunk[index - 1], chunk[index])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function looksLikePotentialQuestionStart(firstEntry, secondEntry) {
+  const first = sanitizeText(firstEntry?.line);
+  const second = sanitizeText(secondEntry?.line);
+
+  if (!first) {
+    return false;
+  }
+
+  if (looksLikeQuestionTail(first) && looksLikePromptSentence(first)) {
+    return true;
+  }
+
+  if (second) {
+    const combined = sanitizeText(`${first} ${second}`);
+    if (looksLikePromptSentence(combined)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function dedupeAdjacentLines(lines) {
@@ -1328,8 +1568,17 @@ function emptyParsedResult(parser, limit) {
     parser,
     questions: [],
     notes: buildLimitNote(0, limit),
+    reviewBlocks: [],
     droppedBlocks: 0,
     qualityScore: 0,
+  };
+}
+
+function createReviewBlock(lines, reason) {
+  const text = sanitizeText((Array.isArray(lines) ? lines : [lines]).filter(Boolean).join(' '));
+  return {
+    reason: String(reason || 'manual-review'),
+    text,
   };
 }
 

@@ -2,9 +2,12 @@ import TelegramBot from 'node-telegram-bot-api';
 import {
   createAccessCodes,
   deleteQuizById,
+  fixQuizReviewBlock,
+  getQuizById,
   getAccountingSummary,
   getDbMeta,
   listQuizzesForAdmin,
+  replaceQuizQuestion,
   setQuizBanStatusById,
 } from './db.js';
 
@@ -171,6 +174,90 @@ export function startTelegramBot() {
     await bot.sendMessage(msg.chat.id, formatSearchResults(parsed), { disable_web_page_preview: true });
   });
 
+  bot.onText(/^\/review(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseReviewArgs(match?.[1]);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const quiz = getQuizById(parsed.id);
+    if (!quiz) {
+      await bot.sendMessage(msg.chat.id, `Сайт с id ${parsed.id} не найден.`);
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, formatReviewMessage(quiz, parsed), { disable_web_page_preview: true });
+  });
+
+  bot.onText(/^\/fixblock(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseManualQuestionCommand(match?.[1], 'fixblock');
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const updatedQuiz = fixQuizReviewBlock({
+      quizId: parsed.id,
+      blockIndex: parsed.targetIndex,
+      question: parsed.question,
+    });
+
+    if (!updatedQuiz) {
+      await bot.sendMessage(msg.chat.id, `Сайт с id ${parsed.id} не найден.`);
+      return;
+    }
+
+    if (updatedQuiz.error === 'block_not_found') {
+      await bot.sendMessage(msg.chat.id, `Проблемный блок ${parsed.targetIndex} не найден.`);
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, [
+      `Блок ${parsed.targetIndex} обработан.`,
+      `Вопросов теперь: ${updatedQuiz.questions.length}`,
+      `Проблемных блоков осталось: ${(updatedQuiz.reviewBlocks || []).length}`,
+    ].join('\n'));
+  });
+
+  bot.onText(/^\/setq(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseManualQuestionCommand(match?.[1], 'setq');
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const updatedQuiz = replaceQuizQuestion({
+      quizId: parsed.id,
+      questionIndex: parsed.targetIndex,
+      question: parsed.question,
+    });
+
+    if (!updatedQuiz) {
+      await bot.sendMessage(msg.chat.id, `Сайт с id ${parsed.id} не найден.`);
+      return;
+    }
+
+    if (updatedQuiz.error === 'question_not_found') {
+      await bot.sendMessage(msg.chat.id, `Вопрос ${parsed.targetIndex} не найден.`);
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, `Вопрос ${parsed.targetIndex} обновлен.`);
+  });
+
   bot.onText(/^\/site(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
     if (!(await ensureAuthorized(bot, msg, adminUserId))) {
       return;
@@ -182,7 +269,7 @@ export function startTelegramBot() {
       return;
     }
 
-    const quiz = listQuizzesForAdmin().find((item) => item.id === numericId);
+    const quiz = getQuizById(numericId);
     if (!quiz) {
       await bot.sendMessage(msg.chat.id, `Сайт с id ${numericId} не найден.`);
       return;
@@ -485,6 +572,104 @@ function parseSearchArgs(rawValue) {
   };
 }
 
+function parseReviewArgs(rawValue) {
+  const parts = tokenizeArgs(rawValue);
+  const id = Number(parts[0]);
+  if (!Number.isInteger(id) || id < 1) {
+    return {
+      ok: false,
+      error: 'Форматы:\n/review <id>\n/review <id> q <номер>\n/review <id> block <номер>',
+    };
+  }
+
+  if (parts.length === 1) {
+    return { ok: true, id, mode: 'summary' };
+  }
+
+  if (parts.length === 3) {
+    const mode = String(parts[1] || '').toLowerCase();
+    const index = Number(parts[2]);
+    if (!Number.isInteger(index) || index < 1) {
+      return { ok: false, error: 'Номер вопроса или блока должен быть целым числом больше 0.' };
+    }
+
+    if (mode === 'q' || mode === 'question') {
+      return { ok: true, id, mode: 'question', index };
+    }
+
+    if (mode === 'block') {
+      return { ok: true, id, mode: 'block', index };
+    }
+  }
+
+  return {
+    ok: false,
+    error: 'Форматы:\n/review <id>\n/review <id> q <номер>\n/review <id> block <номер>',
+  };
+}
+
+function parseManualQuestionCommand(rawValue, commandName) {
+  const input = String(rawValue || '').trim();
+  const match = input.match(/^(\d+)\s+(\d+)\s+(\d+)\s+([\s\S]+)$/);
+  if (!match) {
+    return {
+      ok: false,
+      error: commandName === 'fixblock'
+        ? 'Формат: /fixblock <id> <block> <correct> <вопрос> || <ответ1> || <ответ2> ...'
+        : 'Формат: /setq <id> <вопрос> <correct> <новый вопрос> || <ответ1> || <ответ2> ...',
+    };
+  }
+
+  const id = Number(match[1]);
+  const targetIndex = Number(match[2]);
+  const correctIndex = Number(match[3]);
+  if (!Number.isInteger(id) || id < 1 || !Number.isInteger(targetIndex) || targetIndex < 1 || !Number.isInteger(correctIndex) || correctIndex < 1) {
+    return { ok: false, error: 'id, номер блока/вопроса и correct должны быть целыми числами больше 0.' };
+  }
+
+  const spec = parseQuestionSpec(match[4], correctIndex);
+  if (!spec.ok) {
+    return spec;
+  }
+
+  return {
+    ok: true,
+    id,
+    targetIndex,
+    question: spec.question,
+  };
+}
+
+function parseQuestionSpec(specText, correctIndex) {
+  const parts = String(specText || '')
+    .split('||')
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+
+  if (parts.length < 3) {
+    return { ok: false, error: 'Нужно передать вопрос и минимум 2 варианта ответа через ||.' };
+  }
+
+  const q = parts[0];
+  const options = parts.slice(1);
+  if (!q) {
+    return { ok: false, error: 'Текст вопроса пустой.' };
+  }
+
+  if (correctIndex > options.length) {
+    return { ok: false, error: `correct не может быть больше количества вариантов (${options.length}).` };
+  }
+
+  return {
+    ok: true,
+    question: {
+      q,
+      options,
+      correctIndex: correctIndex - 1,
+    },
+  };
+}
+
 function parseBanArgs(rawValue) {
   const parts = tokenizeArgs(rawValue);
 
@@ -710,6 +895,52 @@ function formatSearchResults(parsed) {
   ].join('\n');
 }
 
+function formatReviewMessage(quiz, parsed) {
+  const questions = Array.isArray(quiz.questions) ? quiz.questions : [];
+  const reviewBlocks = Array.isArray(quiz.reviewBlocks) ? quiz.reviewBlocks : [];
+
+  if (parsed.mode === 'question') {
+    const question = questions[parsed.index - 1];
+    if (!question) {
+      return `Вопрос ${parsed.index} не найден.`;
+    }
+
+    return [
+      `Сайт ${quiz.id}`,
+      `Вопрос ${parsed.index} из ${questions.length}`,
+      '',
+      question.q,
+      '',
+      ...question.options.map((option, index) => `${index + 1}. ${option}${question.correctIndex === index ? '  [ПРАВИЛЬНО]' : ''}`),
+    ].join('\n');
+  }
+
+  if (parsed.mode === 'block') {
+    const block = reviewBlocks[parsed.index - 1];
+    if (!block) {
+      return `Проблемный блок ${parsed.index} не найден.`;
+    }
+
+    return [
+      `Сайт ${quiz.id}`,
+      `Проблемный блок ${parsed.index} из ${reviewBlocks.length}`,
+      `Причина: ${block.reason || 'manual-review'}`,
+      '',
+      block.text || 'Пустой блок',
+    ].join('\n');
+  }
+
+  return [
+    `Сайт ${quiz.id}`,
+    `Название: ${quiz.title}`,
+    `Вопросов распарсено: ${questions.length}`,
+    `Проблемных блоков: ${reviewBlocks.length}`,
+    '',
+    reviewBlocks.length ? 'Команды:\n/review <id> block 1\n/fixblock <id> <block> <correct> <вопрос> || <ответ1> || ...' : 'Проблемных блоков нет.',
+    questions.length ? `\nДля просмотра вопроса:\n/review ${quiz.id} q 1` : '',
+  ].join('\n');
+}
+
 function formatSiteListItem(quiz) {
   const description = quiz.codeLabel ? ` | ${quiz.codeLabel}` : '';
   const price = Number(quiz.price || 0) > 0 ? ` | ${formatPrice(quiz.price)}` : '';
@@ -728,6 +959,7 @@ function formatSiteDetails(quiz) {
     `Клиент: ${quiz.clientTgUsername || 'не привязан'}`,
     `Количество вопросов: ${quiz.expectedQuestionCount || quiz.requestedCount || quiz.parsedCount || 0}`,
     `Найдено вопросов: ${quiz.parsedCount || 0}`,
+    `Проблемных блоков: ${Array.isArray(quiz.reviewBlocks) ? quiz.reviewBlocks.length : 0}`,
     `Устройств: ${quiz.deviceCount || 0}`,
     `Статус: ${quiz.bannedAt ? 'забанен' : 'активен'}`,
     `Создан: ${formatDateTime(quiz.createdAt)}`,

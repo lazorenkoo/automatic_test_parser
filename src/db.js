@@ -49,6 +49,7 @@ db.exec(`
     requested_count INTEGER NOT NULL,
     parsed_count INTEGER NOT NULL,
     questions_json TEXT NOT NULL,
+    review_blocks_json TEXT NOT NULL DEFAULT '[]',
     raw_model_json TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     banned_at INTEGER,
@@ -65,6 +66,7 @@ db.exec(`
     requested_count INTEGER NOT NULL,
     parsed_count INTEGER NOT NULL,
     questions_json TEXT NOT NULL,
+    review_blocks_json TEXT NOT NULL DEFAULT '[]',
     raw_model_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
@@ -93,6 +95,8 @@ ensureColumn('access_codes', 'client_tg_username', 'TEXT');
 ensureColumn('access_codes', 'expected_question_count', 'INTEGER');
 ensureColumn('access_codes', 'price', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('access_codes', 'is_reusable', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('quizzes', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('quiz_drafts', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quizzes', 'banned_at', 'INTEGER');
 
 const insertCodeStmt = db.prepare(`
@@ -195,10 +199,11 @@ const insertQuizStmt = db.prepare(`
     requested_count,
     parsed_count,
     questions_json,
+    review_blocks_json,
     raw_model_json,
     created_at,
     code_id
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const markCodeUsedStmt = db.prepare(`
@@ -232,6 +237,19 @@ const getQuizBySlugStmt = db.prepare(`
   WHERE q.slug = ?
 `);
 
+const getQuizByIdStmt = db.prepare(`
+  SELECT
+    q.*,
+    c.site_type AS siteType,
+    c.client_tg_username AS clientTgUsername,
+    c.expected_question_count AS expectedQuestionCount,
+    c.price AS price,
+    c.label AS codeLabel
+  FROM quizzes q
+  LEFT JOIN access_codes c ON c.id = q.code_id
+  WHERE q.id = ?
+`);
+
 const clearExpiredDraftsStmt = db.prepare(`
   DELETE FROM quiz_drafts
   WHERE created_at < ?
@@ -246,9 +264,10 @@ const insertDraftStmt = db.prepare(`
     requested_count,
     parsed_count,
     questions_json,
+    review_blocks_json,
     raw_model_json,
     created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const getDraftByTokenStmt = db.prepare(`
@@ -260,6 +279,16 @@ const getDraftByTokenStmt = db.prepare(`
 const deleteDraftByTokenStmt = db.prepare(`
   DELETE FROM quiz_drafts
   WHERE draft_token = ?
+`);
+
+const updateQuizContentByIdStmt = db.prepare(`
+  UPDATE quizzes
+  SET
+    questions_json = ?,
+    review_blocks_json = ?,
+    parsed_count = ?,
+    raw_model_json = ?
+  WHERE id = ?
 `);
 
 const upsertQuizDeviceStmt = db.prepare(`
@@ -441,6 +470,7 @@ export function createQuizDraft({
   answerIndex,
   requestedCount,
   questions,
+  reviewBlocks = [],
   rawModelJson,
 }) {
   const createdAt = nowMs();
@@ -456,6 +486,7 @@ export function createQuizDraft({
     requestedCount,
     questions.length,
     JSON.stringify(questions),
+    JSON.stringify(reviewBlocks),
     JSON.stringify(rawModelJson),
     createdAt,
   );
@@ -511,6 +542,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken 
       draftRow.requested_count,
       parsedCount,
       draftRow.questions_json,
+      draftRow.review_blocks_json,
       draftRow.raw_model_json,
       createdAt,
       codeRow.id,
@@ -544,6 +576,32 @@ export function getQuizBySlug(slug) {
   }
 
   return mapQuizRow(row);
+}
+
+export function getQuizById(quizId) {
+  const numericQuizId = Number(quizId);
+  if (!Number.isInteger(numericQuizId) || numericQuizId < 1) {
+    return null;
+  }
+
+  const row = getQuizByIdStmt.get(numericQuizId);
+  if (!row) {
+    return null;
+  }
+
+  const quiz = mapQuizRow(row);
+  const devices = getQuizDevicesStmt.all(numericQuizId).map((device) => ({
+    ...device,
+    firstSeenAt: Number(device.firstSeenAt || 0),
+    lastSeenAt: Number(device.lastSeenAt || 0),
+  }));
+
+  return {
+    ...quiz,
+    deviceCount: devices.length,
+    lastSeenAt: devices[0]?.lastSeenAt || null,
+    devices,
+  };
 }
 
 export function recordQuizVisit({ quizId, deviceId, ip, userAgent }) {
@@ -633,6 +691,41 @@ export function deleteQuizById(quizId) {
   return quiz;
 }
 
+export function fixQuizReviewBlock({ quizId, blockIndex, question }) {
+  const quiz = getQuizById(quizId);
+  if (!quiz) {
+    return null;
+  }
+
+  const reviewBlocks = Array.isArray(quiz.reviewBlocks) ? [...quiz.reviewBlocks] : [];
+  if (blockIndex < 1 || blockIndex > reviewBlocks.length) {
+    return { error: 'block_not_found' };
+  }
+
+  const questions = Array.isArray(quiz.questions) ? [...quiz.questions] : [];
+  questions.push(question);
+  reviewBlocks.splice(blockIndex - 1, 1);
+
+  persistQuizContent(quiz, questions, reviewBlocks);
+  return getQuizById(quizId);
+}
+
+export function replaceQuizQuestion({ quizId, questionIndex, question }) {
+  const quiz = getQuizById(quizId);
+  if (!quiz) {
+    return null;
+  }
+
+  const questions = Array.isArray(quiz.questions) ? [...quiz.questions] : [];
+  if (questionIndex < 1 || questionIndex > questions.length) {
+    return { error: 'question_not_found' };
+  }
+
+  questions[questionIndex - 1] = question;
+  persistQuizContent(quiz, questions, quiz.reviewBlocks || []);
+  return getQuizById(quizId);
+}
+
 function mapQuizRow(row) {
   return {
     id: row.id,
@@ -643,6 +736,7 @@ function mapQuizRow(row) {
     requestedCount: row.requested_count,
     parsedCount: row.parsed_count,
     questions: JSON.parse(row.questions_json),
+    reviewBlocks: JSON.parse(row.review_blocks_json || '[]'),
     rawModelJson: JSON.parse(row.raw_model_json),
     createdAt: Number(row.created_at || 0),
     bannedAt: row.banned_at ? Number(row.banned_at) : null,
@@ -653,6 +747,23 @@ function mapQuizRow(row) {
     price: Number(row.price || 0),
     codeLabel: row.codeLabel || null,
   };
+}
+
+function persistQuizContent(quiz, questions, reviewBlocks) {
+  const nextRawModelJson = {
+    ...(quiz.rawModelJson || {}),
+    acceptedQuestions: questions.length,
+    reviewBlockCount: reviewBlocks.length,
+    manuallyReviewedAt: nowMs(),
+  };
+
+  updateQuizContentByIdStmt.run(
+    JSON.stringify(questions),
+    JSON.stringify(reviewBlocks),
+    questions.length,
+    JSON.stringify(nextRawModelJson),
+    quiz.id,
+  );
 }
 
 function syncUnlimitedEvaAccessCode() {
