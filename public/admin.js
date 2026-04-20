@@ -291,27 +291,14 @@ async function finalizeCurrentDraft() {
 function renderFinalResult(payload) {
   resultBox.classList.remove('hidden');
 
-  const warningLimit = Number(payload.warningDeviceLimit || 2);
   const localizedQuizUrl = addLanguageToUrl(payload.quizUrl);
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
     <p>${formatHtml(t('parsedCount'), { count: String(payload.parsedCount || 0) })}</p>
-    <div class="warning-box">
-      <p class="warning-text">${escapeHtml(t('warningText', { limit: String(warningLimit) }))}</p>
-      <button id="revealQuizLinkBtn" class="primary-btn warning-btn" type="button">${escapeHtml(t('warningButton'))}</button>
-    </div>
-    <div id="quizLinkBox" class="hidden">
+    <div id="quizLinkBox">
       <p><a href="${escapeAttr(localizedQuizUrl)}" target="_blank" rel="noreferrer">${escapeHtml(localizedQuizUrl)}</a></p>
     </div>
   `;
-
-  const revealButton = document.getElementById('revealQuizLinkBtn');
-  const quizLinkBox = document.getElementById('quizLinkBox');
-
-  revealButton?.addEventListener('click', () => {
-    quizLinkBox?.classList.remove('hidden');
-    revealButton.remove();
-  });
 }
 
 function syncAnswerIndexOptions() {
