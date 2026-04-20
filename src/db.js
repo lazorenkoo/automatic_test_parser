@@ -14,6 +14,7 @@ const dataDir = path.resolve(process.env.DATA_DIR || './data');
 const dbPath = path.join(dataDir, 'pdmu.sqlite');
 const reservationWindowMs = Number(process.env.CODE_RESERVATION_MINUTES || 15) * 60 * 1000;
 const draftTtlMs = 24 * 60 * 60 * 1000;
+const quizPublicTtlMs = resolveQuizPublicTtlMs();
 
 fs.mkdirSync(dataDir, { recursive: true });
 
@@ -53,6 +54,7 @@ db.exec(`
     review_blocks_json TEXT NOT NULL DEFAULT '[]',
     raw_model_json TEXT NOT NULL,
     created_at INTEGER NOT NULL,
+    expires_at INTEGER,
     banned_at INTEGER,
     code_id INTEGER NOT NULL,
     FOREIGN KEY(code_id) REFERENCES access_codes(id)
@@ -99,6 +101,7 @@ ensureColumn('access_codes', 'is_reusable', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('access_codes', 'revoked_at', 'INTEGER');
 ensureColumn('quizzes', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quiz_drafts', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('quizzes', 'expires_at', 'INTEGER');
 ensureColumn('quizzes', 'banned_at', 'INTEGER');
 
 const insertCodeStmt = db.prepare(`
@@ -233,8 +236,9 @@ const insertQuizStmt = db.prepare(`
     review_blocks_json,
     raw_model_json,
     created_at,
+    expires_at,
     code_id
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const markCodeUsedStmt = db.prepare(`
@@ -346,6 +350,7 @@ const listQuizzesForAdminStmt = db.prepare(`
     q.parsed_count AS parsedCount,
     q.requested_count AS requestedCount,
     q.created_at AS createdAt,
+    q.expires_at AS expiresAt,
     q.banned_at AS bannedAt,
     c.label AS codeLabel,
     c.site_type AS siteType,
@@ -409,6 +414,7 @@ export function getDbMeta() {
   return {
     dataDir,
     dbPath,
+    quizPublicTtlMs,
   };
 }
 
@@ -609,6 +615,7 @@ export function createQuizDraft({
 
 export function finalizeQuizFromDraftReservation({ reservationToken, draftToken }) {
   const createdAt = nowMs();
+  const expiresAt = quizPublicTtlMs > 0 ? createdAt + quizPublicTtlMs : null;
   const staleBefore = createdAt - draftTtlMs;
 
   const tx = db.transaction(() => {
@@ -653,6 +660,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken 
       draftRow.review_blocks_json,
       draftRow.raw_model_json,
       createdAt,
+      expiresAt,
       codeRow.id,
     );
 
@@ -671,6 +679,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken 
       expectedQuestionCount,
       price: Number(codeRow.price || 0),
       codeLabel: codeRow.label || null,
+      expiresAt,
     };
   });
 
@@ -732,6 +741,7 @@ export function listQuizzesForAdmin() {
   return listQuizzesForAdminStmt.all().map((row) => ({
     ...row,
     createdAt: Number(row.createdAt || 0),
+    expiresAt: row.expiresAt ? Number(row.expiresAt) : null,
     bannedAt: row.bannedAt ? Number(row.bannedAt) : null,
     deviceCount: Number(row.deviceCount || 0),
     expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
@@ -847,6 +857,7 @@ function mapQuizRow(row) {
     reviewBlocks: JSON.parse(row.review_blocks_json || '[]'),
     rawModelJson: JSON.parse(row.raw_model_json),
     createdAt: Number(row.created_at || 0),
+    expiresAt: row.expires_at ? Number(row.expires_at) : null,
     bannedAt: row.banned_at ? Number(row.banned_at) : null,
     codeId: row.code_id,
     siteType: row.siteType || null,
@@ -938,4 +949,14 @@ function normalizePrice(value) {
   }
 
   return Math.round(numericValue * 100) / 100;
+}
+
+function resolveQuizPublicTtlMs() {
+  const rawValue = String(process.env.QUIZ_PUBLIC_TTL_DAYS || '7').trim();
+  const numericDays = Number(rawValue);
+  if (!Number.isFinite(numericDays) || numericDays <= 0) {
+    return 0;
+  }
+
+  return Math.round(numericDays * 24 * 60 * 60 * 1000);
 }

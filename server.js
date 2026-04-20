@@ -56,6 +56,7 @@ app.get('/health', (_req, res) => {
     ok: true,
     dbPath: getDbMeta().dbPath,
     parser: 'local-v2',
+    quizPublicTtlDays: formatQuizTtlDays(getDbMeta().quizPublicTtlMs),
     supportedFileTypes: SUPPORTED_UPLOAD_EXTENSIONS,
     supportedAnswerFileTypes: SUPPORTED_ANSWER_EXTENSIONS,
   });
@@ -68,6 +69,7 @@ app.post('/api/parse', upload.fields([
 ]), async (req, res, next) => {
   const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
   const answerFile = req.files?.answerFile?.[0] || null;
+  const clientTitle = sanitizeText(req.body.clientTitle || '');
   const answerMode = String(req.body.answerMode || 'single');
   const answerIndex = Number(req.body.answerIndex);
   const optionCount = Number(req.body.optionCount);
@@ -78,6 +80,10 @@ app.post('/api/parse', upload.fields([
 
   if (!sourceFile) {
     return res.status(400).json({ error: 'Нужно загрузить файл с тестами.' });
+  }
+
+  if (!clientTitle) {
+    return res.status(400).json({ error: 'Нужно указать название теста.' });
   }
 
   if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
@@ -138,8 +144,8 @@ app.post('/api/parse', upload.fields([
       : questionLimit;
 
     const draft = createQuizDraft({
-      title: sanitizeText(parsedQuiz.title) || 'Medical quiz',
-      sourceFilename: originalFilename,
+      title: clientTitle,
+      sourceFilename: buildStoredFilename(clientTitle),
       answerIndex: answerMode === 'single' ? answerIndex : 0,
       requestedCount,
       questions: parsedQuiz.questions,
@@ -149,7 +155,7 @@ app.post('/api/parse', upload.fields([
 
     return res.status(201).json({
       draftToken: draft.draftToken,
-      title: sanitizeText(parsedQuiz.title) || 'Medical quiz',
+      title: clientTitle,
       parsedCount: parsedQuiz.questions.length,
       requestedCount,
       questionMode,
@@ -194,6 +200,7 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
       warningDeviceLimit: getDeviceWarningLimit(savedQuiz.siteType),
       clientTgUsername: savedQuiz.clientTgUsername,
       expectedQuestionCount: savedQuiz.expectedQuestionCount,
+      expiresAt: savedQuiz.expiresAt,
     });
   } catch (error) {
     releaseReservation(reservation.reservationToken);
@@ -211,6 +218,10 @@ app.get('/api/quizzes/:slug', (req, res) => {
     return res.status(410).json({ error: 'Тест заблокирован администратором.' });
   }
 
+  if (isQuizExpired(quiz)) {
+    return res.status(410).json({ error: 'Срок действия публичной ссылки истек.' });
+  }
+
   return res.json({
     slug: quiz.slug,
     title: quiz.title,
@@ -219,6 +230,7 @@ app.get('/api/quizzes/:slug', (req, res) => {
     requestedCount: quiz.requestedCount,
     parsedCount: quiz.parsedCount,
     createdAt: quiz.createdAt,
+    expiresAt: quiz.expiresAt,
     questions: quiz.questions,
     siteType: quiz.siteType,
     siteTypeLabel: formatSiteType(quiz.siteType),
@@ -234,6 +246,10 @@ app.get('/quiz/:slug', (req, res) => {
 
   if (quiz.bannedAt) {
     return res.status(410).type('html').send(renderUnavailableQuizHtml(quiz.title));
+  }
+
+  if (isQuizExpired(quiz)) {
+    return res.status(410).type('html').send(renderUnavailableQuizHtml(quiz.title, 'expired'));
   }
 
   let deviceId = getCookieValue(req, 'pdmu_device_id');
@@ -260,6 +276,10 @@ app.get('/api/download/:slug', (req, res) => {
 
   if (quiz.bannedAt) {
     return res.status(410).json({ error: 'Тест заблокирован администратором.' });
+  }
+
+  if (isQuizExpired(quiz)) {
+    return res.status(410).json({ error: 'Срок действия публичной ссылки истек.' });
   }
 
   const bundle = buildZipBundle(quiz);
@@ -383,8 +403,11 @@ function getClientIp(req) {
   return forwardedFor || req.ip || '';
 }
 
-function renderUnavailableQuizHtml(title) {
+function renderUnavailableQuizHtml(title, reason = 'banned') {
   const safeTitle = htmlEscape(sanitizeText(title) || 'Тест');
+  const description = reason === 'expired'
+    ? 'Срок действия публичной ссылки на этот тест истек.'
+    : 'Этот тест был отключен администратором.';
   return `<!doctype html>
 <html lang="ru">
 <head>
@@ -401,15 +424,34 @@ function renderUnavailableQuizHtml(title) {
 <body>
   <section class="card">
     <h1>Тест недоступен</h1>
-    <p>Этот тест был отключен администратором.</p>
+    <p>${description}</p>
   </section>
 </body>
 </html>`;
 }
 
+function isQuizExpired(quiz) {
+  const expiresAt = Number(quiz?.expiresAt || 0);
+  return expiresAt > 0 && Date.now() >= expiresAt;
+}
+
+function formatQuizTtlDays(ttlMs) {
+  const numericTtl = Number(ttlMs || 0);
+  if (!Number.isFinite(numericTtl) || numericTtl <= 0) {
+    return 0;
+  }
+
+  return Math.round((numericTtl / (24 * 60 * 60 * 1000)) * 100) / 100;
+}
+
 function normalizePublicUsername(value) {
   const normalized = String(value || '').trim().replace(/^@+/, '');
   return normalized ? `@${normalized}` : '';
+}
+
+function buildStoredFilename(title) {
+  const safeTitle = sanitizeText(title || '') || 'Medical quiz';
+  return `${safeTitle}.json`;
 }
 
 function formatSiteType(siteType) {

@@ -2,6 +2,7 @@ const quizForm = document.getElementById('quizForm');
 const submitBtn = document.getElementById('submitBtn');
 const statusBox = document.getElementById('statusBox');
 const resultBox = document.getElementById('resultBox');
+const clientTitleInput = document.getElementById('clientTitle');
 const sourceFileInput = document.getElementById('sourceFile');
 const answerFileInput = document.getElementById('answerFile');
 const answerIndexSelect = document.getElementById('answerIndex');
@@ -22,6 +23,7 @@ const translations = {
   ru: {
     pageTitle: 'PDMU Quiz Builder',
     'form.title': 'Создать тест',
+    'form.client_title': 'Название теста',
     'form.source_file': 'Файл с тестами',
     'form.option_count': 'Вариантов ответа в вопросе',
     'form.answer_mode': 'Режим правильных ответов',
@@ -45,6 +47,7 @@ const translations = {
     parseSuccess: 'Тест готов.',
     finalizeLoading: 'Проверяю код и готовлю ссылку.',
     finalizeSuccess: 'Ссылка готова.',
+    clientTitleRequiredError: 'Сначала введите название теста.',
     chooseFileError: 'Сначала выберите файл с тестами.',
     answerFileRequiredError: 'Нужно загрузить отдельный файл с ответами.',
     draftMissing: 'Черновик не найден. Передайте файл заново.',
@@ -61,6 +64,7 @@ const translations = {
   uk: {
     pageTitle: 'PDMU Quiz Builder',
     'form.title': 'Створити тест',
+    'form.client_title': 'Назва тесту',
     'form.source_file': 'Файл із тестами',
     'form.option_count': 'Варіантів відповіді в питанні',
     'form.answer_mode': 'Режим правильних відповідей',
@@ -84,6 +88,7 @@ const translations = {
     parseSuccess: 'Тест готовий.',
     finalizeLoading: 'Перевіряю код і готую посилання.',
     finalizeSuccess: 'Посилання готове.',
+    clientTitleRequiredError: 'Спочатку введіть назву тесту.',
     chooseFileError: 'Спочатку виберіть файл із тестами.',
     answerFileRequiredError: 'Потрібно завантажити окремий файл із відповідями.',
     draftMissing: 'Чернетку не знайдено. Передайте файл ще раз.',
@@ -126,14 +131,20 @@ quizForm.addEventListener('submit', async (event) => {
   currentDraftPayload = null;
 
   try {
+    const clientTitle = String(clientTitleInput?.value || '').trim();
     const sourceFile = sourceFileInput.files?.[0];
     const answerMode = getAnswerMode();
+
+    if (!clientTitle) {
+      throw new Error(t('clientTitleRequiredError'));
+    }
 
     if (!sourceFile) {
       throw new Error(t('chooseFileError'));
     }
 
     const formData = new FormData();
+    formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', String(optionCountInput.value || 5));
     formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');

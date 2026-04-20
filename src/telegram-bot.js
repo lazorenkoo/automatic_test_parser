@@ -1009,7 +1009,7 @@ function formatReviewMessage(quiz, parsed) {
 function formatSiteListItem(quiz) {
   const description = quiz.codeLabel ? ` | ${quiz.codeLabel}` : '';
   const price = Number(quiz.price || 0) > 0 ? ` | ${formatPrice(quiz.price)}` : '';
-  return `${quiz.id}. ${formatSiteType(quiz.siteType)}${description}${price} | устройств ${quiz.deviceCount || 0} | ${quiz.clientTgUsername || 'не привязан'}${quiz.bannedAt ? ' | БАН' : ''}`;
+  return `${quiz.id}. ${formatSiteType(quiz.siteType)}${description}${price} | устройств ${quiz.deviceCount || 0} | ${quiz.clientTgUsername || 'не привязан'}${formatQuizPublicStatus(quiz)}`;
 }
 
 function formatSiteDetails(quiz) {
@@ -1026,8 +1026,9 @@ function formatSiteDetails(quiz) {
     `Найдено вопросов: ${quiz.parsedCount || 0}`,
     `Проблемных блоков: ${Array.isArray(quiz.reviewBlocks) ? quiz.reviewBlocks.length : 0}`,
     `Устройств: ${quiz.deviceCount || 0}`,
-    `Статус: ${quiz.bannedAt ? 'забанен' : 'активен'}`,
+    `Статус: ${describeQuizPublicStatus(quiz)}`,
     `Создан: ${formatDateTime(quiz.createdAt)}`,
+    `Ссылка активна до: ${formatDateTime(quiz.expiresAt)}`,
     `Последний вход: ${formatDateTime(quiz.lastSeenAt)}`,
     '',
     devices.length
@@ -1088,6 +1089,35 @@ function matchesQuizFilters(quiz, filters) {
   }
 
   return true;
+}
+
+function formatQuizPublicStatus(quiz) {
+  if (quiz.bannedAt) {
+    return ' | БАН';
+  }
+
+  if (isExpiredQuiz(quiz)) {
+    return ' | ССЫЛКА ИСТЕКЛА';
+  }
+
+  return '';
+}
+
+function describeQuizPublicStatus(quiz) {
+  if (quiz.bannedAt) {
+    return 'забанен';
+  }
+
+  if (isExpiredQuiz(quiz)) {
+    return 'ссылка истекла';
+  }
+
+  return 'активен';
+}
+
+function isExpiredQuiz(quiz) {
+  const expiresAt = Number(quiz?.expiresAt || 0);
+  return expiresAt > 0 && Date.now() >= expiresAt;
 }
 
 function summarizeFilters(filters) {
