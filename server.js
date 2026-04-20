@@ -169,7 +169,7 @@ app.post('/api/parse', upload.fields([
 });
 
 app.post('/api/quizzes/finalize', async (req, res, next) => {
-  const accessCode = String(req.body.accessCode || '');
+  const accessCode = resolveFinalizeAccessCode(req.body.accessCode);
   const draftToken = String(req.body.draftToken || '');
 
   if (!draftToken) {
@@ -452,6 +452,19 @@ function normalizePublicUsername(value) {
 function buildStoredFilename(title) {
   const safeTitle = sanitizeText(title || '') || 'Medical quiz';
   return `${safeTitle}.json`;
+}
+
+function resolveFinalizeAccessCode(rawAccessCode) {
+  const directCode = String(rawAccessCode || '').trim();
+  if (directCode) {
+    return directCode;
+  }
+
+  return String(
+    process.env.DEFAULT_PUBLIC_ACCESS_CODE
+    || process.env.UNLIMITED_EVA_ACCESS_CODE
+    || '',
+  ).trim();
 }
 
 function formatSiteType(siteType) {

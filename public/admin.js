@@ -178,6 +178,7 @@ quizForm.addEventListener('submit', async (event) => {
     currentDraftPayload = payload;
     setStatus('success', t('parseSuccess'));
     renderDraftResult(payload);
+    await finalizeCurrentDraft();
   } catch (error) {
     setStatus('error', error.message || t('parseDefaultError'));
   } finally {
@@ -248,34 +249,18 @@ function renderDraftResult(payload) {
     ${adminContactHtml}
     ${notesHtml}
     <div class="activation-box">
-      <p class="activation-text">${escapeHtml(t('accessText'))}</p>
-      <form id="accessForm" class="access-form">
-        <label class="field">
-          <span>${escapeHtml(t('accessLabel'))}</span>
-          <input id="accessCode" name="accessCode" type="password" placeholder="${escapeAttr(t('accessPlaceholder'))}" required />
-        </label>
-        <button id="activateBtn" class="secondary-btn" type="submit">${escapeHtml(t('accessButton'))}</button>
-      </form>
+      <p class="activation-text">${escapeHtml(t('finalizeLoading'))}</p>
     </div>
   `;
-
-  const accessForm = document.getElementById('accessForm');
-  accessForm?.addEventListener('submit', handleFinalizeSubmit);
 }
 
-async function handleFinalizeSubmit(event) {
-  event.preventDefault();
-
+async function finalizeCurrentDraft() {
   if (!currentDraftToken) {
     setStatus('error', t('draftMissing'));
     return;
   }
 
-  const accessCodeInput = document.getElementById('accessCode');
-  const activateBtn = document.getElementById('activateBtn');
-
   setStatus('loading', t('finalizeLoading'));
-  activateBtn.disabled = true;
 
   try {
     const response = await fetch('/api/quizzes/finalize', {
@@ -285,7 +270,7 @@ async function handleFinalizeSubmit(event) {
       },
       body: JSON.stringify({
         draftToken: currentDraftToken,
-        accessCode: accessCodeInput?.value || '',
+        accessCode: '',
       }),
     });
 
@@ -300,7 +285,6 @@ async function handleFinalizeSubmit(event) {
     renderFinalResult(payload);
   } catch (error) {
     setStatus('error', error.message || t('finalizeDefaultError'));
-    activateBtn.disabled = false;
   }
 }
 
