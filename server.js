@@ -79,47 +79,47 @@ app.post('/api/parse', upload.fields([
   const sourceExtension = path.extname(originalFilename).toLowerCase();
 
   if (!sourceFile) {
-    return res.status(400).json({ error: 'Нужно загрузить файл с тестами.' });
+    return res.status(400).json({ error: 'Потрібно завантажити файл із тестами.' });
   }
 
   if (!clientTitle) {
-    return res.status(400).json({ error: 'Нужно указать название теста.' });
+    return res.status(400).json({ error: 'Потрібно вказати назву тесту.' });
   }
 
   if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
     return res.status(400).json({
-      error: `Поддерживаются только файлы ${SUPPORTED_UPLOAD_EXTENSIONS.join(', ')}.`,
+      error: `Підтримуються лише файли ${SUPPORTED_UPLOAD_EXTENSIONS.join(', ')}.`,
     });
   }
 
   if (!Number.isInteger(optionCount) || optionCount < 2 || optionCount > 10) {
-    return res.status(400).json({ error: 'Количество вариантов ответа должно быть от 2 до 10.' });
+    return res.status(400).json({ error: 'Кількість варіантів відповіді має бути від 2 до 10.' });
   }
 
   if (!['single', 'file'].includes(answerMode)) {
-    return res.status(400).json({ error: 'Неверный режим ответов.' });
+    return res.status(400).json({ error: 'Невірний режим відповідей.' });
   }
 
   if (answerMode === 'single' && (!Number.isInteger(answerIndex) || answerIndex < 1 || answerIndex > optionCount)) {
-    return res.status(400).json({ error: `Правильный вариант должен быть от 1 до ${optionCount}.` });
+    return res.status(400).json({ error: `Правильний варіант має бути від 1 до ${optionCount}.` });
   }
 
   if (answerMode === 'file') {
     if (!answerFile) {
-      return res.status(400).json({ error: 'Нужно загрузить отдельный файл с ответами.' });
+      return res.status(400).json({ error: 'Потрібно завантажити окремий файл із відповідями.' });
     }
 
     const answerFilename = normalizeUploadedFilename(answerFile.originalname || '');
     const answerExtension = path.extname(answerFilename).toLowerCase();
     if (!SUPPORTED_ANSWER_EXTENSIONS.includes(answerExtension)) {
       return res.status(400).json({
-        error: `Поддерживаются только файлы ответов ${SUPPORTED_ANSWER_EXTENSIONS.join(', ')}.`,
+        error: `Підтримуються лише файли відповідей ${SUPPORTED_ANSWER_EXTENSIONS.join(', ')}.`,
       });
     }
   }
 
   if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
-    return res.status(400).json({ error: 'Количество вопросов должно быть больше 0.' });
+    return res.status(400).json({ error: 'Кількість питань має бути більшою за 0.' });
   }
 
   try {
@@ -173,12 +173,12 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
   const draftToken = String(req.body.draftToken || '');
 
   if (!draftToken) {
-    return res.status(400).json({ error: 'Нет черновика. Сначала передайте файл заново.' });
+    return res.status(400).json({ error: 'Немає чернетки. Спочатку передайте файл ще раз.' });
   }
 
   const reservation = reserveAccessCode(accessCode);
   if (!reservation) {
-    return res.status(403).json({ error: 'Код недействителен, уже использован или сейчас обрабатывается.' });
+    return res.status(403).json({ error: 'Код недійсний, уже використаний або зараз обробляється.' });
   }
 
   try {
@@ -211,15 +211,15 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
 app.get('/api/quizzes/:slug', (req, res) => {
   const quiz = getQuizBySlug(req.params.slug);
   if (!quiz) {
-    return res.status(404).json({ error: 'Тест не найден.' });
+    return res.status(404).json({ error: 'Тест не знайдено.' });
   }
 
   if (quiz.bannedAt) {
-    return res.status(410).json({ error: 'Тест заблокирован администратором.' });
+    return res.status(410).json({ error: 'Тест заблокований адміністратором.' });
   }
 
   if (isQuizExpired(quiz)) {
-    return res.status(410).json({ error: 'Срок действия публичной ссылки истек.' });
+    return res.status(410).json({ error: 'Строк дії публічного посилання на цей тест завершився.' });
   }
 
   return res.json({
@@ -241,7 +241,7 @@ app.get('/api/quizzes/:slug', (req, res) => {
 app.get('/quiz/:slug', (req, res) => {
   const quiz = getQuizBySlug(req.params.slug);
   if (!quiz) {
-    return res.status(404).type('text/plain').send('Quiz not found');
+    return res.status(404).type('text/plain').send('Тест не знайдено');
   }
 
   if (quiz.bannedAt) {
@@ -271,15 +271,15 @@ app.get('/quiz/:slug', (req, res) => {
 app.get('/api/download/:slug', (req, res) => {
   const quiz = getQuizBySlug(req.params.slug);
   if (!quiz) {
-    return res.status(404).json({ error: 'Тест не найден.' });
+    return res.status(404).json({ error: 'Тест не знайдено.' });
   }
 
   if (quiz.bannedAt) {
-    return res.status(410).json({ error: 'Тест заблокирован администратором.' });
+    return res.status(410).json({ error: 'Тест заблокований адміністратором.' });
   }
 
   if (isQuizExpired(quiz)) {
-    return res.status(410).json({ error: 'Срок действия публичной ссылки истек.' });
+    return res.status(410).json({ error: 'Строк дії публічного посилання на цей тест завершився.' });
   }
 
   const bundle = buildZipBundle(quiz);
@@ -317,7 +317,7 @@ app.post('/api/admin/quizzes/:slug/ban', requireAdminSecret, (req, res) => {
   const quiz = setQuizBanStatus(req.params.slug, banned);
 
   if (!quiz) {
-    return res.status(404).json({ error: 'Тест не найден.' });
+    return res.status(404).json({ error: 'Тест не знайдено.' });
   }
 
   return res.json({
@@ -329,7 +329,7 @@ app.post('/api/admin/quizzes/:slug/ban', requireAdminSecret, (req, res) => {
 app.delete('/api/admin/quizzes/:id', requireAdminSecret, (req, res) => {
   const quiz = deleteQuizById(req.params.id);
   if (!quiz) {
-    return res.status(404).json({ error: 'Тест не найден.' });
+    return res.status(404).json({ error: 'Тест не знайдено.' });
   }
 
   return res.json({
@@ -342,12 +342,12 @@ app.delete('/api/admin/quizzes/:id', requireAdminSecret, (req, res) => {
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({
-      error: `Файл слишком большой. Максимум ${Number(process.env.MAX_UPLOAD_MB || 20)} MB.`,
+      error: `Файл занадто великий. Максимум ${Number(process.env.MAX_UPLOAD_MB || 20)} MB.`,
     });
   }
 
   const statusCode = Number(error?.statusCode || 500);
-  const message = error?.message || 'Внутренняя ошибка сервера.';
+  const message = error?.message || 'Внутрішня помилка сервера.';
   return res.status(statusCode).json({ error: message });
 });
 
@@ -362,7 +362,7 @@ function requireAdminSecret(req, res, next) {
   const expectedSecret = String(process.env.ADMIN_SECRET || '');
 
   if (!expectedSecret || headerSecret !== expectedSecret) {
-    return res.status(403).json({ error: 'Неверный admin secret.' });
+    return res.status(403).json({ error: 'Невірний admin secret.' });
   }
 
   return next();
@@ -406,10 +406,10 @@ function getClientIp(req) {
 function renderUnavailableQuizHtml(title, reason = 'banned') {
   const safeTitle = htmlEscape(sanitizeText(title) || 'Тест');
   const description = reason === 'expired'
-    ? 'Срок действия публичной ссылки на этот тест истек.'
-    : 'Этот тест был отключен администратором.';
+    ? 'Строк дії публічного посилання на цей тест завершився.'
+    : 'Цей тест був вимкнений адміністратором.';
   return `<!doctype html>
-<html lang="ru">
+<html lang="uk">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -423,7 +423,7 @@ function renderUnavailableQuizHtml(title, reason = 'banned') {
 </head>
 <body>
   <section class="card">
-    <h1>Тест недоступен</h1>
+    <h1>Тест недоступний</h1>
     <p>${description}</p>
   </section>
 </body>
@@ -450,7 +450,7 @@ function normalizePublicUsername(value) {
 }
 
 function buildStoredFilename(title) {
-  const safeTitle = sanitizeText(title || '') || 'Medical quiz';
+  const safeTitle = sanitizeText(title || '') || 'Тест';
   return `${safeTitle}.json`;
 }
 
@@ -468,7 +468,7 @@ function resolveFinalizeAccessCode(rawAccessCode) {
 }
 
 function formatSiteType(siteType) {
-  return String(siteType || '') === '2' ? 'Групповой' : 'Одиночный';
+  return String(siteType || '') === '2' ? 'Груповий' : 'Одиночний';
 }
 
 function getDeviceWarningLimit(siteType) {

@@ -1,39 +1,32 @@
 <!doctype html>
-<html lang="ru">
+<html lang="uk">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PDMU Quiz Builder</title>
+  <title>Створити тест</title>
   <link rel="stylesheet" href="/admin.css" />
 </head>
 <body>
   <main class="page">
-    <div class="page-topbar">
-      <div class="language-switcher" aria-label="Language switcher">
-        <button id="langRuBtn" class="lang-btn active" type="button">Рус</button>
-        <button id="langUkBtn" class="lang-btn" type="button">Укр</button>
-      </div>
-    </div>
-
     <section class="grid">
       <form id="quizForm" class="card form-card">
         <div class="card-head">
-          <h2 data-i18n="form.title">Создать тест</h2>
+          <h2>Створити тест</h2>
         </div>
 
         <label class="field">
-          <span data-i18n="form.client_title">Название теста</span>
+          <span>Назва тесту</span>
           <input
             id="clientTitle"
             name="clientTitle"
             type="text"
-            placeholder="Например: Терапия: Кардиология | НБ"
+            placeholder="Наприклад: Терапія: Кардіологія | НБ"
             required
           />
         </label>
 
         <label class="field">
-          <span data-i18n="form.source_file">Файл с тестами</span>
+          <span>Файл із тестами</span>
           <input
             id="sourceFile"
             name="sourceFile"
@@ -45,32 +38,32 @@
 
         <div class="split">
           <label class="field">
-            <span data-i18n="form.option_count">Вариантов ответа в вопросе</span>
+            <span>Варіантів відповіді в питанні</span>
             <input id="optionCount" name="optionCount" type="number" min="2" max="10" value="5" required />
           </label>
 
           <div class="field">
-            <span data-i18n="form.answer_mode">Режим правильных ответов</span>
+            <span>Режим правильних відповідей</span>
             <div class="choice-stack">
               <label class="choice-row">
                 <input id="answerModeSingle" name="answerMode" type="radio" value="single" checked />
-                <span data-i18n="form.answer_mode_single">Один и тот же вариант для всех</span>
+                <span>Один і той самий варіант для всіх</span>
               </label>
               <label class="choice-row">
                 <input id="answerModeFile" name="answerMode" type="radio" value="file" />
-                <span data-i18n="form.answer_mode_file">Отдельный файл с ответами</span>
+                <span>Окремий файл із відповідями</span>
               </label>
             </div>
           </div>
         </div>
 
         <div id="singleAnswerField" class="field">
-          <span data-i18n="form.answer_index">Правильный вариант</span>
+          <span>Правильний варіант</span>
           <select id="answerIndex" name="answerIndex" required></select>
         </div>
 
         <label id="answerFileField" class="field hidden">
-          <span data-i18n="form.answer_file">Файл с ответами</span>
+          <span>Файл із відповідями</span>
           <input
             id="answerFile"
             name="answerFile"
@@ -80,28 +73,28 @@
         </label>
 
         <div class="field">
-          <span data-i18n="form.question_count">Количество вопросов</span>
+          <span>Кількість питань</span>
 
           <label class="choice-row">
             <input id="useAllQuestions" name="useAllQuestions" type="checkbox" checked />
-            <span data-i18n="form.use_all_questions">Все вопросы</span>
+            <span>Усі питання</span>
           </label>
 
           <label id="questionLimitField" class="field nested-field hidden">
-            <span data-i18n="form.question_limit">Сколько вопросов распарсить</span>
+            <span>Скільки питань узяти</span>
             <input id="questionLimit" name="questionLimit" type="number" min="1" value="20" />
           </label>
         </div>
 
-        <button id="submitBtn" class="primary-btn" type="submit" data-i18n="form.submit">Передать файл</button>
+        <button id="submitBtn" class="primary-btn" type="submit">Передати файл</button>
       </form>
 
       <section class="card result-card">
         <div class="card-head">
-          <h2 data-i18n="result.title">Результат</h2>
+          <h2>Результат</h2>
         </div>
 
-        <div id="statusBox" class="status idle" data-i18n="status.idle">Ожидаю загрузку файла.</div>
+        <div id="statusBox" class="status idle">Очікую на завантаження файла.</div>
         <div id="resultBox" class="result-box hidden"></div>
       </section>
     </section>

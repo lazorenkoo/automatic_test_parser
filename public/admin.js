@@ -14,101 +14,10 @@ const answerModeSingleInput = document.getElementById('answerModeSingle');
 const answerModeFileInput = document.getElementById('answerModeFile');
 const singleAnswerField = document.getElementById('singleAnswerField');
 const answerFileField = document.getElementById('answerFileField');
-const langRuBtn = document.getElementById('langRuBtn');
-const langUkBtn = document.getElementById('langUkBtn');
 
-const LANGUAGE_STORAGE_KEY = 'pdmu-ui-language';
-
-const translations = {
-  ru: {
-    pageTitle: 'PDMU Quiz Builder',
-    'form.title': 'Создать тест',
-    'form.client_title': 'Название теста',
-    'form.source_file': 'Файл с тестами',
-    'form.option_count': 'Вариантов ответа в вопросе',
-    'form.answer_mode': 'Режим правильных ответов',
-    'form.answer_mode_single': 'Один и тот же вариант для всех',
-    'form.answer_mode_file': 'Отдельный файл с ответами',
-    'form.answer_index': 'Правильный вариант',
-    'form.answer_file': 'Файл с ответами',
-    'form.question_count': 'Количество вопросов',
-    'form.use_all_questions': 'Все вопросы',
-    'form.question_limit': 'Сколько вопросов взять',
-    'form.submit': 'Передать файл',
-    'result.title': 'Результат',
-    'status.idle': 'Ожидаю загрузку файла.',
-    answerFilePlaceholder: 'Поддерживаются .txt, .pdf, .doc, .docx',
-    accessTitle: 'Введите код доступа',
-    accessText: 'Введите одноразовый код, чтобы получить доступ к готовой ссылке.',
-    accessLabel: 'Одноразовый код',
-    accessPlaceholder: 'Например: ABCD-EFGH-JKLM',
-    accessButton: 'Получить ссылку',
-    parseLoading: 'Файл обрабатывается локальным парсером. Это может занять немного времени.',
-    parseSuccess: 'Тест готов.',
-    finalizeLoading: 'Проверяю код и готовлю ссылку.',
-    finalizeSuccess: 'Ссылка готова.',
-    clientTitleRequiredError: 'Сначала введите название теста.',
-    chooseFileError: 'Сначала выберите файл с тестами.',
-    answerFileRequiredError: 'Нужно загрузить отдельный файл с ответами.',
-    draftMissing: 'Черновик не найден. Передайте файл заново.',
-    parseDefaultError: 'Не удалось обработать файл.',
-    finalizeDefaultError: 'Не удалось получить ссылку.',
-    notesTitle: 'Что заметил парсер',
-    parsedCount: 'Вопросов найдено: <strong>{count}</strong>',
-    adminContact: 'Связь с админом: <strong>{contact}</strong>',
-    warningText: 'ВНИМАНИЕ: если по этой ссылке будет вход более чем с {limit} устройств, ссылка будет удалена.',
-    warningButton: 'Понятно',
-    siteTypeSingle: 'Одиночный',
-    siteTypeGroup: 'Групповой',
-  },
-  uk: {
-    pageTitle: 'PDMU Quiz Builder',
-    'form.title': 'Створити тест',
-    'form.client_title': 'Назва тесту',
-    'form.source_file': 'Файл із тестами',
-    'form.option_count': 'Варіантів відповіді в питанні',
-    'form.answer_mode': 'Режим правильних відповідей',
-    'form.answer_mode_single': 'Один і той самий варіант для всіх',
-    'form.answer_mode_file': 'Окремий файл із відповідями',
-    'form.answer_index': 'Правильний варіант',
-    'form.answer_file': 'Файл із відповідями',
-    'form.question_count': 'Кількість питань',
-    'form.use_all_questions': 'Усі питання',
-    'form.question_limit': 'Скільки питань взяти',
-    'form.submit': 'Передати файл',
-    'result.title': 'Результат',
-    'status.idle': 'Очікую на завантаження файла.',
-    answerFilePlaceholder: 'Підтримуються .txt, .pdf, .doc, .docx',
-    accessTitle: 'Введіть код доступу',
-    accessText: 'Введіть одноразовий код, щоб отримати доступ до готового посилання.',
-    accessLabel: 'Одноразовий код',
-    accessPlaceholder: 'Наприклад: ABCD-EFGH-JKLM',
-    accessButton: 'Отримати посилання',
-    parseLoading: 'Файл обробляється локальним парсером. Це може зайняти трохи часу.',
-    parseSuccess: 'Тест готовий.',
-    finalizeLoading: 'Перевіряю код і готую посилання.',
-    finalizeSuccess: 'Посилання готове.',
-    clientTitleRequiredError: 'Спочатку введіть назву тесту.',
-    chooseFileError: 'Спочатку виберіть файл із тестами.',
-    answerFileRequiredError: 'Потрібно завантажити окремий файл із відповідями.',
-    draftMissing: 'Чернетку не знайдено. Передайте файл ще раз.',
-    parseDefaultError: 'Не вдалося обробити файл.',
-    finalizeDefaultError: 'Не вдалося отримати посилання.',
-    notesTitle: 'Що помітив парсер',
-    parsedCount: 'Питань знайдено: <strong>{count}</strong>',
-    adminContact: 'Зв\'язок з адміном: <strong>{contact}</strong>',
-    warningText: 'УВАГА: якщо за цим посиланням буде вхід більш ніж з {limit} пристроїв, посилання буде видалено.',
-    warningButton: 'Зрозуміло',
-    siteTypeSingle: 'Одиночний',
-    siteTypeGroup: 'Груповий',
-  },
-};
-
-let currentLanguage = resolveInitialLanguage();
 let currentDraftToken = '';
 let currentDraftPayload = null;
 
-applyLanguage(currentLanguage);
 syncAnswerIndexOptions();
 syncQuestionLimitMode();
 syncAnswerMode();
@@ -117,13 +26,11 @@ optionCountInput.addEventListener('input', syncAnswerIndexOptions);
 useAllQuestionsInput.addEventListener('change', syncQuestionLimitMode);
 answerModeSingleInput.addEventListener('change', syncAnswerMode);
 answerModeFileInput.addEventListener('change', syncAnswerMode);
-langRuBtn.addEventListener('click', () => setLanguage('ru'));
-langUkBtn.addEventListener('click', () => setLanguage('uk'));
 
 quizForm.addEventListener('submit', async (event) => {
   event.preventDefault();
 
-  setStatus('loading', t('parseLoading'));
+  setStatus('loading', 'Файл обробляється локальним парсером. Це може зайняти трохи часу.');
   resultBox.classList.add('hidden');
   resultBox.innerHTML = '';
   submitBtn.disabled = true;
@@ -136,11 +43,11 @@ quizForm.addEventListener('submit', async (event) => {
     const answerMode = getAnswerMode();
 
     if (!clientTitle) {
-      throw new Error(t('clientTitleRequiredError'));
+      throw new Error('Спочатку введіть назву тесту.');
     }
 
     if (!sourceFile) {
-      throw new Error(t('chooseFileError'));
+      throw new Error('Спочатку виберіть файл із тестами.');
     }
 
     const formData = new FormData();
@@ -155,7 +62,7 @@ quizForm.addEventListener('submit', async (event) => {
     } else {
       const answerFile = answerFileInput.files?.[0];
       if (!answerFile) {
-        throw new Error(t('answerFileRequiredError'));
+        throw new Error('Потрібно завантажити окремий файл із відповідями.');
       }
       formData.append('answerFile', answerFile);
     }
@@ -171,55 +78,20 @@ quizForm.addEventListener('submit', async (event) => {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || t('parseDefaultError'));
+      throw new Error(payload.error || 'Не вдалося обробити файл.');
     }
 
     currentDraftToken = payload.draftToken;
     currentDraftPayload = payload;
-    setStatus('success', t('parseSuccess'));
+    setStatus('success', 'Тест готовий.');
     renderDraftResult(payload);
     await finalizeCurrentDraft();
   } catch (error) {
-    setStatus('error', error.message || t('parseDefaultError'));
+    setStatus('error', error.message || 'Не вдалося обробити файл.');
   } finally {
     submitBtn.disabled = false;
   }
 });
-
-function setLanguage(language) {
-  if (!translations[language]) {
-    return;
-  }
-
-  currentLanguage = language;
-  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
-  applyLanguage(language);
-
-  if (!currentDraftToken || !currentDraftPayload) {
-    return;
-  }
-
-  const hasQuizUrl = Boolean(currentDraftPayload.quizUrl);
-  if (hasQuizUrl) {
-    renderFinalResult(currentDraftPayload);
-  } else {
-    renderDraftResult(currentDraftPayload);
-  }
-}
-
-function applyLanguage(language) {
-  document.documentElement.lang = language === 'uk' ? 'uk' : 'ru';
-  document.title = t('pageTitle');
-
-  for (const node of document.querySelectorAll('[data-i18n]')) {
-    const key = node.getAttribute('data-i18n');
-    node.textContent = t(key);
-  }
-
-  answerFileInput.setAttribute('title', t('answerFilePlaceholder'));
-  langRuBtn.classList.toggle('active', language === 'ru');
-  langUkBtn.classList.toggle('active', language === 'uk');
-}
 
 function setStatus(kind, message) {
   statusBox.className = `status ${kind}`;
@@ -234,33 +106,33 @@ function renderDraftResult(payload) {
   const notesHtml = notes.length
     ? `
       <div class="notes-box">
-        <p><strong>${escapeHtml(t('notesTitle'))}</strong></p>
+        <p><strong>Що помітив парсер</strong></p>
         ${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join('')}
       </div>
     `
     : '';
   const adminContactHtml = adminContact
-    ? `<p class="admin-contact">${formatHtml(t('adminContact'), { contact: adminContact })}</p>`
+    ? `<p class="admin-contact">Зв'язок з адміністратором: <strong>${escapeHtml(adminContact)}</strong></p>`
     : '';
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
-    <p>${formatHtml(t('parsedCount'), { count: String(payload.parsedCount || 0) })}</p>
+    <p>Питань знайдено: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
     ${adminContactHtml}
     ${notesHtml}
     <div class="activation-box">
-      <p class="activation-text">${escapeHtml(t('finalizeLoading'))}</p>
+      <p class="activation-text">Готую посилання...</p>
     </div>
   `;
 }
 
 async function finalizeCurrentDraft() {
   if (!currentDraftToken) {
-    setStatus('error', t('draftMissing'));
+    setStatus('error', 'Чернетку не знайдено. Передайте файл ще раз.');
     return;
   }
 
-  setStatus('loading', t('finalizeLoading'));
+  setStatus('loading', 'Готую посилання.');
 
   try {
     const response = await fetch('/api/quizzes/finalize', {
@@ -276,27 +148,26 @@ async function finalizeCurrentDraft() {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || t('finalizeDefaultError'));
+      throw new Error(payload.error || 'Не вдалося отримати посилання.');
     }
 
     currentDraftToken = '';
     currentDraftPayload = payload;
-    setStatus('success', t('finalizeSuccess'));
+    setStatus('success', 'Посилання готове.');
     renderFinalResult(payload);
   } catch (error) {
-    setStatus('error', error.message || t('finalizeDefaultError'));
+    setStatus('error', error.message || 'Не вдалося отримати посилання.');
   }
 }
 
 function renderFinalResult(payload) {
   resultBox.classList.remove('hidden');
 
-  const localizedQuizUrl = addLanguageToUrl(payload.quizUrl);
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
-    <p>${formatHtml(t('parsedCount'), { count: String(payload.parsedCount || 0) })}</p>
+    <p>Питань знайдено: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
     <div id="quizLinkBox">
-      <p><a href="${escapeAttr(localizedQuizUrl)}" target="_blank" rel="noreferrer">${escapeHtml(localizedQuizUrl)}</a></p>
+      <p><a href="${escapeAttr(String(payload.quizUrl || ''))}" target="_blank" rel="noreferrer">${escapeHtml(String(payload.quizUrl || ''))}</a></p>
     </div>
   `;
 }
@@ -329,49 +200,18 @@ function syncQuestionLimitMode() {
 }
 
 function syncAnswerMode() {
-  const answerMode = getAnswerMode();
-  const useFile = answerMode === 'file';
+  const useFile = getAnswerMode() === 'file';
 
   singleAnswerField.classList.toggle('hidden', useFile);
   answerFileField.classList.toggle('hidden', !useFile);
   answerIndexSelect.disabled = useFile;
   answerFileInput.disabled = !useFile;
   answerFileInput.required = useFile;
+  answerFileInput.setAttribute('title', 'Підтримуються .txt, .pdf, .doc, .docx');
 }
 
 function getAnswerMode() {
   return answerModeFileInput.checked ? 'file' : 'single';
-}
-
-function resolveInitialLanguage() {
-  const savedLanguage = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-  if (savedLanguage === 'ru' || savedLanguage === 'uk') {
-    return savedLanguage;
-  }
-
-  return 'ru';
-}
-
-function addLanguageToUrl(rawUrl) {
-  try {
-    const url = new URL(String(rawUrl || ''), window.location.origin);
-    url.searchParams.set('lang', currentLanguage);
-    return url.toString();
-  } catch {
-    return String(rawUrl || '');
-  }
-}
-
-function t(key, params = {}) {
-  const dictionary = translations[currentLanguage] || translations.ru;
-  const fallbackDictionary = translations.ru;
-  const template = dictionary[key] || fallbackDictionary[key] || key;
-
-  return String(template).replace(/\{(\w+)\}/g, (_match, token) => String(params[token] ?? `{${token}}`));
-}
-
-function formatHtml(template, params = {}) {
-  return String(template).replace(/\{(\w+)\}/g, (_match, token) => escapeHtml(String(params[token] ?? `{${token}}`)));
 }
 
 function escapeHtml(value) {
