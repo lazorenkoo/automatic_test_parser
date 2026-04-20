@@ -284,6 +284,7 @@ app.post('/api/admin/codes', requireAdminSecret, (req, res) => {
     siteType: req.body.siteType,
     clientTgUsername: req.body.clientTgUsername,
     expectedQuestionCount: req.body.expectedQuestionCount,
+    price: req.body.price,
   };
   const codes = createAccessCodes(count, label, metadata);
 

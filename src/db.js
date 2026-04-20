@@ -31,6 +31,7 @@ db.exec(`
     site_type TEXT,
     client_tg_username TEXT,
     expected_question_count INTEGER,
+    price REAL NOT NULL DEFAULT 0,
     is_reusable INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     reserved_at INTEGER,
@@ -90,6 +91,7 @@ db.exec(`
 ensureColumn('access_codes', 'site_type', 'TEXT');
 ensureColumn('access_codes', 'client_tg_username', 'TEXT');
 ensureColumn('access_codes', 'expected_question_count', 'INTEGER');
+ensureColumn('access_codes', 'price', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('access_codes', 'is_reusable', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('quizzes', 'banned_at', 'INTEGER');
 
@@ -100,9 +102,10 @@ const insertCodeStmt = db.prepare(`
     site_type,
     client_tg_username,
     expected_question_count,
+    price,
     is_reusable,
     created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const upsertReusableCodeStmt = db.prepare(`
@@ -112,18 +115,20 @@ const upsertReusableCodeStmt = db.prepare(`
     site_type,
     client_tg_username,
     expected_question_count,
+    price,
     is_reusable,
     created_at,
     reserved_at,
     reservation_token,
     used_at,
     used_by_quiz_id
-  ) VALUES (?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL)
+  ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL)
   ON CONFLICT(code_hash) DO UPDATE SET
     label = excluded.label,
     site_type = excluded.site_type,
     client_tg_username = excluded.client_tg_username,
     expected_question_count = excluded.expected_question_count,
+    price = excluded.price,
     is_reusable = 1,
     reserved_at = NULL,
     reservation_token = NULL,
@@ -154,6 +159,7 @@ const selectReservedCodeStmt = db.prepare(`
     site_type AS siteType,
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
+    price,
     is_reusable AS isReusable
   FROM access_codes
   WHERE reservation_token = ?
@@ -173,6 +179,7 @@ const findCodeByTokenStmt = db.prepare(`
     site_type AS siteType,
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
+    price,
     is_reusable AS isReusable
   FROM access_codes
   WHERE reservation_token = ?
@@ -218,6 +225,7 @@ const getQuizBySlugStmt = db.prepare(`
     c.site_type AS siteType,
     c.client_tg_username AS clientTgUsername,
     c.expected_question_count AS expectedQuestionCount,
+    c.price AS price,
     c.label AS codeLabel
   FROM quizzes q
   LEFT JOIN access_codes c ON c.id = q.code_id
@@ -283,6 +291,7 @@ const listQuizzesForAdminStmt = db.prepare(`
     c.site_type AS siteType,
     c.client_tg_username AS clientTgUsername,
     c.expected_question_count AS expectedQuestionCount,
+    c.price AS price,
     COUNT(d.id) AS deviceCount,
     MAX(d.last_seen_at) AS lastSeenAt
   FROM quizzes q
@@ -326,6 +335,14 @@ const deleteQuizByIdStmt = db.prepare(`
   WHERE id = ?
 `);
 
+const accountingSummaryStmt = db.prepare(`
+  SELECT
+    COUNT(*) AS usedCodeCount,
+    COALESCE(SUM(price), 0) AS totalAmount
+  FROM access_codes
+  WHERE used_at IS NOT NULL
+`);
+
 syncUnlimitedEvaAccessCode();
 
 export function getDbMeta() {
@@ -342,6 +359,7 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
   const siteType = normalizeSiteType(metadata.siteType);
   const clientTgUsername = normalizeClientUsername(metadata.clientTgUsername);
   const expectedQuestionCount = normalizeExpectedQuestionCount(metadata.expectedQuestionCount);
+  const price = normalizePrice(metadata.price);
 
   const tx = db.transaction(() => {
     while (codes.length < total) {
@@ -355,6 +373,7 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
           siteType,
           clientTgUsername,
           expectedQuestionCount,
+          price,
           0,
           createdAt,
         );
@@ -400,6 +419,7 @@ export function reserveAccessCode(plainCode) {
       siteType: row.siteType || null,
       clientTgUsername: row.clientTgUsername || null,
       expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
+      price: Number(row.price || 0),
       isReusable: Number(row.isReusable || 0) === 1,
     };
   });
@@ -509,6 +529,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken 
       siteType: codeRow.siteType || null,
       clientTgUsername: codeRow.clientTgUsername || null,
       expectedQuestionCount,
+      price: Number(codeRow.price || 0),
       codeLabel: codeRow.label || null,
     };
   });
@@ -548,6 +569,7 @@ export function listQuizzesForAdmin() {
     bannedAt: row.bannedAt ? Number(row.bannedAt) : null,
     deviceCount: Number(row.deviceCount || 0),
     expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
+    price: Number(row.price || 0),
     lastSeenAt: row.lastSeenAt ? Number(row.lastSeenAt) : null,
     devices: getQuizDevicesStmt.all(row.id).map((device) => ({
       ...device,
@@ -555,6 +577,14 @@ export function listQuizzesForAdmin() {
       lastSeenAt: Number(device.lastSeenAt || 0),
     })),
   }));
+}
+
+export function getAccountingSummary() {
+  const row = accountingSummaryStmt.get() || {};
+  return {
+    usedCodeCount: Number(row.usedCodeCount || 0),
+    totalAmount: Number(row.totalAmount || 0),
+  };
 }
 
 export function setQuizBanStatusById(quizId, banned) {
@@ -620,6 +650,7 @@ function mapQuizRow(row) {
     siteType: row.siteType || null,
     clientTgUsername: row.clientTgUsername || null,
     expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
+    price: Number(row.price || 0),
     codeLabel: row.codeLabel || null,
   };
 }
@@ -635,6 +666,7 @@ function syncUnlimitedEvaAccessCode() {
     '1',
     null,
     null,
+    0,
     nowMs(),
   );
 }
@@ -673,4 +705,18 @@ function normalizeExpectedQuestionCount(value) {
   }
 
   return numericValue;
+}
+
+function normalizePrice(value) {
+  if (value == null || value === '') {
+    return 0;
+  }
+
+  const normalized = String(value).trim().replace(',', '.');
+  const numericValue = Number(normalized);
+  if (!Number.isFinite(numericValue) || numericValue < 0) {
+    return 0;
+  }
+
+  return Math.round(numericValue * 100) / 100;
 }
