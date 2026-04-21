@@ -1007,9 +1007,8 @@ function formatReviewMessage(quiz, parsed) {
 }
 
 function formatSiteListItem(quiz) {
-  const description = quiz.codeLabel ? ` | ${quiz.codeLabel}` : '';
-  const price = Number(quiz.price || 0) > 0 ? ` | ${formatPrice(quiz.price)}` : '';
-  return `${quiz.id}. ${formatSiteType(quiz.siteType)}${description}${price} | устройств ${quiz.deviceCount || 0} | ${quiz.clientTgUsername || 'не привязан'}${formatQuizPublicStatus(quiz)}`;
+  const title = String(quiz.title || '').trim() || quiz.codeLabel || `Сайт ${quiz.id}`;
+  return `${title}: ${quiz.deviceCount || 0}`;
 }
 
 function formatSiteDetails(quiz) {
