@@ -935,7 +935,7 @@ function formatSitesPage(parsed) {
 
   return [
     `Сайты: страница ${page} из ${totalPages}`,
-    `Всего найдено: ${filtered.length}`,
+    `Количество тестов: ${filtered.length}`,
     filterSummary ? `Фильтры: ${filterSummary}` : null,
     '',
     ...items.map((quiz) => formatSiteListItem(quiz)),
@@ -947,6 +947,7 @@ function formatSitesPage(parsed) {
 function formatSearchResults(parsed) {
   const allQuizzes = listQuizzesForAdmin();
   const filtered = allQuizzes.filter((quiz) => matchesQuizFilters(quiz, parsed.filters)).slice(0, 30);
+  const totalMatched = allQuizzes.filter((quiz) => matchesQuizFilters(quiz, parsed.filters)).length;
 
   if (!filtered.length) {
     return `Ничего не найдено по запросу: ${parsed.query}`;
@@ -954,7 +955,7 @@ function formatSearchResults(parsed) {
 
   return [
     `Поиск: ${parsed.query}`,
-    `Найдено: ${filtered.length}${allQuizzes.filter((quiz) => matchesQuizFilters(quiz, parsed.filters)).length > filtered.length ? '+' : ''}`,
+    `Количество тестов: ${totalMatched}${totalMatched > filtered.length ? '+' : ''}`,
     '',
     ...filtered.map((quiz) => formatSiteListItem(quiz)),
   ].join('\n');
@@ -1008,7 +1009,7 @@ function formatReviewMessage(quiz, parsed) {
 
 function formatSiteListItem(quiz) {
   const title = String(quiz.title || '').trim() || quiz.codeLabel || `Сайт ${quiz.id}`;
-  return `${title}: ${quiz.deviceCount || 0}`;
+  return `${quiz.id}. ${title}: ${quiz.deviceCount || 0}`;
 }
 
 function formatSiteDetails(quiz) {
