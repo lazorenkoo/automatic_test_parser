@@ -1014,6 +1014,7 @@ function formatSiteListItem(quiz) {
 
 function formatSiteDetails(quiz) {
   const devices = Array.isArray(quiz.devices) ? quiz.devices : [];
+  const creatorLines = formatCreatorDetails(quiz.creatorSnapshot);
   return [
     `Сайт ${quiz.id}`,
     `Название: ${quiz.title}`,
@@ -1031,10 +1032,102 @@ function formatSiteDetails(quiz) {
     `Ссылка активна до: ${formatDateTime(quiz.expiresAt)}`,
     `Последний вход: ${formatDateTime(quiz.lastSeenAt)}`,
     '',
+    'Creator:',
+    ...creatorLines,
+    '',
     devices.length
       ? devices.slice(0, 10).map((device, index) => `${index + 1}) ${maskDeviceId(device.deviceId)} | ${formatDateTime(device.lastSeenAt)} | ${device.lastIp || 'IP ?'}`).join('\n')
       : 'Входов пока не было.',
   ].join('\n');
+}
+
+function formatCreatorDetails(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || !Object.keys(snapshot).length) {
+    return ['No creator trace saved.'];
+  }
+
+  const request = snapshot.request && typeof snapshot.request === 'object' ? snapshot.request : {};
+  const client = snapshot.client && typeof snapshot.client === 'object' ? snapshot.client : {};
+  const uaData = client.userAgentData && typeof client.userAgentData === 'object' ? client.userAgentData : {};
+  const brands = Array.isArray(uaData.brands)
+    ? uaData.brands.map((item) => [item.brand, item.version].filter(Boolean).join(' ')).filter(Boolean).join(', ')
+    : '';
+  const screen = formatScreen(client.screen);
+  const viewport = formatViewport(client.viewport);
+  const connection = formatConnection(client.connection);
+
+  return [
+    `Captured: ${formatDateTime(snapshot.capturedAt)}`,
+    `Browser ID: ${snapshot.browserId || '—'}`,
+    `Fingerprint: ${maskDeviceId(snapshot.fingerprint || '') || '—'}`,
+    `Class: ${snapshot.deviceClass || '—'}`,
+    `IP: ${request.ip || request.realIp || request.forwardedFor || '—'}`,
+    `Lang/TZ: ${[client.language, client.timezone].filter(Boolean).join(' | ') || '—'}`,
+    `Platform: ${[client.platform || uaData.platform, uaData.architecture, uaData.bitness].filter(Boolean).join(' | ') || '—'}`,
+    `Browser: ${brands || request.userAgent || client.userAgent || '—'}`,
+    `Screen: ${screen || '—'}`,
+    `Viewport: ${viewport || '—'}`,
+    `Touch/CPU/RAM: ${formatHardware(client)}`,
+    `Connection: ${connection || '—'}`,
+    `Source page: ${client.pageUrl || '—'}`,
+    `Referrer: ${client.referrer || request.referer || '—'}`,
+  ];
+}
+
+function formatScreen(screen) {
+  if (!screen || typeof screen !== 'object') {
+    return '';
+  }
+
+  const width = Number(screen.width || 0);
+  const height = Number(screen.height || 0);
+  if (!width || !height) {
+    return '';
+  }
+
+  return `${width}x${height}`;
+}
+
+function formatViewport(viewport) {
+  if (!viewport || typeof viewport !== 'object') {
+    return '';
+  }
+
+  const width = Number(viewport.width || 0);
+  const height = Number(viewport.height || 0);
+  if (!width || !height) {
+    return '';
+  }
+
+  const ratio = viewport.pixelRatio ? ` @${viewport.pixelRatio}` : '';
+  return `${width}x${height}${ratio}`;
+}
+
+function formatHardware(client) {
+  if (!client || typeof client !== 'object') {
+    return '—';
+  }
+
+  const parts = [
+    client.maxTouchPoints != null ? `touch ${client.maxTouchPoints}` : null,
+    client.hardwareConcurrency != null ? `cpu ${client.hardwareConcurrency}` : null,
+    client.deviceMemory != null ? `ram ${client.deviceMemory}` : null,
+  ].filter(Boolean);
+
+  return parts.join(' | ') || '—';
+}
+
+function formatConnection(connection) {
+  if (!connection || typeof connection !== 'object') {
+    return '';
+  }
+
+  return [
+    connection.effectiveType || null,
+    connection.downlink != null ? `${connection.downlink}Mb/s` : null,
+    connection.rtt != null ? `${connection.rtt}ms` : null,
+    connection.saveData === true ? 'saveData' : null,
+  ].filter(Boolean).join(' | ');
 }
 
 function matchesQuizFilters(quiz, filters) {

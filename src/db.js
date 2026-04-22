@@ -53,6 +53,7 @@ db.exec(`
     questions_json TEXT NOT NULL,
     review_blocks_json TEXT NOT NULL DEFAULT '[]',
     raw_model_json TEXT NOT NULL,
+    creator_snapshot_json TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL,
     expires_at INTEGER,
     banned_at INTEGER,
@@ -103,6 +104,7 @@ ensureColumn('quizzes', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quiz_drafts', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quizzes', 'expires_at', 'INTEGER');
 ensureColumn('quizzes', 'banned_at', 'INTEGER');
+ensureColumn('quizzes', 'creator_snapshot_json', "TEXT NOT NULL DEFAULT '{}'");
 
 const insertCodeStmt = db.prepare(`
   INSERT INTO access_codes (
@@ -235,10 +237,11 @@ const insertQuizStmt = db.prepare(`
     questions_json,
     review_blocks_json,
     raw_model_json,
+    creator_snapshot_json,
     created_at,
     expires_at,
     code_id
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const markCodeUsedStmt = db.prepare(`
@@ -613,10 +616,11 @@ export function createQuizDraft({
   };
 }
 
-export function finalizeQuizFromDraftReservation({ reservationToken, draftToken }) {
+export function finalizeQuizFromDraftReservation({ reservationToken, draftToken, creatorSnapshot = null }) {
   const createdAt = nowMs();
   const expiresAt = quizPublicTtlMs > 0 ? createdAt + quizPublicTtlMs : null;
   const staleBefore = createdAt - draftTtlMs;
+  const normalizedCreatorSnapshot = normalizeCreatorSnapshot(creatorSnapshot, createdAt);
 
   const tx = db.transaction(() => {
     clearExpiredDraftsStmt.run(staleBefore);
@@ -659,6 +663,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken 
       draftRow.questions_json,
       draftRow.review_blocks_json,
       draftRow.raw_model_json,
+      JSON.stringify(normalizedCreatorSnapshot),
       createdAt,
       expiresAt,
       codeRow.id,
@@ -680,6 +685,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken 
       price: Number(codeRow.price || 0),
       codeLabel: codeRow.label || null,
       expiresAt,
+      creatorSnapshot: normalizedCreatorSnapshot,
     };
   });
 
@@ -856,6 +862,7 @@ function mapQuizRow(row) {
     questions: JSON.parse(row.questions_json),
     reviewBlocks: JSON.parse(row.review_blocks_json || '[]'),
     rawModelJson: JSON.parse(row.raw_model_json),
+    creatorSnapshot: parseJsonField(row.creator_snapshot_json, {}),
     createdAt: Number(row.created_at || 0),
     expiresAt: row.expires_at ? Number(row.expires_at) : null,
     bannedAt: row.banned_at ? Number(row.banned_at) : null,
@@ -959,4 +966,33 @@ function resolveQuizPublicTtlMs() {
   }
 
   return Math.round(numericDays * 24 * 60 * 60 * 1000);
+}
+
+function normalizeCreatorSnapshot(snapshot, fallbackTimestamp) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return {};
+  }
+
+  return {
+    capturedAt: Number(snapshot.capturedAt || fallbackTimestamp || nowMs()),
+    browserId: sanitizeNullableValue(snapshot.browserId),
+    fingerprint: sanitizeNullableValue(snapshot.fingerprint),
+    fingerprintVersion: Number(snapshot.fingerprintVersion || 1),
+    deviceClass: sanitizeNullableValue(snapshot.deviceClass),
+    creationSource: sanitizeNullableValue(snapshot.creationSource),
+    request: snapshot.request && typeof snapshot.request === 'object' ? snapshot.request : null,
+    client: snapshot.client && typeof snapshot.client === 'object' ? snapshot.client : null,
+  };
+}
+
+function parseJsonField(value, fallbackValue) {
+  if (value == null || value === '') {
+    return fallbackValue;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallbackValue;
+  }
 }

@@ -416,35 +416,31 @@ function parseQuestionsByForwardScan(linesInput, { answerIndex, limit, optionCou
 
 function parseQuestionsByDynamicScan(linesInput, { answerIndex, limit, optionCount }) {
   const lines = Array.isArray(linesInput) ? linesInput : splitIntoLines(linesInput);
-  const memo = new Map();
+  const bestAt = Array.from({ length: lines.length + 1 }, () => ({
+    score: 0,
+    count: 0,
+    pick: null,
+    nextIndex: null,
+  }));
 
-  function solve(index) {
-    if (index >= lines.length) {
-      return { score: 0, count: 0, questions: [] };
-    }
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let best = {
+      ...bestAt[index + 1],
+      pick: null,
+      nextIndex: index + 1,
+    };
 
-    if (memo.has(index)) {
-      return memo.get(index);
-    }
-
-    let best = solve(index + 1);
     const candidates = buildForwardCandidates(lines, index, optionCount);
 
     for (const candidate of candidates) {
-      const tail = solve(candidate.nextIndex);
+      const tail = bestAt[candidate.nextIndex];
       const optionLengths = candidate.options.map((option) => option.length);
       const localScore = candidate.questionText.length + optionLengths.reduce((sum, value) => sum + value, 0);
       const total = {
         score: localScore + tail.score,
         count: 1 + tail.count,
-        questions: [
-          {
-            q: candidate.questionText,
-            options: candidate.options,
-            correctIndex: answerIndex - 1,
-          },
-          ...tail.questions,
-        ],
+        pick: candidate,
+        nextIndex: candidate.nextIndex,
       };
 
       if (
@@ -455,12 +451,28 @@ function parseQuestionsByDynamicScan(linesInput, { answerIndex, limit, optionCou
       }
     }
 
-    memo.set(index, best);
-    return best;
+    bestAt[index] = best;
   }
 
-  const solved = solve(0);
-  const questions = solved.questions.slice(0, limit);
+  const questions = [];
+  let index = 0;
+
+  while (index < lines.length && questions.length < limit) {
+    const current = bestAt[index];
+    if (!current?.pick) {
+      index += 1;
+      continue;
+    }
+
+    questions.push({
+      q: current.pick.questionText,
+      options: current.pick.options,
+      correctIndex: answerIndex - 1,
+    });
+
+    index = current.nextIndex;
+  }
+
   const notes = buildLimitNote(questions.length, limit);
 
   return {
@@ -468,7 +480,7 @@ function parseQuestionsByDynamicScan(linesInput, { answerIndex, limit, optionCou
     questions,
     notes,
     droppedBlocks: 0,
-    qualityScore: solved.count * 24 + solved.score,
+    qualityScore: bestAt[0].count * 24 + bestAt[0].score,
   };
 }
 
@@ -1498,7 +1510,7 @@ function matchExplicitQuestionNumber(line) {
   }
 
   const number = Number(match[1]);
-  if (!Number.isInteger(number) || number < 1 || number > 500) {
+  if (!Number.isInteger(number) || number < 1 || number > 999) {
     return null;
   }
 

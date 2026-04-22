@@ -143,6 +143,7 @@ async function finalizeCurrentDraft() {
       body: JSON.stringify({
         draftToken: currentDraftToken,
         accessCode: '',
+        creatorProfile: await buildCreatorProfile(),
       }),
     });
 
@@ -162,14 +163,171 @@ async function finalizeCurrentDraft() {
 
 function renderFinalResult(payload) {
   resultBox.classList.remove('hidden');
+  const creatorMeta = payload.creatorTracked
+    ? `<p>Creator trace saved: <strong>${escapeHtml(String(payload.creatorBrowserId || payload.creatorFingerprint || 'yes'))}</strong></p>`
+    : '';
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
     <p>Питань знайдено: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
+    ${creatorMeta}
     <div id="quizLinkBox">
       <p><a href="${escapeAttr(String(payload.quizUrl || ''))}" target="_blank" rel="noreferrer">${escapeHtml(String(payload.quizUrl || ''))}</a></p>
     </div>
   `;
+}
+
+async function buildCreatorProfile() {
+  const nav = window.navigator || {};
+  const screenInfo = window.screen || {};
+  const userAgentData = await readUserAgentData(nav.userAgentData);
+
+  return {
+    browserId: getOrCreateBrowserId(),
+    capturedAt: Date.now(),
+    pageUrl: window.location.href,
+    referrer: document.referrer || '',
+    language: nav.language || '',
+    languages: Array.isArray(nav.languages) ? nav.languages.slice(0, 10) : [],
+    timezone: getResolvedTimeZone(),
+    locale: getResolvedLocale(),
+    platform: nav.platform || '',
+    vendor: nav.vendor || '',
+    userAgent: nav.userAgent || '',
+    cookieEnabled: typeof nav.cookieEnabled === 'boolean' ? nav.cookieEnabled : null,
+    doNotTrack: nav.doNotTrack || '',
+    webdriver: typeof nav.webdriver === 'boolean' ? nav.webdriver : null,
+    hardwareConcurrency: typeof nav.hardwareConcurrency === 'number' ? nav.hardwareConcurrency : null,
+    deviceMemory: typeof nav.deviceMemory === 'number' ? nav.deviceMemory : null,
+    maxTouchPoints: typeof nav.maxTouchPoints === 'number' ? nav.maxTouchPoints : 0,
+    deviceClass: detectDeviceClass({
+      mobile: userAgentData?.mobile,
+      maxTouchPoints: nav.maxTouchPoints,
+      viewportWidth: window.innerWidth,
+      userAgent: nav.userAgent || '',
+    }),
+    screen: {
+      width: screenInfo.width || null,
+      height: screenInfo.height || null,
+      availWidth: screenInfo.availWidth || null,
+      availHeight: screenInfo.availHeight || null,
+      colorDepth: screenInfo.colorDepth || null,
+      pixelDepth: screenInfo.pixelDepth || null,
+    },
+    viewport: {
+      width: window.innerWidth || null,
+      height: window.innerHeight || null,
+      pixelRatio: window.devicePixelRatio || 1,
+    },
+    connection: readConnectionInfo(nav.connection),
+    userAgentData,
+  };
+}
+
+async function readUserAgentData(userAgentData) {
+  if (!userAgentData) {
+    return null;
+  }
+
+  let highEntropyValues = {};
+  if (typeof userAgentData.getHighEntropyValues === 'function') {
+    try {
+      highEntropyValues = await userAgentData.getHighEntropyValues([
+        'architecture',
+        'bitness',
+        'fullVersionList',
+        'model',
+        'platformVersion',
+        'uaFullVersion',
+        'wow64',
+      ]);
+    } catch {
+      highEntropyValues = {};
+    }
+  }
+
+  return {
+    brands: Array.isArray(userAgentData.brands) ? userAgentData.brands : [],
+    mobile: typeof userAgentData.mobile === 'boolean' ? userAgentData.mobile : null,
+    platform: userAgentData.platform || '',
+    architecture: highEntropyValues.architecture || '',
+    bitness: highEntropyValues.bitness || '',
+    fullVersionList: Array.isArray(highEntropyValues.fullVersionList) ? highEntropyValues.fullVersionList : [],
+    model: highEntropyValues.model || '',
+    platformVersion: highEntropyValues.platformVersion || '',
+    uaFullVersion: highEntropyValues.uaFullVersion || '',
+    wow64: typeof highEntropyValues.wow64 === 'boolean' ? highEntropyValues.wow64 : null,
+  };
+}
+
+function readConnectionInfo(connection) {
+  if (!connection) {
+    return null;
+  }
+
+  return {
+    effectiveType: connection.effectiveType || '',
+    downlink: typeof connection.downlink === 'number' ? connection.downlink : null,
+    rtt: typeof connection.rtt === 'number' ? connection.rtt : null,
+    saveData: typeof connection.saveData === 'boolean' ? connection.saveData : null,
+  };
+}
+
+function getOrCreateBrowserId() {
+  const storageKey = 'pdmu_creator_browser_id';
+
+  try {
+    const storedValue = window.localStorage.getItem(storageKey);
+    if (storedValue) {
+      return storedValue;
+    }
+
+    const nextValue = typeof window.crypto?.randomUUID === 'function'
+      ? window.crypto.randomUUID()
+      : `browser-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    window.localStorage.setItem(storageKey, nextValue);
+    return nextValue;
+  } catch {
+    return typeof window.crypto?.randomUUID === 'function'
+      ? window.crypto.randomUUID()
+      : `browser-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function getResolvedTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
+function getResolvedLocale() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().locale || '';
+  } catch {
+    return '';
+  }
+}
+
+function detectDeviceClass({ mobile, maxTouchPoints, viewportWidth, userAgent }) {
+  if (mobile) {
+    return 'mobile';
+  }
+
+  if (/ipad|tablet/i.test(String(userAgent || ''))) {
+    return 'tablet';
+  }
+
+  if (/mobile|android|iphone/i.test(String(userAgent || ''))) {
+    return 'mobile';
+  }
+
+  if (Number(maxTouchPoints || 0) > 1) {
+    return Number(viewportWidth || 0) <= 900 ? 'mobile' : 'tablet';
+  }
+
+  return 'desktop';
 }
 
 function syncAnswerIndexOptions() {

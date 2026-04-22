@@ -9,6 +9,7 @@ import {
   deleteQuizById,
   finalizeQuizFromDraftReservation,
   getDbMeta,
+  getQuizById,
   getQuizBySlug,
   recordQuizVisit,
   releaseReservation,
@@ -25,6 +26,7 @@ import { startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
 import {
   buildAbsoluteUrl,
+  hashValue,
   htmlEscape,
   normalizeUploadedFilename,
   randomToken,
@@ -43,6 +45,13 @@ const upload = multer({
 });
 
 app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader(
+    'Accept-CH',
+    'Sec-CH-UA, Sec-CH-UA-Mobile, Sec-CH-UA-Platform, Sec-CH-UA-Platform-Version, Sec-CH-UA-Arch, Sec-CH-UA-Bitness, Sec-CH-UA-Model, Sec-CH-UA-Full-Version-List',
+  );
+  next();
+});
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.resolve('public')));
@@ -171,6 +180,7 @@ app.post('/api/parse', upload.fields([
 app.post('/api/quizzes/finalize', async (req, res, next) => {
   const accessCode = resolveFinalizeAccessCode(req.body.accessCode);
   const draftToken = String(req.body.draftToken || '');
+  const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
 
   if (!draftToken) {
     return res.status(400).json({ error: 'Немає чернетки. Спочатку передайте файл ще раз.' });
@@ -185,10 +195,12 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
     const savedQuiz = finalizeQuizFromDraftReservation({
       reservationToken: reservation.reservationToken,
       draftToken,
+      creatorSnapshot,
     });
 
     const quiz = getQuizBySlug(savedQuiz.slug);
     return res.status(201).json({
+      id: savedQuiz.id,
       slug: savedQuiz.slug,
       title: quiz.title,
       parsedCount: quiz.parsedCount,
@@ -201,6 +213,9 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
       clientTgUsername: savedQuiz.clientTgUsername,
       expectedQuestionCount: savedQuiz.expectedQuestionCount,
       expiresAt: savedQuiz.expiresAt,
+      creatorTracked: Boolean(savedQuiz.creatorSnapshot?.fingerprint || savedQuiz.creatorSnapshot?.browserId),
+      creatorBrowserId: savedQuiz.creatorSnapshot?.browserId || null,
+      creatorFingerprint: savedQuiz.creatorSnapshot?.fingerprint || null,
     });
   } catch (error) {
     releaseReservation(reservation.reservationToken);
@@ -310,6 +325,15 @@ app.post('/api/admin/codes', requireAdminSecret, (req, res) => {
   const codes = createAccessCodes(count, label, metadata);
 
   return res.status(201).json({ codes });
+});
+
+app.get('/api/admin/quizzes/:id', requireAdminSecret, (req, res) => {
+  const quiz = getQuizById(req.params.id);
+  if (!quiz) {
+    return res.status(404).json({ error: 'Quiz not found.' });
+  }
+
+  return res.json(serializeAdminQuiz(quiz));
 });
 
 app.post('/api/admin/quizzes/:slug/ban', requireAdminSecret, (req, res) => {
@@ -473,4 +497,240 @@ function formatSiteType(siteType) {
 
 function getDeviceWarningLimit(siteType) {
   return String(siteType || '') === '2' ? 20 : 2;
+}
+
+function serializeAdminQuiz(quiz) {
+  return {
+    id: quiz.id,
+    slug: quiz.slug,
+    title: quiz.title,
+    sourceFilename: quiz.sourceFilename,
+    answerIndex: quiz.answerIndex,
+    requestedCount: quiz.requestedCount,
+    parsedCount: quiz.parsedCount,
+    createdAt: quiz.createdAt,
+    expiresAt: quiz.expiresAt,
+    bannedAt: quiz.bannedAt,
+    siteType: quiz.siteType,
+    siteTypeLabel: formatSiteType(quiz.siteType),
+    clientTgUsername: quiz.clientTgUsername,
+    expectedQuestionCount: quiz.expectedQuestionCount,
+    price: quiz.price,
+    codeLabel: quiz.codeLabel,
+    reviewBlocks: quiz.reviewBlocks,
+    deviceCount: quiz.deviceCount || 0,
+    lastSeenAt: quiz.lastSeenAt || null,
+    devices: Array.isArray(quiz.devices) ? quiz.devices : [],
+    creatorSnapshot: quiz.creatorSnapshot || {},
+  };
+}
+
+function buildCreatorSnapshot(req, rawProfile) {
+  const clientProfile = sanitizeCreatorClientProfile(rawProfile);
+  const requestSnapshot = sanitizeCreatorRequestSnapshot(req);
+  const fingerprintPayload = {
+    browserId: clientProfile.browserId || '',
+    requestIp: requestSnapshot.ip || '',
+    requestUserAgent: requestSnapshot.userAgent || '',
+    language: clientProfile.language || '',
+    timezone: clientProfile.timezone || '',
+    platform: clientProfile.platform || clientProfile.userAgentData?.platform || requestSnapshot.secChUaPlatform || '',
+    screen: clientProfile.screen || null,
+    viewport: clientProfile.viewport || null,
+    deviceMemory: clientProfile.deviceMemory || null,
+    hardwareConcurrency: clientProfile.hardwareConcurrency || null,
+    maxTouchPoints: clientProfile.maxTouchPoints || 0,
+  };
+
+  return {
+    capturedAt: Date.now(),
+    browserId: clientProfile.browserId || null,
+    fingerprint: hashValue(JSON.stringify(fingerprintPayload)),
+    fingerprintVersion: 1,
+    deviceClass: clientProfile.deviceClass || inferDeviceClass(clientProfile, requestSnapshot),
+    creationSource: 'admin-form',
+    request: requestSnapshot,
+    client: clientProfile,
+  };
+}
+
+function sanitizeCreatorRequestSnapshot(req) {
+  return {
+    ip: trimString(getClientIp(req), 120),
+    forwardedFor: trimString(req.get('x-forwarded-for'), 300),
+    realIp: trimString(req.get('x-real-ip'), 120),
+    cfConnectingIp: trimString(req.get('cf-connecting-ip'), 120),
+    host: trimString(req.get('host'), 160),
+    origin: trimString(req.get('origin'), 300),
+    referer: trimString(req.get('referer'), 400),
+    userAgent: trimString(req.get('user-agent'), 600),
+    acceptLanguage: trimString(req.get('accept-language'), 300),
+    secChUa: trimString(req.get('sec-ch-ua'), 300),
+    secChUaMobile: trimString(req.get('sec-ch-ua-mobile'), 40),
+    secChUaPlatform: trimString(req.get('sec-ch-ua-platform'), 120),
+    secChUaPlatformVersion: trimString(req.get('sec-ch-ua-platform-version'), 120),
+    secChUaArch: trimString(req.get('sec-ch-ua-arch'), 120),
+    secChUaBitness: trimString(req.get('sec-ch-ua-bitness'), 120),
+    secChUaModel: trimString(req.get('sec-ch-ua-model'), 160),
+    secChUaFullVersionList: trimString(req.get('sec-ch-ua-full-version-list'), 400),
+  };
+}
+
+function sanitizeCreatorClientProfile(rawProfile) {
+  if (!rawProfile || typeof rawProfile !== 'object' || Array.isArray(rawProfile)) {
+    return {};
+  }
+
+  return {
+    browserId: trimString(rawProfile.browserId, 120),
+    capturedAt: toSafeInteger(rawProfile.capturedAt),
+    pageUrl: trimString(rawProfile.pageUrl, 400),
+    referrer: trimString(rawProfile.referrer, 400),
+    language: trimString(rawProfile.language, 80),
+    languages: sanitizeStringArray(rawProfile.languages, 12, 80),
+    timezone: trimString(rawProfile.timezone, 120),
+    locale: trimString(rawProfile.locale, 120),
+    platform: trimString(rawProfile.platform, 120),
+    vendor: trimString(rawProfile.vendor, 120),
+    userAgent: trimString(rawProfile.userAgent, 600),
+    cookieEnabled: typeof rawProfile.cookieEnabled === 'boolean' ? rawProfile.cookieEnabled : null,
+    doNotTrack: trimString(rawProfile.doNotTrack, 40),
+    webdriver: typeof rawProfile.webdriver === 'boolean' ? rawProfile.webdriver : null,
+    hardwareConcurrency: toSafeNumber(rawProfile.hardwareConcurrency, 0, 256),
+    deviceMemory: toSafeNumber(rawProfile.deviceMemory, 0, 2048),
+    maxTouchPoints: toSafeNumber(rawProfile.maxTouchPoints, 0, 32),
+    deviceClass: trimString(rawProfile.deviceClass, 40),
+    screen: sanitizeSizeInfo(rawProfile.screen),
+    viewport: sanitizeSizeInfo(rawProfile.viewport, true),
+    connection: sanitizeConnectionInfo(rawProfile.connection),
+    userAgentData: sanitizeUserAgentData(rawProfile.userAgentData),
+  };
+}
+
+function sanitizeUserAgentData(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  return {
+    mobile: typeof value.mobile === 'boolean' ? value.mobile : null,
+    platform: trimString(value.platform, 120),
+    architecture: trimString(value.architecture, 120),
+    bitness: trimString(value.bitness, 40),
+    model: trimString(value.model, 160),
+    platformVersion: trimString(value.platformVersion, 120),
+    uaFullVersion: trimString(value.uaFullVersion, 120),
+    wow64: typeof value.wow64 === 'boolean' ? value.wow64 : null,
+    brands: Array.isArray(value.brands)
+      ? value.brands.slice(0, 10).map((brand) => ({
+        brand: trimString(brand?.brand, 120),
+        version: trimString(brand?.version, 80),
+      }))
+      : [],
+    fullVersionList: Array.isArray(value.fullVersionList)
+      ? value.fullVersionList.slice(0, 10).map((brand) => ({
+        brand: trimString(brand?.brand, 120),
+        version: trimString(brand?.version, 80),
+      }))
+      : [],
+  };
+}
+
+function sanitizeConnectionInfo(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  return {
+    effectiveType: trimString(value.effectiveType, 40),
+    downlink: toSafeNumber(value.downlink, 0, 100000),
+    rtt: toSafeNumber(value.rtt, 0, 100000),
+    saveData: typeof value.saveData === 'boolean' ? value.saveData : null,
+  };
+}
+
+function sanitizeSizeInfo(value, withRatio = false) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const sanitized = {
+    width: toSafeInteger(value.width, 0, 20000),
+    height: toSafeInteger(value.height, 0, 20000),
+    availWidth: toSafeInteger(value.availWidth, 0, 20000),
+    availHeight: toSafeInteger(value.availHeight, 0, 20000),
+    colorDepth: toSafeInteger(value.colorDepth, 0, 128),
+    pixelDepth: toSafeInteger(value.pixelDepth, 0, 128),
+  };
+
+  if (withRatio) {
+    sanitized.pixelRatio = toSafeNumber(value.pixelRatio, 0.1, 20);
+  }
+
+  return sanitized;
+}
+
+function inferDeviceClass(clientProfile, requestSnapshot) {
+  const explicit = trimString(clientProfile?.deviceClass, 40);
+  if (explicit) {
+    return explicit;
+  }
+
+  if (clientProfile?.userAgentData?.mobile || Number(clientProfile?.maxTouchPoints || 0) > 1) {
+    const viewportWidth = Number(clientProfile?.viewport?.width || 0);
+    return viewportWidth && viewportWidth <= 900 ? 'mobile' : 'tablet';
+  }
+
+  const ua = `${clientProfile?.userAgent || ''} ${requestSnapshot?.userAgent || ''}`.toLowerCase();
+  if (/ipad|tablet/i.test(ua)) {
+    return 'tablet';
+  }
+
+  if (/mobile|android|iphone/i.test(ua)) {
+    return 'mobile';
+  }
+
+  return 'desktop';
+}
+
+function sanitizeStringArray(value, maxItems, maxLength) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .slice(0, maxItems)
+    .map((item) => trimString(item, maxLength))
+    .filter(Boolean);
+}
+
+function trimString(value, maxLength) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.slice(0, maxLength);
+}
+
+function toSafeInteger(value, min = 0, max = Number.MAX_SAFE_INTEGER) {
+  const numericValue = Number(value);
+  if (!Number.isInteger(numericValue) || numericValue < min || numericValue > max) {
+    return null;
+  }
+
+  return numericValue;
+}
+
+function toSafeNumber(value, min, max) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue < min || numericValue > max) {
+    return null;
+  }
+
+  return Math.round(numericValue * 100) / 100;
 }

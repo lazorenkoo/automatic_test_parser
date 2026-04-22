@@ -74,6 +74,7 @@ try {
   const code = codesPayload.codes[0];
   const fileBytes = await fs.readFile(copiedPath);
   const parseForm = new FormData();
+  parseForm.append('clientTitle', 'Smoke Test Quiz');
   parseForm.append('sourceFile', new File([fileBytes], path.basename(copiedPath)));
   parseForm.append('answerIndex', '1');
   parseForm.append('optionCount', '4');
@@ -97,11 +98,41 @@ try {
     body: JSON.stringify({
       draftToken: parsePayload.draftToken,
       accessCode: code,
+      creatorProfile: {
+        browserId: 'smoke-browser-1',
+        language: 'en-US',
+        timezone: 'Europe/Warsaw',
+        platform: 'Win32',
+        userAgent: 'SmokeTestBrowser/1.0',
+        hardwareConcurrency: 8,
+        deviceMemory: 16,
+        maxTouchPoints: 0,
+        screen: { width: 1920, height: 1080, colorDepth: 24, pixelDepth: 24 },
+        viewport: { width: 1440, height: 900, pixelRatio: 1.25 },
+        connection: { effectiveType: '4g', downlink: 100, rtt: 20, saveData: false },
+        userAgentData: {
+          mobile: false,
+          platform: 'Windows',
+          architecture: 'x86',
+          bitness: '64',
+          brands: [{ brand: 'SmokeBrowser', version: '1' }],
+        },
+      },
     }),
   });
   const quizPayload = await quizResponse.json();
   if (!quizResponse.ok) {
     throw new Error(`finalize failed: ${JSON.stringify(quizPayload)}`);
+  }
+
+  const adminQuizResponse = await fetch(`http://localhost:${port}/api/admin/quizzes/${quizPayload.id}`, {
+    headers: {
+      'X-Admin-Secret': adminSecret,
+    },
+  });
+  const adminQuizPayload = await adminQuizResponse.json();
+  if (!adminQuizResponse.ok) {
+    throw new Error(`admin quiz failed: ${JSON.stringify(adminQuizPayload)}`);
   }
 
   const publicResponse = await fetch(quizPayload.quizUrl);
@@ -113,6 +144,7 @@ try {
     extension: fakeExtension,
     parsePayload,
     quizPayload,
+    adminQuizPayload,
     publicStatus: publicResponse.status,
     jsonStatus: jsonResponse.status,
     downloadStatus: downloadResponse.status,

@@ -18,6 +18,10 @@ export function hashCode(value) {
   return crypto.createHash('sha256').update(normalizeCode(value)).digest('hex');
 }
 
+export function hashValue(value) {
+  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
+}
+
 export function generateAccessCode() {
   return `${randomFromAlphabet(CODE_ALPHABET, 4)}-${randomFromAlphabet(CODE_ALPHABET, 4)}-${randomFromAlphabet(CODE_ALPHABET, 4)}`;
 }
