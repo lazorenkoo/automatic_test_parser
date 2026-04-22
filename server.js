@@ -26,7 +26,7 @@ import {
   SUPPORTED_ANSWER_EXTENSIONS,
   SUPPORTED_UPLOAD_EXTENSIONS,
 } from './src/parser.js';
-import { notifyAdminAboutQuizReport, startTelegramBot } from './src/telegram-bot.js';
+import { startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
 import {
   buildAbsoluteUrl,
@@ -317,8 +317,6 @@ app.post('/api/quizzes/:slug/report', (req, res, next) => {
     if (!report) {
       return res.status(400).json({ error: 'ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ ÑÑ‚Ð²Ð¾Ñ€Ð¸Ñ‚Ð¸ Ð·Ð²ÐµÑ€Ð½ÐµÐ½Ð½Ñ.' });
     }
-
-    notifyAdminAboutQuizReport(report).catch(() => {});
 
     return res.status(201).json({
       ok: true,

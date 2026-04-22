@@ -381,43 +381,48 @@ export function startTelegramBot() {
       return;
     }
 
-    const parsed = parseDeleteArgs(match?.[1]);
-    if (!parsed.ok) {
-      await bot.sendMessage(msg.chat.id, parsed.error);
-      return;
-    }
-
-    if (parsed.mode === 'single') {
-      const deletedQuiz = deleteQuizById(parsed.id);
-      if (!deletedQuiz) {
-        await bot.sendMessage(msg.chat.id, `Site with id ${parsed.id} not found.`);
+    try {
+      const parsed = parseDeleteArgs(match?.[1]);
+      if (!parsed.ok) {
+        await bot.sendMessage(msg.chat.id, parsed.error);
         return;
       }
 
-      await bot.sendMessage(msg.chat.id, `Site deleted:\n${deletedQuiz.id}. ${deletedQuiz.title}`);
-      return;
-    }
+      if (parsed.mode === 'single') {
+        const deletedQuiz = deleteQuizById(parsed.id);
+        if (!deletedQuiz) {
+          await bot.sendMessage(msg.chat.id, `Site with id ${parsed.id} not found.`);
+          return;
+        }
 
-    const candidates = listQuizzesForAdmin().filter((quiz) => matchesQuizFilters(quiz, parsed.filters));
-    if (!candidates.length) {
-      await bot.sendMessage(msg.chat.id, 'Nothing matched these filters.');
-      return;
-    }
-
-    const deletedLines = [];
-    for (const quiz of candidates) {
-      const deletedQuiz = deleteQuizById(quiz.id);
-      if (deletedQuiz) {
-        deletedLines.push(`${deletedQuiz.id}. ${deletedQuiz.title}`);
+        await bot.sendMessage(msg.chat.id, `Site deleted:\n${deletedQuiz.id}. ${deletedQuiz.title}`);
+        return;
       }
-    }
 
-    await bot.sendMessage(msg.chat.id, [
-      `Deleted sites: ${deletedLines.length}`,
-      '',
-      ...deletedLines.slice(0, 30),
-      deletedLines.length > 30 ? '...' : null,
-    ].filter(Boolean).join('\n'));
+      const candidates = listQuizzesForAdmin().filter((quiz) => matchesQuizFilters(quiz, parsed.filters));
+      if (!candidates.length) {
+        await bot.sendMessage(msg.chat.id, 'Nothing matched these filters.');
+        return;
+      }
+
+      const deletedLines = [];
+      for (const quiz of candidates) {
+        const deletedQuiz = deleteQuizById(quiz.id);
+        if (deletedQuiz) {
+          deletedLines.push(`${deletedQuiz.id}. ${deletedQuiz.title}`);
+        }
+      }
+
+      await bot.sendMessage(msg.chat.id, [
+        `Deleted sites: ${deletedLines.length}`,
+        '',
+        ...deletedLines.slice(0, 30),
+        deletedLines.length > 30 ? '...' : null,
+      ].filter(Boolean).join('\n'));
+    } catch (error) {
+      console.error('Telegram /delete failed:', error);
+      await bot.sendMessage(msg.chat.id, 'Delete failed. Check server logs.');
+    }
   });
 
   bot.on('polling_error', (error) => {

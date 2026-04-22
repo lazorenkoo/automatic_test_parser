@@ -443,6 +443,11 @@ const deleteQuizDevicesByQuizIdStmt = db.prepare(`
   WHERE quiz_id = ?
 `);
 
+const deleteQuizReportsByQuizIdStmt = db.prepare(`
+  DELETE FROM quiz_reports
+  WHERE quiz_id = ?
+`);
+
 const deleteQuizByIdStmt = db.prepare(`
   DELETE FROM quizzes
   WHERE id = ?
@@ -961,6 +966,7 @@ export function deleteQuizById(quizId) {
   }
 
   const tx = db.transaction(() => {
+    deleteQuizReportsByQuizIdStmt.run(numericQuizId);
     deleteQuizDevicesByQuizIdStmt.run(numericQuizId);
     unlinkCodeFromQuizStmt.run(numericQuizId);
     deleteQuizByIdStmt.run(numericQuizId);
