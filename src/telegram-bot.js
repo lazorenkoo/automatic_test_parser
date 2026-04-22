@@ -287,7 +287,7 @@ export function startTelegramBot() {
       return;
     }
 
-    const report = getReportByTarget(parsed.target);
+    const report = getReportByTargetForFile(parsed.target, parsed.kind);
     if (!report) {
       await bot.sendMessage(msg.chat.id, `Report ${parsed.target} not found.`);
       return;
@@ -655,7 +655,7 @@ function parseReportTarget(rawValue) {
   }
 
   if (/^\d+$/.test(value)) {
-    return { ok: true, target: `q-${value}` };
+    return { ok: true, target: value };
   }
 
   if (/^[qu]-\d+$/.test(value)) {
@@ -919,7 +919,7 @@ function formatReportsList(limit) {
   return [
     `Latest reports: ${reports.length}`,
     '',
-    ...reports.map((report) => `${report.id} ${report.reportType === 'upload' ? 'main' : 'site'} ${truncate(report.note || 'no text', 120)}`),
+    ...reports.map((report) => `${report.id}. ${report.reportType === 'upload' ? 'main' : 'site'} | ${truncate(report.note || 'no text', 120)}`),
   ].join('\n');
 }
 
@@ -962,8 +962,46 @@ function getReportByTarget(target) {
     return getUploadReportById(normalized.slice(2));
   }
 
-  const numericId = normalized.startsWith('q-') ? normalized.slice(2) : normalized;
-  return getQuizReportById(numericId);
+  if (/^q-\d+$/.test(normalized)) {
+    return getQuizReportById(normalized.slice(2));
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return getUploadReportById(normalized) || getQuizReportById(normalized);
+  }
+
+  return null;
+}
+
+function getReportByTargetForFile(target, kind) {
+  const normalized = String(target || '').trim().toLowerCase();
+  const hasRequestedFile = (report) => {
+    if (!report) {
+      return false;
+    }
+
+    return kind === 'answer' ? Boolean(report.answerUploadPath) : Boolean(report.sourceUploadPath);
+  };
+
+  if (/^u-\d+$/.test(normalized) || /^q-\d+$/.test(normalized)) {
+    return getReportByTarget(normalized);
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    const uploadReport = getUploadReportById(normalized);
+    const quizReport = getQuizReportById(normalized);
+
+    if (hasRequestedFile(uploadReport)) {
+      return uploadReport;
+    }
+    if (hasRequestedFile(quizReport)) {
+      return quizReport;
+    }
+
+    return uploadReport || quizReport || null;
+  }
+
+  return null;
 }
 
 function formatReportHandle(report) {
