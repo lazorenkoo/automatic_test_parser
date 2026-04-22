@@ -14,6 +14,7 @@ const answerModeSingleInput = document.getElementById('answerModeSingle');
 const answerModeFileInput = document.getElementById('answerModeFile');
 const singleAnswerField = document.getElementById('singleAnswerField');
 const answerFileField = document.getElementById('answerFileField');
+const reportIssueBtn = document.getElementById('reportIssueBtn');
 
 let currentDraftToken = '';
 let currentDraftPayload = null;
@@ -26,6 +27,7 @@ optionCountInput.addEventListener('input', syncAnswerIndexOptions);
 useAllQuestionsInput.addEventListener('change', syncQuestionLimitMode);
 answerModeSingleInput.addEventListener('change', syncAnswerMode);
 answerModeFileInput.addEventListener('change', syncAnswerMode);
+reportIssueBtn?.addEventListener('click', reportCurrentUploadIssue);
 
 quizForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -96,6 +98,63 @@ quizForm.addEventListener('submit', async (event) => {
 function setStatus(kind, message) {
   statusBox.className = `status ${kind}`;
   statusBox.textContent = message;
+}
+
+async function reportCurrentUploadIssue() {
+  const sourceFile = sourceFileInput.files?.[0] || null;
+  const answerFile = answerFileInput.files?.[0] || null;
+  const title = String(clientTitleInput?.value || '').trim();
+
+  if (!sourceFile && !answerFile) {
+    setStatus('error', 'Спочатку виберіть файл, який треба відправити на перевірку.');
+    return;
+  }
+
+  const note = window.prompt('Опишіть, що не так із файлом або чому тест не зібрався.', '') || '';
+  reportIssueBtn.disabled = true;
+  setStatus('loading', 'Надсилаю файл адміністратору на перевірку.');
+
+  try {
+    const formData = new FormData();
+    if (title) {
+      formData.append('title', title);
+    }
+    if (note.trim()) {
+      formData.append('note', note.trim());
+    }
+    if (sourceFile) {
+      formData.append('sourceFile', sourceFile);
+    }
+    if (answerFile) {
+      formData.append('answerFile', answerFile);
+    }
+
+    const creatorProfile = await buildCreatorProfile();
+    formData.append('pageUrl', window.location.href);
+    formData.append('reporterProfileJson', JSON.stringify(creatorProfile));
+
+    const response = await fetch('/api/reports/upload', {
+      method: 'POST',
+      body: formData,
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || 'Не вдалося відправити репорт.');
+    }
+
+    setStatus('success', 'Репорт з файлом відправлено. Тепер його можна перевірити через Telegram-команди.');
+    resultBox.classList.remove('hidden');
+    resultBox.innerHTML = `
+      <h3>${escapeHtml(title || sourceFile?.name || answerFile?.name || 'Upload report')}</h3>
+      <p>Репорт створено: <strong>${escapeHtml(String(payload.reportType || 'upload'))} ${escapeHtml(String(payload.reportId || ''))}</strong></p>
+      <p>Файл збережено для окремого аналізу.</p>
+    `;
+  } catch (error) {
+    setStatus('error', error.message || 'Не вдалося відправити репорт.');
+  } finally {
+    reportIssueBtn.disabled = false;
+  }
 }
 
 function renderDraftResult(payload) {

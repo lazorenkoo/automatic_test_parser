@@ -88,6 +88,11 @@ body{
   background:#fffaf3;
   font-weight:600;
 }
+.actions-row{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
 .choice-row input{
   width:18px;
   height:18px;
@@ -240,6 +245,9 @@ body{
     min-width:0;
     padding:14px 16px;
     border-radius:14px;
+  }
+  .actions-row{
+    grid-template-columns:1fr;
   }
   .status,
   .result-box,

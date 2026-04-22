@@ -151,6 +151,30 @@ try {
     throw new Error(`report failed: ${JSON.stringify(reportPayload)}`);
   }
 
+  const uploadReportForm = new FormData();
+  uploadReportForm.append('title', 'Smoke Upload Report');
+  uploadReportForm.append('note', 'Parse failed before quiz creation');
+  uploadReportForm.append('sourceFile', new File([fileBytes], path.basename(copiedPath)));
+  uploadReportForm.append('reporterProfileJson', JSON.stringify({
+    browserId: 'smoke-browser-1',
+    language: 'en-US',
+    timezone: 'Europe/Warsaw',
+    platform: 'Win32',
+    userAgent: 'SmokeTestBrowser/1.0',
+    deviceClass: 'desktop',
+    pageUrl: `http://localhost:${port}/`,
+  }));
+  uploadReportForm.append('pageUrl', `http://localhost:${port}/`);
+
+  const uploadReportResponse = await fetch(`http://localhost:${port}/api/reports/upload`, {
+    method: 'POST',
+    body: uploadReportForm,
+  });
+  const uploadReportPayload = await uploadReportResponse.json();
+  if (!uploadReportResponse.ok) {
+    throw new Error(`upload report failed: ${JSON.stringify(uploadReportPayload)}`);
+  }
+
   const adminReportsResponse = await fetch(`http://localhost:${port}/api/admin/reports?limit=5`, {
     headers: {
       'X-Admin-Secret': adminSecret,
@@ -171,6 +195,16 @@ try {
     throw new Error(`admin report failed: ${JSON.stringify(adminReportPayload)}`);
   }
 
+  const adminUploadReportResponse = await fetch(`http://localhost:${port}/api/admin/reports/u-${uploadReportPayload.reportId}`, {
+    headers: {
+      'X-Admin-Secret': adminSecret,
+    },
+  });
+  const adminUploadReportPayload = await adminUploadReportResponse.json();
+  if (!adminUploadReportResponse.ok) {
+    throw new Error(`admin upload report failed: ${JSON.stringify(adminUploadReportPayload)}`);
+  }
+
   const publicResponse = await fetch(quizPayload.quizUrl);
   const jsonResponse = await fetch(quizPayload.apiUrl);
   const downloadResponse = await fetch(quizPayload.downloadUrl);
@@ -182,8 +216,10 @@ try {
     quizPayload,
     adminQuizPayload,
     reportPayload,
+    uploadReportPayload,
     adminReportsPayload,
     adminReportPayload,
+    adminUploadReportPayload,
     publicStatus: publicResponse.status,
     jsonStatus: jsonResponse.status,
     downloadStatus: downloadResponse.status,

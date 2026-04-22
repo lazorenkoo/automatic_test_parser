@@ -7,7 +7,9 @@ import {
   getDbMeta,
   getQuizById,
   getQuizReportById,
+  getUploadReportById,
   listQuizReports,
+  listUploadReports,
   listQuizzesForAdmin,
   revokeAccessCode,
   setQuizBanStatusById,
@@ -42,8 +44,8 @@ export function startTelegramBot() {
     '/search <text>',
     '/site <id>',
     '/reports [limit]',
-    '/report <id>',
-    '/reportfile <id> <source|answer>',
+    '/report <id|q-12|u-7>',
+    '/reportfile <id|q-12|u-7> <source|answer>',
     '/money',
     '/ban <id> or /ban <type> <N>',
     '/unban <id>',
@@ -259,15 +261,15 @@ export function startTelegramBot() {
       return;
     }
 
-    const numericId = Number(String(match?.[1] || '').trim());
-    if (!Number.isInteger(numericId) || numericId < 1) {
-      await bot.sendMessage(msg.chat.id, 'Format: /report <id>');
+    const parsed = parseReportTarget(String(match?.[1] || '').trim());
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
       return;
     }
 
-    const report = getQuizReportById(numericId);
+    const report = getReportByTarget(parsed.target);
     if (!report) {
-      await bot.sendMessage(msg.chat.id, `Report with id ${numericId} not found.`);
+      await bot.sendMessage(msg.chat.id, `Report ${parsed.target} not found.`);
       return;
     }
 
@@ -285,9 +287,9 @@ export function startTelegramBot() {
       return;
     }
 
-    const report = getQuizReportById(parsed.id);
+    const report = getReportByTarget(parsed.target);
     if (!report) {
-      await bot.sendMessage(msg.chat.id, `Report with id ${parsed.id} not found.`);
+      await bot.sendMessage(msg.chat.id, `Report ${parsed.target} not found.`);
       return;
     }
 
@@ -295,12 +297,12 @@ export function startTelegramBot() {
     const fileName = parsed.kind === 'source' ? report.sourceUploadName : report.answerUploadName;
 
     if (!filePath) {
-      await bot.sendMessage(msg.chat.id, `No ${parsed.kind} file saved for report ${parsed.id}.`);
+      await bot.sendMessage(msg.chat.id, `No ${parsed.kind} file saved for report ${parsed.target}.`);
       return;
     }
 
     await bot.sendDocument(msg.chat.id, filePath, {
-      caption: `Report ${report.id} | ${parsed.kind} | quiz ${report.quizId}`,
+      caption: formatReportFileCaption(report, parsed.kind),
     }, {
       filename: fileName || undefined,
     });
@@ -630,19 +632,37 @@ function parseSearchArgs(rawValue) {
 function parseReportFileArgs(rawValue) {
   const parts = tokenizeArgs(rawValue);
   if (parts.length < 2) {
-    return { ok: false, error: 'Format: /reportfile <id> <source|answer>' };
+    return { ok: false, error: 'Format: /reportfile <id|q-12|u-7> <source|answer>' };
   }
 
-  const id = Number(parts[0]);
+  const target = String(parts[0] || '').trim();
   const kind = String(parts[1] || '').trim().toLowerCase();
-  if (!Number.isInteger(id) || id < 1) {
-    return { ok: false, error: 'Report id must be a positive integer.' };
+  const parsedTarget = parseReportTarget(target);
+  if (!parsedTarget.ok) {
+    return parsedTarget;
   }
   if (!['source', 'answer'].includes(kind)) {
     return { ok: false, error: 'File type must be source or answer.' };
   }
 
-  return { ok: true, id, kind };
+  return { ok: true, target: parsedTarget.target, kind };
+}
+
+function parseReportTarget(rawValue) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  if (!value) {
+    return { ok: false, error: 'Format: /report <id|q-12|u-7>' };
+  }
+
+  if (/^\d+$/.test(value)) {
+    return { ok: true, target: `q-${value}` };
+  }
+
+  if (/^[qu]-\d+$/.test(value)) {
+    return { ok: true, target: value };
+  }
+
+  return { ok: false, error: 'Use report id like 12, q-12 or u-7.' };
 }
 
 function parseBanArgs(rawValue) {
@@ -885,7 +905,13 @@ function formatSiteDetails(quiz) {
 }
 
 function formatReportsList(limit) {
-  const reports = listQuizReports(limit);
+  const reports = [
+    ...listQuizReports(limit),
+    ...listUploadReports(limit),
+  ]
+    .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))
+    .slice(0, limit);
+
   if (!reports.length) {
     return 'No reports yet.';
   }
@@ -899,7 +925,7 @@ function formatReportsList(limit) {
         report.sourceUploadPath ? 'source' : null,
         report.answerUploadPath ? 'answer' : null,
       ].filter(Boolean).join(', ') || 'no files';
-      return `${report.id}. quiz ${report.quizId} | ${report.quizTitle || '-'} | ${formatDateTime(report.createdAt)} | ${files}${note}`;
+      return `${formatReportHandle(report)} | ${formatReportLabel(report)} | ${formatDateTime(report.createdAt)} | ${files}${note}`;
     }),
   ].join('\n');
 }
@@ -916,9 +942,10 @@ function formatReportDetails(report) {
     : {};
 
   return [
-    `Report ${report.id}`,
-    `Quiz ID: ${report.quizId}`,
-    `Title: ${report.quizTitle || '-'}`,
+    `Report ${formatReportHandle(report)}`,
+    `Type: ${report.reportType || 'quiz'}`,
+    `Quiz ID: ${report.quizId || '-'}`,
+    `Title: ${report.quizTitle || report.title || '-'}`,
     `Slug: ${report.quizSlug || '-'}`,
     `Created: ${formatDateTime(report.createdAt)}`,
     `Question: ${snapshot.currentQuestion || '-'}`,
@@ -931,9 +958,39 @@ function formatReportDetails(report) {
     `Source file: ${report.sourceUploadName || '-'}`,
     `Answer file: ${report.answerUploadName || '-'}`,
     '',
-    report.sourceUploadPath ? `Download source: /reportfile ${report.id} source` : null,
-    report.answerUploadPath ? `Download answer: /reportfile ${report.id} answer` : null,
+    report.sourceUploadPath ? `Download source: /reportfile ${formatReportHandle(report)} source` : null,
+    report.answerUploadPath ? `Download answer: /reportfile ${formatReportHandle(report)} answer` : null,
   ].filter(Boolean).join('\n');
+}
+
+function getReportByTarget(target) {
+  const normalized = String(target || '').trim().toLowerCase();
+  if (/^u-\d+$/.test(normalized)) {
+    return getUploadReportById(normalized.slice(2));
+  }
+
+  const numericId = normalized.startsWith('q-') ? normalized.slice(2) : normalized;
+  return getQuizReportById(numericId);
+}
+
+function formatReportHandle(report) {
+  return report.reportType === 'upload' ? `u-${report.id}` : `q-${report.id}`;
+}
+
+function formatReportLabel(report) {
+  if (report.reportType === 'upload') {
+    return `upload | ${report.title || report.sourceUploadName || '-'}`;
+  }
+
+  return `quiz ${report.quizId} | ${report.quizTitle || '-'}`;
+}
+
+function formatReportFileCaption(report, kind) {
+  if (report.reportType === 'upload') {
+    return `Report ${formatReportHandle(report)} | ${kind} | upload`;
+  }
+
+  return `Report ${formatReportHandle(report)} | ${kind} | quiz ${report.quizId}`;
 }
 
 function formatCreatorDetails(snapshot) {

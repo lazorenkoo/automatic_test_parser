@@ -5,6 +5,7 @@ import express from 'express';
 import multer from 'multer';
 import archiver from 'archiver';
 import {
+  createUploadReport,
   createQuizReport,
   createAccessCodes,
   createQuizDraft,
@@ -13,8 +14,10 @@ import {
   getDbMeta,
   getQuizById,
   getQuizReportById,
+  getUploadReportById,
   getQuizBySlug,
   listQuizReports,
+  listUploadReports,
   recordQuizVisit,
   releaseReservation,
   reserveAccessCode,
@@ -328,6 +331,40 @@ app.post('/api/quizzes/:slug/report', (req, res, next) => {
   }
 });
 
+app.post('/api/reports/upload', upload.fields([
+  { name: 'sourceFile', maxCount: 1 },
+  { name: 'answerFile', maxCount: 1 },
+]), (req, res, next) => {
+  try {
+    const sourceFile = req.files?.sourceFile?.[0] || null;
+    const answerFile = req.files?.answerFile?.[0] || null;
+
+    if (!sourceFile && !answerFile) {
+      return res.status(400).json({ error: 'Please attach at least one file.' });
+    }
+
+    const savedUploads = saveUploadedQuizFiles({ sourceFile, answerFile });
+    const report = createUploadReport({
+      title: sanitizeText(req.body.title || ''),
+      note: sanitizeText(req.body.note || ''),
+      sourceUploadPath: savedUploads.sourceUploadPath,
+      sourceUploadName: savedUploads.sourceUploadName,
+      answerUploadPath: savedUploads.answerUploadPath,
+      answerUploadName: savedUploads.answerUploadName,
+      reporterSnapshot: buildReportSnapshot(req, req.body),
+    });
+
+    return res.status(201).json({
+      ok: true,
+      reportType: 'upload',
+      reportId: report.id,
+      createdAt: report.createdAt,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.get('/api/download/:slug', (req, res) => {
   const quiz = getQuizBySlug(req.params.slug);
   if (!quiz) {
@@ -383,13 +420,17 @@ app.get('/api/admin/quizzes/:id', requireAdminSecret, (req, res) => {
 
 app.get('/api/admin/reports', requireAdminSecret, (req, res) => {
   const limit = Math.max(1, Math.min(100, Number(req.query.limit || 30)));
+  const quizReports = listQuizReports(limit);
+  const uploadReports = listUploadReports(limit);
   return res.json({
-    reports: listQuizReports(limit),
+    reports: [...quizReports, ...uploadReports]
+      .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))
+      .slice(0, limit),
   });
 });
 
 app.get('/api/admin/reports/:id', requireAdminSecret, (req, res) => {
-  const report = getQuizReportById(req.params.id);
+  const report = getAdminReportByParam(req.params.id);
   if (!report) {
     return res.status(404).json({ error: 'Report not found.' });
   }
@@ -398,7 +439,7 @@ app.get('/api/admin/reports/:id', requireAdminSecret, (req, res) => {
 });
 
 app.get('/api/admin/reports/:id/files/:kind', requireAdminSecret, (req, res) => {
-  const report = getQuizReportById(req.params.id);
+  const report = getAdminReportByParam(req.params.id);
   if (!report) {
     return res.status(404).json({ error: 'Report not found.' });
   }
@@ -619,6 +660,7 @@ function sanitizeStoredUploadName(value) {
 
 function buildReportSnapshot(req, body) {
   const currentQuestion = Number(body?.currentQuestion);
+  const clientProfile = sanitizeReportClientProfile(body?.reporterProfileJson);
   return {
     createdAt: Date.now(),
     note: sanitizeText(body?.note || ''),
@@ -632,6 +674,7 @@ function buildReportSnapshot(req, body) {
     device: {
       deviceId: getCookieValue(req, 'pdmu_device_id') || null,
     },
+    client: clientProfile,
   };
 }
 
@@ -656,6 +699,19 @@ function resolveReportFileRef(report, kind) {
   }
 
   return null;
+}
+
+function getAdminReportByParam(rawId) {
+  const text = String(rawId || '').trim();
+  if (/^u-\d+$/i.test(text)) {
+    return getUploadReportById(text.replace(/^u-/i, ''));
+  }
+
+  if (/^q-\d+$/i.test(text)) {
+    return getQuizReportById(text.replace(/^q-/i, ''));
+  }
+
+  return getQuizReportById(text) || getUploadReportById(text);
 }
 
 function serializeAdminQuiz(quiz) {
@@ -892,4 +948,29 @@ function toSafeNumber(value, min, max) {
   }
 
   return Math.round(numericValue * 100) / 100;
+}
+
+function sanitizeReportClientProfile(rawValue) {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    return {
+      browserId: trimString(parsed.browserId, 120),
+      language: trimString(parsed.language, 80),
+      timezone: trimString(parsed.timezone, 120),
+      platform: trimString(parsed.platform, 120),
+      userAgent: trimString(parsed.userAgent, 600),
+      deviceClass: trimString(parsed.deviceClass, 40),
+      pageUrl: trimString(parsed.pageUrl, 400),
+    };
+  } catch {
+    return null;
+  }
 }

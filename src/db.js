@@ -104,6 +104,18 @@ db.exec(`
     FOREIGN KEY(quiz_id) REFERENCES quizzes(id)
   );
 
+  CREATE TABLE IF NOT EXISTS upload_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    note TEXT,
+    source_upload_path TEXT,
+    source_upload_name TEXT,
+    answer_upload_path TEXT,
+    answer_upload_name TEXT,
+    reporter_snapshot_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quizzes_slug ON quizzes(slug);
   CREATE INDEX IF NOT EXISTS idx_access_codes_reservation_token ON access_codes(reservation_token);
   CREATE INDEX IF NOT EXISTS idx_quiz_drafts_token ON quiz_drafts(draft_token);
@@ -111,6 +123,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_quiz_devices_quiz_id ON quiz_devices(quiz_id);
   CREATE INDEX IF NOT EXISTS idx_quiz_reports_quiz_id ON quiz_reports(quiz_id);
   CREATE INDEX IF NOT EXISTS idx_quiz_reports_created_at ON quiz_reports(created_at);
+  CREATE INDEX IF NOT EXISTS idx_upload_reports_created_at ON upload_reports(created_at);
 `);
 
 ensureColumn('access_codes', 'site_type', 'TEXT');
@@ -505,6 +518,50 @@ const getQuizReportByIdStmt = db.prepare(`
   FROM quiz_reports r
   INNER JOIN quizzes q ON q.id = r.quiz_id
   WHERE r.id = ?
+`);
+
+const insertUploadReportStmt = db.prepare(`
+  INSERT INTO upload_reports (
+    title,
+    note,
+    source_upload_path,
+    source_upload_name,
+    answer_upload_path,
+    answer_upload_name,
+    reporter_snapshot_json,
+    created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const listUploadReportsStmt = db.prepare(`
+  SELECT
+    id,
+    title,
+    note,
+    source_upload_path AS sourceUploadPath,
+    source_upload_name AS sourceUploadName,
+    answer_upload_path AS answerUploadPath,
+    answer_upload_name AS answerUploadName,
+    reporter_snapshot_json AS reporterSnapshotJson,
+    created_at AS createdAt
+  FROM upload_reports
+  ORDER BY created_at DESC, id DESC
+  LIMIT ?
+`);
+
+const getUploadReportByIdStmt = db.prepare(`
+  SELECT
+    id,
+    title,
+    note,
+    source_upload_path AS sourceUploadPath,
+    source_upload_name AS sourceUploadName,
+    answer_upload_path AS answerUploadPath,
+    answer_upload_name AS answerUploadName,
+    reporter_snapshot_json AS reporterSnapshotJson,
+    created_at AS createdAt
+  FROM upload_reports
+  WHERE id = ?
 `);
 
 syncUnlimitedEvaAccessCode();
@@ -929,6 +986,45 @@ export function getQuizReportById(reportId) {
   return row ? mapQuizReportRow(row) : null;
 }
 
+export function createUploadReport({
+  title = null,
+  note = null,
+  sourceUploadPath = null,
+  sourceUploadName = null,
+  answerUploadPath = null,
+  answerUploadName = null,
+  reporterSnapshot = null,
+}) {
+  const createdAt = nowMs();
+  const insert = insertUploadReportStmt.run(
+    sanitizeNullableValue(title),
+    sanitizeNullableValue(note),
+    sanitizeNullableValue(sourceUploadPath),
+    sanitizeNullableValue(sourceUploadName),
+    sanitizeNullableValue(answerUploadPath),
+    sanitizeNullableValue(answerUploadName),
+    JSON.stringify(normalizeReporterSnapshot(reporterSnapshot, createdAt)),
+    createdAt,
+  );
+
+  return getUploadReportById(insert.lastInsertRowid);
+}
+
+export function listUploadReports(limit = 20) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  return listUploadReportsStmt.all(safeLimit).map(mapUploadReportRow);
+}
+
+export function getUploadReportById(reportId) {
+  const numericReportId = Number(reportId);
+  if (!Number.isInteger(numericReportId) || numericReportId < 1) {
+    return null;
+  }
+
+  const row = getUploadReportByIdStmt.get(numericReportId);
+  return row ? mapUploadReportRow(row) : null;
+}
+
 export function setQuizBanStatusById(quizId, banned) {
   const numericQuizId = Number(quizId);
   if (!Number.isInteger(numericQuizId) || numericQuizId < 1) {
@@ -1042,10 +1138,26 @@ function mapQuizRow(row) {
 
 function mapQuizReportRow(row) {
   return {
+    reportType: 'quiz',
     id: Number(row.id),
     quizId: Number(row.quizId),
     quizSlug: row.quizSlug || '',
     quizTitle: row.quizTitle || '',
+    note: row.note || null,
+    createdAt: Number(row.createdAt || 0),
+    reporterSnapshot: parseJsonField(row.reporterSnapshotJson, {}),
+    sourceUploadPath: row.sourceUploadPath || null,
+    sourceUploadName: row.sourceUploadName || null,
+    answerUploadPath: row.answerUploadPath || null,
+    answerUploadName: row.answerUploadName || null,
+  };
+}
+
+function mapUploadReportRow(row) {
+  return {
+    reportType: 'upload',
+    id: Number(row.id),
+    title: row.title || '',
     note: row.note || null,
     createdAt: Number(row.createdAt || 0),
     reporterSnapshot: parseJsonField(row.reporterSnapshotJson, {}),
