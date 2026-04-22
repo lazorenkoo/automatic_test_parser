@@ -9,7 +9,7 @@ const WordExtractor = require('word-extractor');
 
 const extractor = new WordExtractor();
 
-export const SUPPORTED_UPLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx', '.json'];
+export const SUPPORTED_UPLOAD_EXTENSIONS = ['.txt', '.pdf', '.doc', '.docx', '.json'];
 export const SUPPORTED_ANSWER_EXTENSIONS = ['.txt', '.pdf', '.doc', '.docx'];
 
 const LATIN_MARKERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
