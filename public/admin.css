@@ -90,7 +90,7 @@ body{
 }
 .actions-row{
   display:grid;
-  grid-template-columns:1fr 1fr;
+  grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
   gap:12px;
 }
 .choice-row input{
@@ -185,6 +185,19 @@ body{
   border-radius:18px;
   background:#eef8f6;
   border:1px solid #bde6df;
+}
+.activation-box input{
+  width:100%;
+  min-height:48px;
+  padding:12px 14px;
+  border-radius:14px;
+  border:1px solid var(--line);
+  background:#fffdfa;
+  color:var(--text);
+  font:inherit;
+}
+.activation-box button{
+  width:100%;
 }
 .activation-text{
   margin:0;

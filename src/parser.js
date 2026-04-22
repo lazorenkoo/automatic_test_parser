@@ -67,6 +67,7 @@ export async function parseQuizFromFile({
   return {
     title: buildTitleFromFilename(filename),
     questions,
+    extractedText: normalizedText,
     rawModelJson: {
       parser: parsed.parser,
       optionCount,

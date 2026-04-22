@@ -12,6 +12,8 @@ import {
   deleteQuizById,
   finalizeQuizFromDraftReservation,
   getDbMeta,
+  inspectAccessCode,
+  inspectQuizDraft,
   getQuizById,
   getQuizReportById,
   getUploadReportById,
@@ -29,6 +31,7 @@ import {
   SUPPORTED_ANSWER_EXTENSIONS,
   SUPPORTED_UPLOAD_EXTENSIONS,
 } from './src/parser.js';
+import { solveQuizAnswersWithAI } from './src/openai-answering.js';
 import { startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
 import {
@@ -195,13 +198,176 @@ app.post('/api/parse', upload.fields([
   }
 });
 
+app.post('/api/ai-quizzes/prepare', upload.fields([
+  { name: 'sourceFile', maxCount: 1 },
+  { name: 'pdf', maxCount: 1 },
+]), async (req, res, next) => {
+  const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
+  const clientTitle = sanitizeText(req.body.clientTitle || '');
+  const accessCode = String(req.body.accessCode || '').trim();
+  const optionCount = Number(req.body.optionCount);
+  const questionMode = String(req.body.questionMode || 'manual');
+  const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
+  const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
+  const sourceExtension = path.extname(originalFilename).toLowerCase();
+
+  if (!sourceFile) {
+    return res.status(400).json({ error: 'Please attach a source file.' });
+  }
+
+  if (!clientTitle) {
+    return res.status(400).json({ error: 'Please enter a test title.' });
+  }
+
+  if (!accessCode) {
+    return res.status(400).json({ error: 'Enter an access code.' });
+  }
+
+  if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
+    return res.status(400).json({
+      error: `Supported file types: ${SUPPORTED_UPLOAD_EXTENSIONS.join(', ')}.`,
+    });
+  }
+
+  if (!Number.isInteger(optionCount) || optionCount < 2 || optionCount > 10) {
+    return res.status(400).json({ error: 'Option count must be between 2 and 10.' });
+  }
+
+  if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
+    return res.status(400).json({ error: 'Question count must be greater than 0.' });
+  }
+
+  try {
+    const code = inspectAccessCode(accessCode);
+    if (!code) {
+      return res.status(404).json({ error: 'Code not found or already revoked.' });
+    }
+
+    if (!code.isReusable && code.usedAt) {
+      return res.status(409).json({ error: 'This code has already been used.' });
+    }
+
+    const parsedQuiz = await parseQuizFromFile({
+      buffer: sourceFile.buffer,
+      filename: originalFilename,
+      answerIndex: 1,
+      limit: questionMode === 'all' ? null : questionLimit,
+      optionCount,
+      answerKey: null,
+    });
+
+    if (code.expectedQuestionCount && parsedQuiz.questions.length > code.expectedQuestionCount) {
+      return res.status(422).json({
+        error: `This code supports up to ${code.expectedQuestionCount} questions, but ${parsedQuiz.questions.length} were found.`,
+      });
+    }
+
+    const solved = await solveQuizAnswersWithAI({
+      filename: originalFilename,
+      extractedText: parsedQuiz.extractedText,
+      questions: parsedQuiz.questions,
+      optionCount,
+    });
+
+    const requestedCount = questionMode === 'all'
+      ? solved.questions.length
+      : questionLimit;
+
+    const savedUploads = saveUploadedQuizFiles({ sourceFile, answerFile: null });
+
+    const draft = createQuizDraft({
+      title: clientTitle,
+      sourceFilename: buildStoredFilename(clientTitle),
+      answerIndex: 0,
+      requestedCount,
+      questions: solved.questions,
+      reviewBlocks: parsedQuiz.reviewBlocks,
+      rawModelJson: {
+        ...parsedQuiz.rawModelJson,
+        answerMode: 'openai-double-check',
+        aiPrimaryModel: solved.primaryModel,
+        aiCheckModel: solved.checkModel,
+        aiAnswerKeyText: solved.answerKeyText,
+      },
+      sourceUploadPath: savedUploads.sourceUploadPath,
+      sourceUploadName: savedUploads.sourceUploadName,
+      answerUploadPath: null,
+      answerUploadName: null,
+    });
+
+    return res.status(201).json({
+      draftToken: draft.draftToken,
+      title: clientTitle,
+      parsedCount: solved.questions.length,
+      requestedCount,
+      adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
+      aiPrimaryModel: solved.primaryModel,
+      aiCheckModel: solved.checkModel,
+      aiAnswerKeyPreview: solved.answerKeyText.split('\n').slice(0, 10),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/access-codes/check', (req, res) => {
+  const accessCode = String(req.body.accessCode || '').trim();
+  const hasParsedCount = req.body.parsedCount !== undefined && req.body.parsedCount !== null && req.body.parsedCount !== '';
+  const parsedCount = hasParsedCount ? Number(req.body.parsedCount) : null;
+
+  if (!accessCode) {
+    return res.status(400).json({ error: 'Enter an access code.' });
+  }
+
+  if (hasParsedCount && (!Number.isInteger(parsedCount) || parsedCount < 1)) {
+    return res.status(400).json({ error: 'Invalid parsed question count.' });
+  }
+
+  const code = inspectAccessCode(accessCode);
+  if (!code) {
+    return res.status(404).json({ error: 'Code not found or already revoked.' });
+  }
+
+  if (!code.isReusable && code.usedAt) {
+    return res.status(409).json({ error: 'This code has already been used.' });
+  }
+
+  if (hasParsedCount && code.expectedQuestionCount && parsedCount > code.expectedQuestionCount) {
+    return res.status(422).json({
+      error: `This code supports up to ${code.expectedQuestionCount} questions, but ${parsedCount} were found.`,
+    });
+  }
+
+  return res.json({
+    ok: true,
+    label: code.label,
+    siteType: code.siteType,
+    siteTypeLabel: formatSiteType(code.siteType),
+    clientTgUsername: code.clientTgUsername,
+    expectedQuestionCount: code.expectedQuestionCount,
+    price: code.price,
+    isReusable: code.isReusable,
+    fitsParsedCount: !hasParsedCount || !code.expectedQuestionCount || parsedCount <= code.expectedQuestionCount,
+  });
+});
+
 app.post('/api/quizzes/finalize', async (req, res, next) => {
-  const accessCode = resolveFinalizeAccessCode(req.body.accessCode);
   const draftToken = String(req.body.draftToken || '');
+  const providedAccessCode = String(req.body.accessCode || '').trim();
   const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
 
   if (!draftToken) {
     return res.status(400).json({ error: 'Немає чернетки. Спочатку передайте файл ще раз.' });
+  }
+
+  const draft = inspectQuizDraft(draftToken);
+  const requiresExplicitCode = String(draft?.rawModel?.answerMode || '') === 'openai-double-check';
+  const accessCode = requiresExplicitCode
+    ? providedAccessCode
+    : resolveFinalizeAccessCode(providedAccessCode);
+
+  if (requiresExplicitCode && !accessCode) {
+    return res.status(400).json({ error: 'Enter an access code.' });
   }
 
   const reservation = reserveAccessCode(accessCode);

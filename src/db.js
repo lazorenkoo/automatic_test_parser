@@ -699,6 +699,31 @@ export function revokeAccessCode(plainCode) {
   };
 }
 
+export function inspectAccessCode(plainCode) {
+  const normalized = normalizeCode(plainCode);
+  if (!normalized) {
+    return null;
+  }
+
+  const existing = findAccessCodeByHashStmt.get(hashCode(normalized));
+  if (!existing || existing.revokedAt) {
+    return null;
+  }
+
+  return {
+    id: Number(existing.id),
+    label: existing.label || null,
+    siteType: existing.siteType || null,
+    clientTgUsername: existing.clientTgUsername || null,
+    expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
+    price: Number(existing.price || 0),
+    isReusable: Number(existing.isReusable || 0) === 1,
+    revokedAt: existing.revokedAt ? Number(existing.revokedAt) : null,
+    usedAt: existing.usedAt ? Number(existing.usedAt) : null,
+    usedByQuizId: existing.usedByQuizId ? Number(existing.usedByQuizId) : null,
+  };
+}
+
 export function reserveAccessCode(plainCode) {
   const normalized = normalizeCode(plainCode);
   if (!normalized) {
@@ -784,6 +809,28 @@ export function createQuizDraft({
     parsedCount: questions.length,
     requestedCount,
     createdAt,
+  };
+}
+
+export function inspectQuizDraft(draftToken) {
+  const normalizedToken = String(draftToken || '').trim();
+  if (!normalizedToken) {
+    return null;
+  }
+
+  const row = getDraftByTokenStmt.get(normalizedToken);
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: Number(row.id),
+    draftToken: row.draft_token,
+    title: row.title,
+    requestedCount: Number(row.requested_count || 0),
+    parsedCount: Number(row.parsed_count || 0),
+    rawModel: parseJsonField(row.raw_model_json, {}),
+    createdAt: Number(row.created_at || 0),
   };
 }
 
