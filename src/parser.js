@@ -282,6 +282,7 @@ function normalizeExtractedText(text) {
 function splitIntoLines(text) {
   return String(text || '')
     .split('\n')
+    .flatMap((line) => splitEmbeddedQuestionStarts(line))
     .map((line) => cleanupLine(line))
     .filter((line) => !shouldIgnoreLine(line));
 }
@@ -291,6 +292,34 @@ function splitIntoParagraphs(text) {
     .split(/\n{2,}/)
     .map((part) => cleanupLine(part))
     .filter((part) => !shouldIgnoreLine(part));
+}
+
+function splitEmbeddedQuestionStarts(line) {
+  const input = String(line || '');
+  if (!input) {
+    return [''];
+  }
+
+  const parts = [];
+  let cursor = 0;
+  const regex = /(?<=\S)(\d{1,3}[.)]\s+)/gu;
+  let match;
+
+  while ((match = regex.exec(input))) {
+    const start = match.index;
+    const prefix = input.slice(cursor, start);
+    if (prefix) {
+      parts.push(prefix);
+    }
+    cursor = start;
+  }
+
+  const tail = input.slice(cursor);
+  if (tail) {
+    parts.push(tail);
+  }
+
+  return parts.length ? parts : [input];
 }
 
 function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount }) {
@@ -943,7 +972,7 @@ function parseLineBlock(lines, optionCount) {
     lines.map((line) => sanitizeText(line)).filter(Boolean),
   );
 
-  if (cleanLines.length < optionCount + 1) {
+  if (cleanLines.length < minimumAllowedOptionCount(optionCount) + 1) {
     return null;
   }
 
@@ -959,7 +988,7 @@ function parseLineBlock(lines, optionCount) {
     .map((line) => sanitizeText(line))
     .filter(Boolean);
 
-  if (!questionText || options.length !== optionCount) {
+  if (!questionText || !isAcceptableOptionCount(options.length, optionCount)) {
     return null;
   }
 
@@ -968,7 +997,7 @@ function parseLineBlock(lines, optionCount) {
 
 function parseExplicitNumberBlock(lines, optionCount) {
   const cleanLines = normalizeBlockLines(lines);
-  if (cleanLines.length < optionCount + 1) {
+  if (cleanLines.length < minimumAllowedOptionCount(optionCount) + 1) {
     return null;
   }
 
@@ -980,7 +1009,7 @@ function parseExplicitNumberBlock(lines, optionCount) {
   const questionText = sanitizeText(cleanLines.slice(0, splitIndex + 1).join(' '));
   const optionLines = normalizeOptionLines(cleanLines.slice(splitIndex + 1), optionCount);
 
-  if (!questionText || optionLines.length !== optionCount) {
+  if (!questionText || !isAcceptableOptionCount(optionLines.length, optionCount)) {
     return null;
   }
 
@@ -1429,13 +1458,14 @@ function buildForwardCandidates(lines, index, optionCount) {
 
 function findQuestionOptionBoundary(lines, optionCount) {
   let bestIndex = -1;
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
 
-  for (let index = 0; index <= lines.length - optionCount - 1; index += 1) {
+  for (let index = 0; index <= lines.length - minOptionCount - 1; index += 1) {
     if (!looksLikeQuestionTail(lines[index])) {
       continue;
     }
 
-    if (lines.length - (index + 1) >= optionCount) {
+    if (lines.length - (index + 1) >= minOptionCount) {
       bestIndex = index;
     }
   }
@@ -1444,8 +1474,8 @@ function findQuestionOptionBoundary(lines, optionCount) {
     return bestIndex;
   }
 
-  if (lines.length >= optionCount + 1) {
-    return lines.length - optionCount - 1;
+  if (lines.length >= minOptionCount + 1) {
+    return lines.length - minOptionCount - 1;
   }
 
   return -1;
@@ -1478,7 +1508,7 @@ function pushCompletedQuestion(target, current, answerIndex, optionCount) {
   const questionText = sanitizeText(current.q);
   const options = current.options.map((option) => sanitizeText(option)).filter(Boolean);
 
-  if (!questionText || options.length !== optionCount) {
+  if (!questionText || !isAcceptableOptionCount(options.length, optionCount)) {
     return false;
   }
 
@@ -1489,6 +1519,14 @@ function pushCompletedQuestion(target, current, answerIndex, optionCount) {
   });
 
   return true;
+}
+
+function isAcceptableOptionCount(actualCount, expectedCount) {
+  return actualCount === expectedCount || (expectedCount === 5 && actualCount === 4);
+}
+
+function minimumAllowedOptionCount(expectedCount) {
+  return expectedCount === 5 ? 4 : expectedCount;
 }
 
 function cleanupLine(line) {
