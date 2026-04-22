@@ -155,7 +155,7 @@ async function reportCurrentUploadIssue() {
       throw new Error(payload.error || 'Не вдалося відправити репорт.');
     }
 
-    setStatus('success', 'Репорт з файлом відправлено. Тепер його можна перевірити через Telegram-команди.');
+    setStatus('success', 'Файл відправлено.');
     resultBox.classList.remove('hidden');
     resultBox.innerHTML = `
       <h3>${escapeHtml(title || sourceFile?.name || answerFile?.name || 'Upload report')}</h3>

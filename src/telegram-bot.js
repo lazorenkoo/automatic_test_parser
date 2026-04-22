@@ -919,14 +919,7 @@ function formatReportsList(limit) {
   return [
     `Latest reports: ${reports.length}`,
     '',
-    ...reports.map((report) => {
-      const note = report.note ? ` | ${truncate(report.note, 50)}` : '';
-      const files = [
-        report.sourceUploadPath ? 'source' : null,
-        report.answerUploadPath ? 'answer' : null,
-      ].filter(Boolean).join(', ') || 'no files';
-      return `${formatReportHandle(report)} | ${formatReportLabel(report)} | ${formatDateTime(report.createdAt)} | ${files}${note}`;
-    }),
+    ...reports.map((report) => `${report.id} ${report.reportType === 'upload' ? 'main' : 'site'} ${truncate(report.note || 'no text', 120)}`),
   ].join('\n');
 }
 
