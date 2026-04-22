@@ -1013,6 +1013,10 @@ function collectSequentialOptionsStrict(lines, startIndex, optionCount) {
       return null;
     }
 
+    if (!optionMatch && !looksLikeStandaloneOptionLine(line)) {
+      return null;
+    }
+
     const optionText = sanitizeText(optionMatch ? optionMatch.text : line);
     if (!optionText) {
       index += 1;
@@ -1047,6 +1051,10 @@ function collectSequentialOptionsFlexible(lines, startIndex, optionCount) {
     }
 
     const optionMatch = matchOptionStart(line, optionCount);
+    if (!optionMatch && !currentOption && !looksLikeStandaloneOptionLine(line)) {
+      break;
+    }
+
     const optionText = sanitizeText(optionMatch ? optionMatch.text : line);
     if (!optionText) {
       index += 1;
@@ -1115,6 +1123,32 @@ function shouldContinueOptionText(currentOption, nextLine) {
   }
 
   if (/^[a-zа-яіїєґ]/u.test(next)) {
+    return true;
+  }
+
+  return false;
+}
+
+function looksLikeStandaloneOptionLine(line) {
+  const text = sanitizeText(line);
+  if (!text) {
+    return false;
+  }
+
+  if (looksLikeQuestionTail(text) && looksLikePromptSentence(text)) {
+    return false;
+  }
+
+  if (/[?:]$/.test(text)) {
+    return false;
+  }
+
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  if (wordCount <= 8 && text.length <= 100) {
+    return true;
+  }
+
+  if (wordCount <= 12 && text.length <= 80 && !/[.?!]$/.test(text)) {
     return true;
   }
 
@@ -1208,7 +1242,7 @@ function isValidRecoveredOptionChunk(chunk) {
   }
 
   if (chunk.length === 1) {
-    return true;
+    return looksLikeStandaloneOptionLine(chunk[0]);
   }
 
   for (let index = 1; index < chunk.length; index += 1) {
@@ -1651,14 +1685,32 @@ function matchOptionStart(line, optionCount) {
     .map((marker) => marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('|');
 
-  const regex = new RegExp(`^(?:${escapedMarkers})\\s*[\\)\\.\\-${DASH_CHARS}:]\\s*(.+)$`);
+  const regex = new RegExp(`^(${escapedMarkers})(\\s*[\\)\\.\\-${DASH_CHARS}:])(\\s*)(.+)$`);
   const match = line.match(regex);
   if (!match) {
     return null;
   }
 
+  const marker = String(match[1] || '');
+  const separator = String(match[2] || '');
+  const spacing = String(match[3] || '');
+  const text = sanitizeText(match[4]);
+  if (!text) {
+    return null;
+  }
+
+  const markerIsLetter = /^[A-Za-z\u0400-\u04FF]$/u.test(marker);
+  const separatorHasDash = new RegExp(`[${DASH_CHARS}]`).test(separator);
+  const textStartsLowercase = /^\p{Ll}/u.test(text);
+
+  // Prevent false positives like "В-рус ..." where the first letter is part of the word,
+  // not an answer marker extracted from the source file.
+  if (markerIsLetter && separatorHasDash && !spacing && textStartsLowercase) {
+    return null;
+  }
+
   return {
-    text: sanitizeText(match[1]),
+    text,
   };
 }
 
