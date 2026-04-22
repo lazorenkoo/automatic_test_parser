@@ -3,6 +3,8 @@ import {
   createAccessCodes,
   createReusableAccessCode,
   deleteQuizById,
+  deleteQuizReportById,
+  deleteUploadReportById,
   getAccountingSummary,
   getDbMeta,
   getQuizById,
@@ -17,6 +19,7 @@ import {
 
 let botInstance = null;
 let shutdownBound = false;
+const pendingReportDeletionByChat = new Map();
 
 export function startTelegramBot() {
   if (botInstance) {
@@ -306,6 +309,42 @@ export function startTelegramBot() {
     }, {
       filename: fileName || undefined,
     });
+
+    pendingReportDeletionByChat.set(msg.chat.id, {
+      target: formatReportHandle(report),
+      reportType: report.reportType || 'quiz',
+      reportId: report.id,
+    });
+
+    await bot.sendMessage(msg.chat.id, `Удалить репорт ${formatReportHandle(report)}?\nНапиши +`);
+  });
+
+  bot.on('message', async (msg) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const text = String(msg.text || '').trim();
+    if (text !== '+') {
+      return;
+    }
+
+    const pending = pendingReportDeletionByChat.get(msg.chat.id);
+    if (!pending) {
+      return;
+    }
+
+    pendingReportDeletionByChat.delete(msg.chat.id);
+    const deleted = pending.reportType === 'upload'
+      ? deleteUploadReportById(pending.reportId)
+      : deleteQuizReportById(pending.reportId);
+
+    if (!deleted) {
+      await bot.sendMessage(msg.chat.id, `Репорт ${pending.target} уже не найден.`);
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, `Репорт ${pending.target} удален.`);
   });
 
   bot.onText(/^\/ban(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {

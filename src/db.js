@@ -564,6 +564,16 @@ const getUploadReportByIdStmt = db.prepare(`
   WHERE id = ?
 `);
 
+const deleteQuizReportByIdStmt = db.prepare(`
+  DELETE FROM quiz_reports
+  WHERE id = ?
+`);
+
+const deleteUploadReportByIdStmt = db.prepare(`
+  DELETE FROM upload_reports
+  WHERE id = ?
+`);
+
 syncUnlimitedEvaAccessCode();
 
 export function getDbMeta() {
@@ -1023,6 +1033,36 @@ export function getUploadReportById(reportId) {
 
   const row = getUploadReportByIdStmt.get(numericReportId);
   return row ? mapUploadReportRow(row) : null;
+}
+
+export function deleteQuizReportById(reportId) {
+  const numericReportId = Number(reportId);
+  if (!Number.isInteger(numericReportId) || numericReportId < 1) {
+    return null;
+  }
+
+  const existing = getQuizReportById(numericReportId);
+  if (!existing) {
+    return null;
+  }
+
+  deleteQuizReportByIdStmt.run(numericReportId);
+  return existing;
+}
+
+export function deleteUploadReportById(reportId) {
+  const numericReportId = Number(reportId);
+  if (!Number.isInteger(numericReportId) || numericReportId < 1) {
+    return null;
+  }
+
+  const existing = getUploadReportById(numericReportId);
+  if (!existing) {
+    return null;
+  }
+
+  deleteUploadReportByIdStmt.run(numericReportId);
+  return existing;
 }
 
 export function setQuizBanStatusById(quizId, banned) {
