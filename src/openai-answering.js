@@ -2,7 +2,6 @@ const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
 
 export async function solveQuizAnswersWithAI({
   filename,
-  extractedText,
   questions,
   optionCount,
 }) {
@@ -46,16 +45,12 @@ export async function solveQuizAnswersWithAI({
       (maxValue, item) => Math.max(maxValue, Array.isArray(item.options) ? item.options.length : 0),
       1,
     );
-    const includeRawText = questionChunks.length === 1;
-
     const primaryPrompt = buildPrimaryPrompt({
       filename,
-      extractedText,
       optionCount,
       compactQuestions: chunk,
       chunkIndex,
       chunkCount: questionChunks.length,
-      includeRawText,
     });
 
     const checkPrompt = buildCheckPrompt({
@@ -67,11 +62,11 @@ export async function solveQuizAnswersWithAI({
     const primaryResult = await createOpenAIAnswersResponse({
       apiKey,
       model: primaryModel,
-      reasoningEffort: 'high',
+      reasoningEffort: resolvePrimaryReasoningEffort(chunk.length),
       prompt: primaryPrompt,
       expectedQuestionNumbers: questionNumbers,
       maxAnswerIndex,
-      maxOutputTokens: Math.max(320, chunk.length * 24),
+      maxOutputTokens: resolveInitialMaxOutputTokens(chunk.length, 'primary'),
     });
     const primaryChunkAnswers = primaryResult.answers;
 
@@ -82,7 +77,7 @@ export async function solveQuizAnswersWithAI({
       prompt: checkPrompt,
       expectedQuestionNumbers: questionNumbers,
       maxAnswerIndex,
-      maxOutputTokens: Math.max(320, chunk.length * 24),
+      maxOutputTokens: resolveInitialMaxOutputTokens(chunk.length, 'check'),
     });
     const checkChunkAnswers = checkResult.answers;
 
@@ -165,54 +160,71 @@ async function createOpenAIAnswersResponse({
     schema: buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex),
   };
 
-  const response = await fetch(OPENAI_API_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      reasoning: {
-        effort: reasoningEffort,
+  let currentMaxOutputTokens = Math.max(600, Number(maxOutputTokens) || 0);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch(OPENAI_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
       },
-      input: prompt,
-      text: {
-        format: responseFormat,
-      },
-      max_output_tokens: maxOutputTokens,
-    }),
-  });
+      body: JSON.stringify({
+        model,
+        reasoning: {
+          effort: reasoningEffort,
+        },
+        input: prompt,
+        text: {
+          format: responseFormat,
+        },
+        max_output_tokens: currentMaxOutputTokens,
+      }),
+    });
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload?.error?.message || `OpenAI request failed with status ${response.status}.`);
-    error.statusCode = 502;
-    throw error;
-  }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || `OpenAI request failed with status ${response.status}.`);
+      error.statusCode = 502;
+      throw error;
+    }
 
-  const outputText = extractResponseText(payload);
-  const parsedObject = extractStructuredAnswerObject(payload, outputText);
-  if (!parsedObject) {
+    const outputText = extractResponseText(payload);
+    const parsedObject = extractStructuredAnswerObject(payload, outputText);
+    if (parsedObject) {
+      const answers = normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers);
+      return {
+        answers,
+        rawText: outputText || JSON.stringify(parsedObject),
+      };
+    }
+
+    const incompleteReason = String(payload?.incomplete_details?.reason || '').trim();
+    const canRetryForOutputLimit = payload?.status === 'incomplete' && incompleteReason === 'max_output_tokens' && attempt < 3;
     console.error('OpenAI returned an unusable answer payload.', JSON.stringify({
+      attempt,
       model,
       reasoningEffort,
+      max_output_tokens: currentMaxOutputTokens,
       status: payload?.status,
       incomplete_details: payload?.incomplete_details,
       error: payload?.error,
       output_preview: Array.isArray(payload?.output) ? payload.output.slice(0, 3) : payload?.output,
       output_text: typeof payload?.output_text === 'string' ? payload.output_text.slice(0, 500) : payload?.output_text,
     }));
-    const error = new Error('OpenAI returned an empty or invalid answer payload.');
+
+    if (canRetryForOutputLimit) {
+      currentMaxOutputTokens = Math.min(currentMaxOutputTokens * 2, 12000);
+      continue;
+    }
+
+    const error = new Error(
+      incompleteReason === 'max_output_tokens'
+        ? 'OpenAI hit the output token limit before finishing the answer.'
+        : 'OpenAI returned an empty or invalid answer payload.',
+    );
     error.statusCode = 502;
     throw error;
   }
-
-  const answers = normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers);
-  return {
-    answers,
-    rawText: outputText || JSON.stringify(parsedObject),
-  };
 }
 
 function extractResponseText(payload) {
@@ -338,42 +350,6 @@ function buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex) {
   };
 }
 
-function parseAiAnswerLines(rawText, expectedInput) {
-  const answers = {};
-  const lines = String(rawText || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  for (const line of lines) {
-    const match = line.match(/^(\d+)\s*[\.\-:]\s*(\d+)$/);
-    if (!match) {
-      continue;
-    }
-
-    answers[Number(match[1])] = Number(match[2]);
-  }
-
-  const expectedNumbers = Array.isArray(expectedInput)
-    ? expectedInput
-    : Array.from({ length: Number(expectedInput || 0) }, (_unused, index) => index + 1);
-
-  const missing = [];
-  for (const questionNumber of expectedNumbers) {
-    if (!Number.isInteger(answers[questionNumber])) {
-      missing.push(questionNumber);
-    }
-  }
-
-  if (missing.length) {
-    const error = new Error(`AI did not return answers for questions: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '...' : ''}`);
-    error.statusCode = 422;
-    throw error;
-  }
-
-  return answers;
-}
-
 function formatAnswerKeyText(answers, expectedCount) {
   const lines = [];
   for (let questionNumber = 1; questionNumber <= expectedCount; questionNumber += 1) {
@@ -391,6 +367,20 @@ function resolveChunkSize() {
   return configured;
 }
 
+function resolveInitialMaxOutputTokens(chunkLength, passType) {
+  const multiplier = passType === 'primary' ? 28 : 20;
+  const floor = passType === 'primary' ? 900 : 700;
+  return Math.max(floor, chunkLength * multiplier);
+}
+
+function resolvePrimaryReasoningEffort(chunkLength) {
+  if (chunkLength >= 140) {
+    return 'medium';
+  }
+
+  return 'high';
+}
+
 function chunkQuestions(questions, chunkSize) {
   if (!Array.isArray(questions) || questions.length <= chunkSize) {
     return [questions];
@@ -405,21 +395,16 @@ function chunkQuestions(questions, chunkSize) {
 
 function buildPrimaryPrompt({
   filename,
-  extractedText,
   optionCount,
   compactQuestions,
   chunkIndex,
   chunkCount,
-  includeRawText,
 }) {
   const parts = [
     'You are validating answers for a multiple-choice medical quiz.',
-    'Return only plain text lines in the format questionNumber.answerIndex.',
-    'Example:',
-    '1.2',
-    '2.1',
-    '3.4',
-    'Do not return explanations, JSON, markdown, headings, or extra text.',
+    'Return the answers only for the parsed questions provided below.',
+    'Choose exactly one answer option for every question.',
+    'Do not infer extra questions and do not skip any question.',
     '',
     `Filename: ${filename || 'quiz file'}`,
     `Expected option count per question: ${optionCount || compactQuestions[0]?.options?.length || 0}`,
@@ -427,10 +412,6 @@ function buildPrimaryPrompt({
 
   if (chunkCount > 1) {
     parts.push(`Chunk ${chunkIndex + 1} of ${chunkCount}. Keep the original global question numbers.`);
-  }
-
-  if (includeRawText) {
-    parts.push('', 'Raw extracted source text:', extractedText || '');
   }
 
   parts.push('', 'Parsed questions and answer options:', JSON.stringify(compactQuestions));
