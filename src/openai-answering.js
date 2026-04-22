@@ -42,6 +42,10 @@ export async function solveQuizAnswersWithAI({
   for (let chunkIndex = 0; chunkIndex < questionChunks.length; chunkIndex += 1) {
     const chunk = questionChunks[chunkIndex];
     const questionNumbers = chunk.map((item) => item.number);
+    const maxAnswerIndex = chunk.reduce(
+      (maxValue, item) => Math.max(maxValue, Array.isArray(item.options) ? item.options.length : 0),
+      1,
+    );
     const includeRawText = questionChunks.length === 1;
 
     const primaryPrompt = buildPrimaryPrompt({
@@ -60,28 +64,32 @@ export async function solveQuizAnswersWithAI({
       chunkCount: questionChunks.length,
     });
 
-    const primaryText = await createOpenAITextResponse({
+    const primaryResult = await createOpenAIAnswersResponse({
       apiKey,
       model: primaryModel,
       reasoningEffort: 'high',
       prompt: primaryPrompt,
-      maxOutputTokens: Math.max(240, chunk.length * 12),
+      expectedQuestionNumbers: questionNumbers,
+      maxAnswerIndex,
+      maxOutputTokens: Math.max(320, chunk.length * 24),
     });
-    const primaryChunkAnswers = parseAiAnswerLines(primaryText, questionNumbers);
+    const primaryChunkAnswers = primaryResult.answers;
 
-    const checkText = await createOpenAITextResponse({
+    const checkResult = await createOpenAIAnswersResponse({
       apiKey,
       model: checkModel,
       reasoningEffort: 'medium',
       prompt: checkPrompt,
-      maxOutputTokens: Math.max(240, chunk.length * 12),
+      expectedQuestionNumbers: questionNumbers,
+      maxAnswerIndex,
+      maxOutputTokens: Math.max(320, chunk.length * 24),
     });
-    const checkChunkAnswers = parseAiAnswerLines(checkText, questionNumbers);
+    const checkChunkAnswers = checkResult.answers;
 
     Object.assign(primaryAnswers, primaryChunkAnswers);
     Object.assign(checkAnswers, checkChunkAnswers);
-    primaryTexts.push(primaryText);
-    checkTexts.push(checkText);
+    primaryTexts.push(primaryResult.rawText);
+    checkTexts.push(checkResult.rawText);
   }
 
   const disagreements = [];
@@ -141,13 +149,22 @@ function buildMockAiResult(questions) {
   };
 }
 
-async function createOpenAITextResponse({
+async function createOpenAIAnswersResponse({
   apiKey,
   model,
   reasoningEffort,
   prompt,
+  expectedQuestionNumbers,
+  maxAnswerIndex,
   maxOutputTokens,
 }) {
+  const responseFormat = {
+    type: 'json_schema',
+    name: 'quiz_answers',
+    strict: true,
+    schema: buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex),
+  };
+
   const response = await fetch(OPENAI_API_URL, {
     method: 'POST',
     headers: {
@@ -160,6 +177,9 @@ async function createOpenAITextResponse({
         effort: reasoningEffort,
       },
       input: prompt,
+      text: {
+        format: responseFormat,
+      },
       max_output_tokens: maxOutputTokens,
     }),
   });
@@ -172,13 +192,27 @@ async function createOpenAITextResponse({
   }
 
   const outputText = extractResponseText(payload);
-  if (!outputText) {
-    const error = new Error('OpenAI returned an empty answer payload.');
+  const parsedObject = extractStructuredAnswerObject(payload, outputText);
+  if (!parsedObject) {
+    console.error('OpenAI returned an unusable answer payload.', JSON.stringify({
+      model,
+      reasoningEffort,
+      status: payload?.status,
+      incomplete_details: payload?.incomplete_details,
+      error: payload?.error,
+      output_preview: Array.isArray(payload?.output) ? payload.output.slice(0, 3) : payload?.output,
+      output_text: typeof payload?.output_text === 'string' ? payload.output_text.slice(0, 500) : payload?.output_text,
+    }));
+    const error = new Error('OpenAI returned an empty or invalid answer payload.');
     error.statusCode = 502;
     throw error;
   }
 
-  return outputText.trim();
+  const answers = normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers);
+  return {
+    answers,
+    rawText: outputText || JSON.stringify(parsedObject),
+  };
 }
 
 function extractResponseText(payload) {
@@ -204,6 +238,104 @@ function extractResponseText(payload) {
   }
 
   return textParts.join('\n').trim();
+}
+
+function extractStructuredAnswerObject(payload, outputText) {
+  const jsonCandidates = [];
+
+  if (typeof outputText === 'string' && outputText.trim()) {
+    jsonCandidates.push(outputText.trim());
+  }
+
+  if (Array.isArray(payload?.output)) {
+    for (const item of payload.output) {
+      if (!Array.isArray(item?.content)) {
+        continue;
+      }
+
+      for (const content of item.content) {
+        if (typeof content?.json === 'string' && content.json.trim()) {
+          jsonCandidates.push(content.json.trim());
+        }
+
+        if (content?.parsed && typeof content.parsed === 'object') {
+          return content.parsed;
+        }
+
+        if (typeof content?.text === 'string' && content.text.trim()) {
+          jsonCandidates.push(content.text.trim());
+        }
+      }
+    }
+  }
+
+  for (const candidate of jsonCandidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (_error) {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers) {
+  const rows = Array.isArray(parsedObject?.answers) ? parsedObject.answers : [];
+  const answers = {};
+  for (const row of rows) {
+    const questionNumber = Number(row?.questionNumber);
+    const answerIndex = Number(row?.answerIndex);
+    if (Number.isInteger(questionNumber) && Number.isInteger(answerIndex)) {
+      answers[questionNumber] = answerIndex;
+    }
+  }
+
+  const missing = [];
+  for (const questionNumber of expectedQuestionNumbers) {
+    if (!Number.isInteger(answers[questionNumber])) {
+      missing.push(questionNumber);
+    }
+  }
+
+  if (missing.length) {
+    const error = new Error(`AI did not return answers for questions: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '...' : ''}`);
+    error.statusCode = 422;
+    throw error;
+  }
+
+  return answers;
+}
+
+function buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['answers'],
+    properties: {
+      answers: {
+        type: 'array',
+        minItems: expectedQuestionNumbers.length,
+        maxItems: expectedQuestionNumbers.length,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['questionNumber', 'answerIndex'],
+          properties: {
+            questionNumber: {
+              type: 'integer',
+              enum: expectedQuestionNumbers,
+            },
+            answerIndex: {
+              type: 'integer',
+              minimum: 1,
+              maximum: Math.max(1, Number(maxAnswerIndex) || 1),
+            },
+          },
+        },
+      },
+    },
+  };
 }
 
 function parseAiAnswerLines(rawText, expectedInput) {
