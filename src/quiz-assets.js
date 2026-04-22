@@ -182,6 +182,27 @@ h1{
   font-size:18px;
   font-weight:700;
 }
+.report-fab{
+  position:fixed;
+  right:18px;
+  top:50%;
+  transform:translateY(-50%);
+  z-index:20;
+}
+.toast{
+  position:fixed;
+  right:18px;
+  bottom:18px;
+  max-width:min(360px, calc(100vw - 32px));
+  padding:12px 14px;
+  border-radius:16px;
+  border:1px solid var(--line);
+  background:rgba(255,253,248,.96);
+  box-shadow:0 18px 40px rgba(31,41,55,.12);
+  font-size:14px;
+  line-height:1.45;
+  z-index:30;
+}
 @media (hover:none){
   .option:hover,
   .btn:hover{transform:none}
@@ -249,6 +270,16 @@ h1{
     padding:14px;
     border-radius:14px;
   }
+  .report-fab{
+    right:12px;
+    top:auto;
+    bottom:12px;
+    transform:none;
+  }
+  .toast{
+    right:12px;
+    bottom:72px;
+  }
 }
 @media (max-width:400px){
   .shell{
@@ -280,26 +311,32 @@ const bootstrapData = typeof window !== 'undefined' && window.QUIZ_BOOTSTRAP
 const bootstrapQuestions = Array.isArray(bootstrapData.questions)
   ? bootstrapData.questions
   : (typeof QUESTIONS !== 'undefined' ? QUESTIONS : []);
-const titleText = bootstrapData.title || 'Тест';
+const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
+const reportUrl = bootstrapData.reportUrl || '';
 
 const i18n = {
   eyebrow: 'PDMU quiz link',
-  linkLabel: 'Посилання',
-  countLabel: 'Питань',
-  intro: 'Можна перемішати порядок питань. Варіанти відповідей будуть перемішані автоматично.',
-  shuffle: 'Перемішати питання',
-  start: 'Почати',
-  questionShort: 'Питання',
-  questionCounter: 'Питання {current} із {total}',
-  finish: 'Завершити зараз',
-  next: 'Наступне',
-  results: 'Результати',
-  restart: 'Пройти ще раз',
-  summary: 'Підсумок: {correct} / {answered} · {time}',
-  correct: 'Правильно',
-  wrong: 'Помилка',
-  minutes: 'хв',
-  seconds: 'с',
+  linkLabel: 'Link',
+  countLabel: 'Questions',
+  intro: 'You can shuffle the order of questions. Answer options will be shuffled automatically.',
+  shuffle: 'Shuffle questions',
+  start: 'Start',
+  questionShort: 'Question',
+  questionCounter: 'Question {current} of {total}',
+  finish: 'Finish now',
+  next: 'Next',
+  results: 'Results',
+  restart: 'Restart',
+  summary: 'Summary: {correct} / {answered} · {time}',
+  correct: 'Correct',
+  wrong: 'Wrong',
+  minutes: 'min',
+  seconds: 'sec',
+  report: 'Report issue',
+  reportPrompt: 'Describe what looks wrong in this test.',
+  reportSuccess: 'The original file was sent to the admin for review.',
+  reportError: 'Could not send the report. Please try again later.',
+  reportUnavailable: 'This quiz cannot send a report right now.',
 };
 
 const state = {
@@ -335,6 +372,8 @@ const els = {
   shuffleLabel: document.getElementById('shuffleLabel'),
   resultsTitle: document.getElementById('resultsTitle'),
   countLabel: document.getElementById('countLabel'),
+  reportBtn: document.getElementById('reportBtn'),
+  reportToast: document.getElementById('reportToast'),
 };
 
 function t(key, params = {}) {
@@ -343,7 +382,7 @@ function t(key, params = {}) {
 }
 
 function applyLanguage() {
-  document.documentElement.lang = 'uk';
+  document.documentElement.lang = 'en';
   document.title = titleText;
 
   if (els.eyebrow) {
@@ -375,6 +414,9 @@ function applyLanguage() {
   }
   if (els.restartBtn) {
     els.restartBtn.textContent = t('restart');
+  }
+  if (els.reportBtn) {
+    els.reportBtn.textContent = t('report');
   }
 
   if (els.questionCounter && !els.quiz.classList.contains('hidden')) {
@@ -554,6 +596,53 @@ function resetQuiz() {
   applyLanguage();
 }
 
+function showToast(message) {
+  if (!els.reportToast) {
+    return;
+  }
+
+  els.reportToast.textContent = String(message || '');
+  els.reportToast.classList.remove('hidden');
+  window.clearTimeout(showToast.timerId);
+  showToast.timerId = window.setTimeout(() => {
+    els.reportToast?.classList.add('hidden');
+  }, 3500);
+}
+
+async function reportBrokenQuiz() {
+  if (!reportUrl) {
+    showToast(t('reportUnavailable'));
+    return;
+  }
+
+  const note = window.prompt(t('reportPrompt'), '');
+  if (note === null) {
+    return;
+  }
+
+  try {
+    const response = await fetch(reportUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        note,
+        pageUrl: window.location.href,
+        currentQuestion: state.cur + 1,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Report failed');
+    }
+
+    showToast(t('reportSuccess'));
+  } catch (_error) {
+    showToast(t('reportError'));
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   if (els.pageTitle) {
     els.pageTitle.textContent = titleText;
@@ -571,21 +660,25 @@ document.addEventListener('DOMContentLoaded', () => {
   els.next?.addEventListener('click', nextQuestion);
   els.finish?.addEventListener('click', showResults);
   els.restartBtn?.addEventListener('click', resetQuiz);
+  els.reportBtn?.addEventListener('click', reportBrokenQuiz);
 });
 `.trim();
 
-export function renderHostedQuizHtml(quiz, quizUrl = null) {
+export function renderHostedQuizHtml(quiz, options = {}) {
+  const quizUrl = typeof options === 'string' ? options : options.quizUrl || null;
+  const reportUrl = typeof options === 'object' && options ? options.reportUrl || '' : '';
   const title = htmlEscape(quiz.title);
   const displayUrl = htmlEscape(quizUrl || quiz.slug);
   const bootstrap = safeJsonForScript({
     slug: quiz.slug,
     quizUrl: quizUrl || '',
+    reportUrl,
     title: quiz.title,
     questions: quiz.questions,
   });
 
   return `<!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -594,47 +687,50 @@ export function renderHostedQuizHtml(quiz, quizUrl = null) {
 </head>
 <body>
   <div class="shell">
+    <button id="reportBtn" class="btn secondary report-fab" type="button">Report issue</button>
+    <div id="reportToast" class="toast hidden" role="status" aria-live="polite"></div>
+
     <section class="hero">
       <span id="eyebrow" class="eyebrow">PDMU quiz link</span>
       <h1 id="pageTitle">${title}</h1>
       <div class="meta">
-        <div class="meta-chip"><span id="linkLabel">Посилання</span>${displayUrl}</div>
-        <div class="meta-chip"><span id="countLabel">Питань</span><strong id="quizLength">${quiz.questions.length}</strong></div>
+        <div class="meta-chip"><span id="linkLabel">Link</span>${displayUrl}</div>
+        <div class="meta-chip"><span id="countLabel">Questions</span><strong id="quizLength">${quiz.questions.length}</strong></div>
       </div>
     </section>
 
     <section id="start" class="card">
       <h2 id="quizTitle" class="title">${title}</h2>
-      <p id="introText" class="lead">Можна перемішати порядок питань. Варіанти відповідей будуть перемішані автоматично.</p>
+      <p id="introText" class="lead">You can shuffle the order of questions. Answer options will be shuffled automatically.</p>
       <div class="controls" style="justify-content:flex-start">
         <label class="small" style="display:flex;align-items:center;gap:10px;font-size:14px">
           <input type="checkbox" id="shuffle" />
-          <span id="shuffleLabel">Перемішати питання</span>
+          <span id="shuffleLabel">Shuffle questions</span>
         </label>
       </div>
       <div class="controls">
         <div></div>
-        <button class="btn primary" id="startBtn" type="button">Почати</button>
+        <button class="btn primary" id="startBtn" type="button">Start</button>
       </div>
     </section>
 
     <section id="quiz" class="card hidden">
-      <div class="small" id="questionCounter">Питання</div>
+      <div class="small" id="questionCounter">Question</div>
       <p id="qText" class="question"></p>
       <div id="options" class="options"></div>
       <div class="controls">
-        <button id="finish" class="btn ghost" type="button">Завершити зараз</button>
-        <button id="next" class="btn secondary" type="button">Наступне</button>
+        <button id="finish" class="btn ghost" type="button">Finish now</button>
+        <button id="next" class="btn secondary" type="button">Next</button>
       </div>
     </section>
 
     <section id="results" class="card hidden">
-      <h2 id="resultsTitle" class="title">Результати</h2>
+      <h2 id="resultsTitle" class="title">Results</h2>
       <div id="sum" class="summary"></div>
       <div id="resultsList" class="results-list"></div>
       <div class="controls">
         <div></div>
-        <button id="restartBtn" class="btn primary" type="button">Пройти ще раз</button>
+        <button id="restartBtn" class="btn primary" type="button">Restart</button>
       </div>
     </section>
   </div>
@@ -649,7 +745,7 @@ export function buildZipBundle(quiz) {
   const folder = sanitizeFolderName(quiz.title || quiz.slug);
 
   const indexHtml = `<!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -662,43 +758,43 @@ export function buildZipBundle(quiz) {
       <span id="eyebrow" class="eyebrow">PDMU export</span>
       <h1 id="pageTitle">${htmlEscape(quiz.title)}</h1>
       <div class="meta">
-        <div class="meta-chip"><span id="linkLabel">Посилання</span>${htmlEscape(folder)}</div>
-        <div class="meta-chip"><span id="countLabel">Питань</span><strong id="quizLength">${quiz.questions.length}</strong></div>
+        <div class="meta-chip"><span id="linkLabel">Link</span>${htmlEscape(folder)}</div>
+        <div class="meta-chip"><span id="countLabel">Questions</span><strong id="quizLength">${quiz.questions.length}</strong></div>
       </div>
     </section>
 
     <section id="start" class="card">
       <h2 id="quizTitle" class="title">${htmlEscape(quiz.title)}</h2>
-      <p id="introText" class="lead">Можна перемішати порядок питань. Варіанти відповідей будуть перемішані автоматично.</p>
+      <p id="introText" class="lead">You can shuffle the order of questions. Answer options will be shuffled automatically.</p>
       <div class="controls" style="justify-content:flex-start">
         <label class="small" style="display:flex;align-items:center;gap:10px;font-size:14px">
           <input type="checkbox" id="shuffle" />
-          <span id="shuffleLabel">Перемішати питання</span>
+          <span id="shuffleLabel">Shuffle questions</span>
         </label>
       </div>
       <div class="controls">
         <div></div>
-        <button class="btn primary" id="startBtn" type="button">Почати</button>
+        <button class="btn primary" id="startBtn" type="button">Start</button>
       </div>
     </section>
 
     <section id="quiz" class="card hidden">
-      <div class="small" id="questionCounter">Питання</div>
+      <div class="small" id="questionCounter">Question</div>
       <p id="qText" class="question"></p>
       <div id="options" class="options"></div>
       <div class="controls">
-        <button id="finish" class="btn ghost" type="button">Завершити зараз</button>
-        <button id="next" class="btn secondary" type="button">Наступне</button>
+        <button id="finish" class="btn ghost" type="button">Finish now</button>
+        <button id="next" class="btn secondary" type="button">Next</button>
       </div>
     </section>
 
     <section id="results" class="card hidden">
-      <h2 id="resultsTitle" class="title">Результати</h2>
+      <h2 id="resultsTitle" class="title">Results</h2>
       <div id="sum" class="summary"></div>
       <div id="resultsList" class="results-list"></div>
       <div class="controls">
         <div></div>
-        <button id="restartBtn" class="btn primary" type="button">Пройти ще раз</button>
+        <button id="restartBtn" class="btn primary" type="button">Restart</button>
       </div>
     </section>
   </div>

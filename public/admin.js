@@ -163,14 +163,10 @@ async function finalizeCurrentDraft() {
 
 function renderFinalResult(payload) {
   resultBox.classList.remove('hidden');
-  const creatorMeta = payload.creatorTracked
-    ? `<p>Creator trace saved: <strong>${escapeHtml(String(payload.creatorBrowserId || payload.creatorFingerprint || 'yes'))}</strong></p>`
-    : '';
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
     <p>Питань знайдено: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
-    ${creatorMeta}
     <div id="quizLinkBox">
       <p><a href="${escapeAttr(String(payload.quizUrl || ''))}" target="_blank" rel="noreferrer">${escapeHtml(String(payload.quizUrl || ''))}</a></p>
     </div>

@@ -54,6 +54,10 @@ db.exec(`
     review_blocks_json TEXT NOT NULL DEFAULT '[]',
     raw_model_json TEXT NOT NULL,
     creator_snapshot_json TEXT NOT NULL DEFAULT '{}',
+    source_upload_path TEXT,
+    source_upload_name TEXT,
+    answer_upload_path TEXT,
+    answer_upload_name TEXT,
     created_at INTEGER NOT NULL,
     expires_at INTEGER,
     banned_at INTEGER,
@@ -72,6 +76,10 @@ db.exec(`
     questions_json TEXT NOT NULL,
     review_blocks_json TEXT NOT NULL DEFAULT '[]',
     raw_model_json TEXT NOT NULL,
+    source_upload_path TEXT,
+    source_upload_name TEXT,
+    answer_upload_path TEXT,
+    answer_upload_name TEXT,
     created_at INTEGER NOT NULL
   );
 
@@ -87,11 +95,22 @@ db.exec(`
     FOREIGN KEY(quiz_id) REFERENCES quizzes(id)
   );
 
+  CREATE TABLE IF NOT EXISTS quiz_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quiz_id INTEGER NOT NULL,
+    note TEXT,
+    reporter_snapshot_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(quiz_id) REFERENCES quizzes(id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quizzes_slug ON quizzes(slug);
   CREATE INDEX IF NOT EXISTS idx_access_codes_reservation_token ON access_codes(reservation_token);
   CREATE INDEX IF NOT EXISTS idx_quiz_drafts_token ON quiz_drafts(draft_token);
   CREATE INDEX IF NOT EXISTS idx_quiz_drafts_created_at ON quiz_drafts(created_at);
   CREATE INDEX IF NOT EXISTS idx_quiz_devices_quiz_id ON quiz_devices(quiz_id);
+  CREATE INDEX IF NOT EXISTS idx_quiz_reports_quiz_id ON quiz_reports(quiz_id);
+  CREATE INDEX IF NOT EXISTS idx_quiz_reports_created_at ON quiz_reports(created_at);
 `);
 
 ensureColumn('access_codes', 'site_type', 'TEXT');
@@ -105,6 +124,14 @@ ensureColumn('quiz_drafts', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quizzes', 'expires_at', 'INTEGER');
 ensureColumn('quizzes', 'banned_at', 'INTEGER');
 ensureColumn('quizzes', 'creator_snapshot_json', "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn('quizzes', 'source_upload_path', 'TEXT');
+ensureColumn('quizzes', 'source_upload_name', 'TEXT');
+ensureColumn('quizzes', 'answer_upload_path', 'TEXT');
+ensureColumn('quizzes', 'answer_upload_name', 'TEXT');
+ensureColumn('quiz_drafts', 'source_upload_path', 'TEXT');
+ensureColumn('quiz_drafts', 'source_upload_name', 'TEXT');
+ensureColumn('quiz_drafts', 'answer_upload_path', 'TEXT');
+ensureColumn('quiz_drafts', 'answer_upload_name', 'TEXT');
 
 const insertCodeStmt = db.prepare(`
   INSERT INTO access_codes (
@@ -238,10 +265,14 @@ const insertQuizStmt = db.prepare(`
     review_blocks_json,
     raw_model_json,
     creator_snapshot_json,
+    source_upload_path,
+    source_upload_name,
+    answer_upload_path,
+    answer_upload_name,
     created_at,
     expires_at,
     code_id
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const markCodeUsedStmt = db.prepare(`
@@ -304,8 +335,12 @@ const insertDraftStmt = db.prepare(`
     questions_json,
     review_blocks_json,
     raw_model_json,
+    source_upload_path,
+    source_upload_name,
+    answer_upload_path,
+    answer_upload_name,
     created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const getDraftByTokenStmt = db.prepare(`
@@ -316,6 +351,16 @@ const getDraftByTokenStmt = db.prepare(`
 
 const deleteDraftByTokenStmt = db.prepare(`
   DELETE FROM quiz_drafts
+  WHERE draft_token = ?
+`);
+
+const updateDraftUploadsByTokenStmt = db.prepare(`
+  UPDATE quiz_drafts
+  SET
+    source_upload_path = ?,
+    source_upload_name = ?,
+    answer_upload_path = ?,
+    answer_upload_name = ?
   WHERE draft_token = ?
 `);
 
@@ -409,6 +454,52 @@ const accountingSummaryStmt = db.prepare(`
     COALESCE(SUM(price), 0) AS totalAmount
   FROM access_codes
   WHERE used_at IS NOT NULL
+`);
+
+const insertQuizReportStmt = db.prepare(`
+  INSERT INTO quiz_reports (
+    quiz_id,
+    note,
+    reporter_snapshot_json,
+    created_at
+  ) VALUES (?, ?, ?, ?)
+`);
+
+const listQuizReportsStmt = db.prepare(`
+  SELECT
+    r.id,
+    r.quiz_id AS quizId,
+    r.note,
+    r.reporter_snapshot_json AS reporterSnapshotJson,
+    r.created_at AS createdAt,
+    q.slug AS quizSlug,
+    q.title AS quizTitle,
+    q.source_upload_path AS sourceUploadPath,
+    q.source_upload_name AS sourceUploadName,
+    q.answer_upload_path AS answerUploadPath,
+    q.answer_upload_name AS answerUploadName
+  FROM quiz_reports r
+  INNER JOIN quizzes q ON q.id = r.quiz_id
+  ORDER BY r.created_at DESC, r.id DESC
+  LIMIT ?
+`);
+
+const getQuizReportByIdStmt = db.prepare(`
+  SELECT
+    r.id,
+    r.quiz_id AS quizId,
+    r.note,
+    r.reporter_snapshot_json AS reporterSnapshotJson,
+    r.created_at AS createdAt,
+    q.slug AS quizSlug,
+    q.title AS quizTitle,
+    q.source_upload_path AS sourceUploadPath,
+    q.source_upload_name AS sourceUploadName,
+    q.answer_upload_path AS answerUploadPath,
+    q.answer_upload_name AS answerUploadName
+  FROM quiz_reports r
+  INNER JOIN quizzes q ON q.id = r.quiz_id
+  WHERE r.id = ?
 `);
 
 syncUnlimitedEvaAccessCode();
@@ -589,6 +680,10 @@ export function createQuizDraft({
   questions,
   reviewBlocks = [],
   rawModelJson,
+  sourceUploadPath = null,
+  sourceUploadName = null,
+  answerUploadPath = null,
+  answerUploadName = null,
 }) {
   const createdAt = nowMs();
   const draftToken = randomToken();
@@ -605,6 +700,10 @@ export function createQuizDraft({
     JSON.stringify(questions),
     JSON.stringify(reviewBlocks),
     JSON.stringify(rawModelJson),
+    sanitizeNullableValue(sourceUploadPath),
+    sanitizeNullableValue(sourceUploadName),
+    sanitizeNullableValue(answerUploadPath),
+    sanitizeNullableValue(answerUploadName),
     createdAt,
   );
 
@@ -614,6 +713,26 @@ export function createQuizDraft({
     requestedCount,
     createdAt,
   };
+}
+
+export function attachDraftUploads({
+  draftToken,
+  sourceUploadPath = null,
+  sourceUploadName = null,
+  answerUploadPath = null,
+  answerUploadName = null,
+}) {
+  if (!draftToken) {
+    return;
+  }
+
+  updateDraftUploadsByTokenStmt.run(
+    sanitizeNullableValue(sourceUploadPath),
+    sanitizeNullableValue(sourceUploadName),
+    sanitizeNullableValue(answerUploadPath),
+    sanitizeNullableValue(answerUploadName),
+    draftToken,
+  );
 }
 
 export function finalizeQuizFromDraftReservation({ reservationToken, draftToken, creatorSnapshot = null }) {
@@ -664,6 +783,10 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
       draftRow.review_blocks_json,
       draftRow.raw_model_json,
       JSON.stringify(normalizedCreatorSnapshot),
+      sanitizeNullableValue(draftRow.source_upload_path),
+      sanitizeNullableValue(draftRow.source_upload_name),
+      sanitizeNullableValue(draftRow.answer_upload_path),
+      sanitizeNullableValue(draftRow.answer_upload_name),
       createdAt,
       expiresAt,
       codeRow.id,
@@ -769,6 +892,38 @@ export function getAccountingSummary() {
   };
 }
 
+export function createQuizReport({ quizId, note = null, reporterSnapshot = null }) {
+  const quiz = getQuizById(quizId);
+  if (!quiz) {
+    return null;
+  }
+
+  const createdAt = nowMs();
+  const insert = insertQuizReportStmt.run(
+    quiz.id,
+    sanitizeNullableValue(note),
+    JSON.stringify(normalizeReporterSnapshot(reporterSnapshot, createdAt)),
+    createdAt,
+  );
+
+  return getQuizReportById(insert.lastInsertRowid);
+}
+
+export function listQuizReports(limit = 20) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  return listQuizReportsStmt.all(safeLimit).map(mapQuizReportRow);
+}
+
+export function getQuizReportById(reportId) {
+  const numericReportId = Number(reportId);
+  if (!Number.isInteger(numericReportId) || numericReportId < 1) {
+    return null;
+  }
+
+  const row = getQuizReportByIdStmt.get(numericReportId);
+  return row ? mapQuizReportRow(row) : null;
+}
+
 export function setQuizBanStatusById(quizId, banned) {
   const numericQuizId = Number(quizId);
   if (!Number.isInteger(numericQuizId) || numericQuizId < 1) {
@@ -863,6 +1018,10 @@ function mapQuizRow(row) {
     reviewBlocks: JSON.parse(row.review_blocks_json || '[]'),
     rawModelJson: JSON.parse(row.raw_model_json),
     creatorSnapshot: parseJsonField(row.creator_snapshot_json, {}),
+    sourceUploadPath: row.source_upload_path || null,
+    sourceUploadName: row.source_upload_name || null,
+    answerUploadPath: row.answer_upload_path || null,
+    answerUploadName: row.answer_upload_name || null,
     createdAt: Number(row.created_at || 0),
     expiresAt: row.expires_at ? Number(row.expires_at) : null,
     bannedAt: row.banned_at ? Number(row.banned_at) : null,
@@ -872,6 +1031,22 @@ function mapQuizRow(row) {
     expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
     price: Number(row.price || 0),
     codeLabel: row.codeLabel || null,
+  };
+}
+
+function mapQuizReportRow(row) {
+  return {
+    id: Number(row.id),
+    quizId: Number(row.quizId),
+    quizSlug: row.quizSlug || '',
+    quizTitle: row.quizTitle || '',
+    note: row.note || null,
+    createdAt: Number(row.createdAt || 0),
+    reporterSnapshot: parseJsonField(row.reporterSnapshotJson, {}),
+    sourceUploadPath: row.sourceUploadPath || null,
+    sourceUploadName: row.sourceUploadName || null,
+    answerUploadPath: row.answerUploadPath || null,
+    answerUploadName: row.answerUploadName || null,
   };
 }
 
@@ -982,6 +1157,21 @@ function normalizeCreatorSnapshot(snapshot, fallbackTimestamp) {
     creationSource: sanitizeNullableValue(snapshot.creationSource),
     request: snapshot.request && typeof snapshot.request === 'object' ? snapshot.request : null,
     client: snapshot.client && typeof snapshot.client === 'object' ? snapshot.client : null,
+  };
+}
+
+function normalizeReporterSnapshot(snapshot, fallbackTimestamp) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return {};
+  }
+
+  return {
+    createdAt: Number(snapshot.createdAt || fallbackTimestamp || nowMs()),
+    note: sanitizeNullableValue(snapshot.note),
+    pageUrl: sanitizeNullableValue(snapshot.pageUrl),
+    currentQuestion: Number.isInteger(Number(snapshot.currentQuestion)) ? Number(snapshot.currentQuestion) : null,
+    request: snapshot.request && typeof snapshot.request === 'object' ? snapshot.request : null,
+    device: snapshot.device && typeof snapshot.device === 'object' ? snapshot.device : null,
   };
 }
 

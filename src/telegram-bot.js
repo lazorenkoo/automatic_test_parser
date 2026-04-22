@@ -3,9 +3,11 @@ import {
   createAccessCodes,
   createReusableAccessCode,
   deleteQuizById,
-  getQuizById,
   getAccountingSummary,
   getDbMeta,
+  getQuizById,
+  getQuizReportById,
+  listQuizReports,
   listQuizzesForAdmin,
   revokeAccessCode,
   setQuizBanStatusById,
@@ -31,40 +33,44 @@ export function startTelegramBot() {
   botInstance = bot;
 
   const helpText = [
-    '??????? ????:',
-    '/code <type> <questions> [price] <tg_user> [label] - ??????? 1 ???',
-    '/reusecode <type> <questions> [price] <tg_user> [label] - ??????? ???????????? ???',
-    '/codes <count> <type> <questions> [price] <tg_user> [label] - ??????? ????????? ?????',
-    '/delcode <CODE> - ????????? ???, ????? ?? ?????? ?? ???????? ?????',
-    '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01] - ?????? ??????',
-    '/search <text> - ????? ?????? ?? @user, slug ??? ????????',
-    '/site <id> - ??????????? ?? ?????? ?????',
-    '/money - ????? ?? ????? ???? ????????? ?????? ?? ???????',
-    '/ban <id> - ???????? ???? ????',
-    '/ban <type> <N> - ???????? ????? ???? 1 ??? 2, ??? ????????? ?????? N',
-    '/unban <id> - ??????? ????',
-    '/delete <id> - ??????? ???? ????',
-    '/delete before=2026-04-01 [type=1] [tg=@user] [status=banned] - ??????? ????? ?? ???????',
-    '/db - ???????? ???? ? SQLite ????',
-    '/id - ???????? ??? Telegram ID',
-    '/help - ???????? ??????',
+    'Admin commands:',
+    '/code <type> <questions> [price] <tg_user> [label]',
+    '/reusecode <type> <questions> [price] <tg_user> [label]',
+    '/codes <count> <type> <questions> [price] <tg_user> [label]',
+    '/delcode <CODE>',
+    '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
+    '/search <text>',
+    '/site <id>',
+    '/reports [limit]',
+    '/report <id>',
+    '/reportfile <id> <source|answer>',
+    '/money',
+    '/ban <id> or /ban <type> <N>',
+    '/unban <id>',
+    '/delete <id> or /delete before=YYYY-MM-DD ...',
+    '/db',
+    '/id',
+    '/help',
   ].join('\n');
 
   bot.setMyCommands([
-    { command: 'code', description: '??????? 1 ??? ???????' },
-    { command: 'reusecode', description: '??????? ???????????? ???' },
-    { command: 'codes', description: '??????? ????????? ?????' },
-    { command: 'delcode', description: '????????? ??? ???????' },
-    { command: 'sites', description: '?????? ??????' },
-    { command: 'search', description: '????? ????? ??????' },
-    { command: 'site', description: '?????? ?? ?????' },
-    { command: 'money', description: '????? ?? ????? ??????' },
-    { command: 'ban', description: '???????? ????' },
-    { command: 'unban', description: '??????? ????' },
-    { command: 'delete', description: '??????? ????' },
-    { command: 'db', description: '???? ? SQLite ????' },
-    { command: 'id', description: '??? Telegram ID' },
-    { command: 'help', description: '??????' },
+    { command: 'code', description: 'Create one code' },
+    { command: 'reusecode', description: 'Create reusable code' },
+    { command: 'codes', description: 'Create many codes' },
+    { command: 'delcode', description: 'Disable a code' },
+    { command: 'sites', description: 'List quiz sites' },
+    { command: 'search', description: 'Search quiz sites' },
+    { command: 'site', description: 'Show site details' },
+    { command: 'reports', description: 'Latest file reports' },
+    { command: 'report', description: 'Show report details' },
+    { command: 'reportfile', description: 'Send reported file' },
+    { command: 'money', description: 'Accounting summary' },
+    { command: 'ban', description: 'Ban site(s)' },
+    { command: 'unban', description: 'Unban site' },
+    { command: 'delete', description: 'Delete site(s)' },
+    { command: 'db', description: 'Show SQLite path' },
+    { command: 'id', description: 'Show Telegram ID' },
+    { command: 'help', description: 'Show help' },
   ]).catch(() => {});
 
   bot.onText(/^\/id(?:@[\w_]+)?$/i, async (msg) => {
@@ -73,8 +79,8 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, [
-      `Ваш user id: ${msg.from?.id ?? 'unknown'}`,
-      `Ваш chat id: ${msg.chat.id}`,
+      `Your user id: ${msg.from?.id ?? 'unknown'}`,
+      `Your chat id: ${msg.chat.id}`,
     ].join('\n'));
   });
 
@@ -92,7 +98,7 @@ export function startTelegramBot() {
     }
 
     const meta = getDbMeta();
-    await bot.sendMessage(msg.chat.id, `SQLite база:\n${meta.dbPath}`);
+    await bot.sendMessage(msg.chat.id, `SQLite database:\n${meta.dbPath}`);
   });
 
   bot.onText(/^\/money(?:@[\w_]+)?$/i, async (msg) => {
@@ -102,9 +108,9 @@ export function startTelegramBot() {
 
     const summary = getAccountingSummary();
     await bot.sendMessage(msg.chat.id, [
-      'Бухгалтерия:',
-      `Создано сайтов по использованным кодам: ${summary.usedCodeCount}`,
-      `Общая сумма: ${formatPrice(summary.totalAmount)}`,
+      'Accounting:',
+      `Used codes: ${summary.usedCodeCount}`,
+      `Total amount: ${formatPrice(summary.totalAmount)}`,
     ].join('\n'));
   });
 
@@ -178,22 +184,17 @@ export function startTelegramBot() {
 
     const code = String(match?.[1] || '').trim();
     if (!code) {
-      await bot.sendMessage(msg.chat.id, 'Формат: /delcode <CODE>');
+      await bot.sendMessage(msg.chat.id, 'Format: /delcode <CODE>');
       return;
     }
 
     const result = revokeAccessCode(code);
     if (!result) {
-      await bot.sendMessage(msg.chat.id, 'Код не найден.');
+      await bot.sendMessage(msg.chat.id, 'Code not found.');
       return;
     }
 
-    await bot.sendMessage(msg.chat.id, [
-      result.alreadyRevoked ? 'Код уже был отключен.' : 'Код отключен.',
-      `Тип: ${formatSiteType(result.siteType)}`,
-      `Количество тестов: ${result.expectedQuestionCount || '—'}`,
-      `Цена: ${formatPrice(result.price)}`,
-    ].filter(Boolean).join('\n'));
+    await bot.sendMessage(msg.chat.id, result.alreadyRevoked ? 'Code was already disabled.' : 'Code disabled.');
   });
 
   bot.onText(/^\/sites(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -224,89 +225,6 @@ export function startTelegramBot() {
     await bot.sendMessage(msg.chat.id, formatSearchResults(parsed), { disable_web_page_preview: true });
   });
 
-  bot.onText(/^\/review(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
-    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
-      return;
-    }
-
-    const parsed = parseReviewArgs(match?.[1]);
-    if (!parsed.ok) {
-      await bot.sendMessage(msg.chat.id, parsed.error);
-      return;
-    }
-
-    const quiz = getQuizById(parsed.id);
-    if (!quiz) {
-      await bot.sendMessage(msg.chat.id, `Сайт с id ${parsed.id} не найден.`);
-      return;
-    }
-
-    await bot.sendMessage(msg.chat.id, formatReviewMessage(quiz, parsed), { disable_web_page_preview: true });
-  });
-
-  bot.onText(/^\/fixblock(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
-    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
-      return;
-    }
-
-    const parsed = parseManualQuestionCommand(match?.[1], 'fixblock');
-    if (!parsed.ok) {
-      await bot.sendMessage(msg.chat.id, parsed.error);
-      return;
-    }
-
-    const updatedQuiz = fixQuizReviewBlock({
-      quizId: parsed.id,
-      blockIndex: parsed.targetIndex,
-      question: parsed.question,
-    });
-
-    if (!updatedQuiz) {
-      await bot.sendMessage(msg.chat.id, `Сайт с id ${parsed.id} не найден.`);
-      return;
-    }
-
-    if (updatedQuiz.error === 'block_not_found') {
-      await bot.sendMessage(msg.chat.id, `Проблемный блок ${parsed.targetIndex} не найден.`);
-      return;
-    }
-
-    await bot.sendMessage(msg.chat.id, [
-      `Блок ${parsed.targetIndex} обработан.`,
-      `Вопросов теперь: ${updatedQuiz.questions.length}`,
-    ].join('\n'));
-  });
-
-  bot.onText(/^\/setq(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
-    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
-      return;
-    }
-
-    const parsed = parseManualQuestionCommand(match?.[1], 'setq');
-    if (!parsed.ok) {
-      await bot.sendMessage(msg.chat.id, parsed.error);
-      return;
-    }
-
-    const updatedQuiz = replaceQuizQuestion({
-      quizId: parsed.id,
-      questionIndex: parsed.targetIndex,
-      question: parsed.question,
-    });
-
-    if (!updatedQuiz) {
-      await bot.sendMessage(msg.chat.id, `Сайт с id ${parsed.id} не найден.`);
-      return;
-    }
-
-    if (updatedQuiz.error === 'question_not_found') {
-      await bot.sendMessage(msg.chat.id, `Вопрос ${parsed.targetIndex} не найден.`);
-      return;
-    }
-
-    await bot.sendMessage(msg.chat.id, `Вопрос ${parsed.targetIndex} обновлен.`);
-  });
-
   bot.onText(/^\/site(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
     if (!(await ensureAuthorized(bot, msg, adminUserId))) {
       return;
@@ -314,17 +232,78 @@ export function startTelegramBot() {
 
     const numericId = Number(String(match?.[1] || '').trim());
     if (!Number.isInteger(numericId) || numericId < 1) {
-      await bot.sendMessage(msg.chat.id, 'Формат: /site <id>');
+      await bot.sendMessage(msg.chat.id, 'Format: /site <id>');
       return;
     }
 
     const quiz = getQuizById(numericId);
     if (!quiz) {
-      await bot.sendMessage(msg.chat.id, `Сайт с id ${numericId} не найден.`);
+      await bot.sendMessage(msg.chat.id, `Site with id ${numericId} not found.`);
       return;
     }
 
     await bot.sendMessage(msg.chat.id, formatSiteDetails(quiz), { disable_web_page_preview: true });
+  });
+
+  bot.onText(/^\/reports(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const limit = Math.max(1, Math.min(50, Number(String(match?.[1] || '').trim()) || 10));
+    await bot.sendMessage(msg.chat.id, formatReportsList(limit), { disable_web_page_preview: true });
+  });
+
+  bot.onText(/^\/report(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const numericId = Number(String(match?.[1] || '').trim());
+    if (!Number.isInteger(numericId) || numericId < 1) {
+      await bot.sendMessage(msg.chat.id, 'Format: /report <id>');
+      return;
+    }
+
+    const report = getQuizReportById(numericId);
+    if (!report) {
+      await bot.sendMessage(msg.chat.id, `Report with id ${numericId} not found.`);
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, formatReportDetails(report), { disable_web_page_preview: true });
+  });
+
+  bot.onText(/^\/reportfile(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseReportFileArgs(match?.[1]);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const report = getQuizReportById(parsed.id);
+    if (!report) {
+      await bot.sendMessage(msg.chat.id, `Report with id ${parsed.id} not found.`);
+      return;
+    }
+
+    const filePath = parsed.kind === 'source' ? report.sourceUploadPath : report.answerUploadPath;
+    const fileName = parsed.kind === 'source' ? report.sourceUploadName : report.answerUploadName;
+
+    if (!filePath) {
+      await bot.sendMessage(msg.chat.id, `No ${parsed.kind} file saved for report ${parsed.id}.`);
+      return;
+    }
+
+    await bot.sendDocument(msg.chat.id, filePath, {
+      caption: `Report ${report.id} | ${parsed.kind} | quiz ${report.quizId}`,
+    }, {
+      filename: fileName || undefined,
+    });
   });
 
   bot.onText(/^\/ban(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -341,11 +320,11 @@ export function startTelegramBot() {
     if (parsed.mode === 'single') {
       const quiz = setQuizBanStatusById(parsed.id, true);
       if (!quiz) {
-        await bot.sendMessage(msg.chat.id, `Сайт с id ${parsed.id} не найден.`);
+        await bot.sendMessage(msg.chat.id, `Site with id ${parsed.id} not found.`);
         return;
       }
 
-      await bot.sendMessage(msg.chat.id, `Сайт ${quiz.id} забанен.\n${quiz.title}`);
+      await bot.sendMessage(msg.chat.id, `Site ${quiz.id} banned.\n${quiz.title}`);
       return;
     }
 
@@ -358,7 +337,7 @@ export function startTelegramBot() {
     if (!candidates.length) {
       await bot.sendMessage(
         msg.chat.id,
-        `Нет активных сайтов типа ${parsed.siteType}, где устройств больше ${parsed.minDevices}.`,
+        `No active sites of type ${parsed.siteType} with device count greater than ${parsed.minDevices}.`,
       );
       return;
     }
@@ -367,15 +346,12 @@ export function startTelegramBot() {
     for (const quiz of candidates) {
       const bannedQuiz = setQuizBanStatusById(quiz.id, true);
       if (bannedQuiz) {
-        bannedLines.push(`${bannedQuiz.id} | ${formatSiteType(bannedQuiz.siteType)} | устройств ${bannedQuiz.deviceCount || 0}`);
+        bannedLines.push(`${bannedQuiz.id} | devices ${bannedQuiz.deviceCount || 0}`);
       }
     }
 
     await bot.sendMessage(msg.chat.id, [
-      `Забанено сайтов: ${bannedLines.length}`,
-      `Тип сайта: ${formatSiteType(parsed.siteType)}`,
-      `Условие: устройств > ${parsed.minDevices}`,
-      '',
+      `Banned sites: ${bannedLines.length}`,
       ...bannedLines,
     ].join('\n'));
   });
@@ -387,17 +363,17 @@ export function startTelegramBot() {
 
     const numericId = Number(String(match?.[1] || '').trim());
     if (!Number.isInteger(numericId) || numericId < 1) {
-      await bot.sendMessage(msg.chat.id, 'Формат: /unban <id>');
+      await bot.sendMessage(msg.chat.id, 'Format: /unban <id>');
       return;
     }
 
     const quiz = setQuizBanStatusById(numericId, false);
     if (!quiz) {
-      await bot.sendMessage(msg.chat.id, `Сайт с id ${numericId} не найден.`);
+      await bot.sendMessage(msg.chat.id, `Site with id ${numericId} not found.`);
       return;
     }
 
-    await bot.sendMessage(msg.chat.id, `Сайт ${quiz.id} снова активен.\n${quiz.title}`);
+    await bot.sendMessage(msg.chat.id, `Site ${quiz.id} is active again.\n${quiz.title}`);
   });
 
   bot.onText(/^\/delete(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -414,17 +390,17 @@ export function startTelegramBot() {
     if (parsed.mode === 'single') {
       const deletedQuiz = deleteQuizById(parsed.id);
       if (!deletedQuiz) {
-        await bot.sendMessage(msg.chat.id, `Сайт с id ${parsed.id} не найден.`);
+        await bot.sendMessage(msg.chat.id, `Site with id ${parsed.id} not found.`);
         return;
       }
 
-      await bot.sendMessage(msg.chat.id, `Сайт удален:\n${deletedQuiz.id}. ${deletedQuiz.title}`);
+      await bot.sendMessage(msg.chat.id, `Site deleted:\n${deletedQuiz.id}. ${deletedQuiz.title}`);
       return;
     }
 
     const candidates = listQuizzesForAdmin().filter((quiz) => matchesQuizFilters(quiz, parsed.filters));
     if (!candidates.length) {
-      await bot.sendMessage(msg.chat.id, 'По заданным фильтрам ничего не найдено.');
+      await bot.sendMessage(msg.chat.id, 'Nothing matched these filters.');
       return;
     }
 
@@ -437,7 +413,7 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, [
-      `Удалено сайтов: ${deletedLines.length}`,
+      `Deleted sites: ${deletedLines.length}`,
       '',
       ...deletedLines.slice(0, 30),
       deletedLines.length > 30 ? '...' : null,
@@ -449,12 +425,48 @@ export function startTelegramBot() {
   });
 
   bindShutdown(bot);
-  if (adminUserId) {
-    console.log(`Telegram bot started for admin user ${adminUserId}`);
-  } else {
-    console.log('Telegram bot started in setup mode. Send /id to get your Telegram user id.');
-  }
   return bot;
+}
+
+export async function notifyAdminAboutQuizReport(report) {
+  const adminUserId = Number(process.env.TELEGRAM_ADMIN_USER_ID || 0);
+  if (!botInstance || !adminUserId || !report) {
+    return;
+  }
+
+  const files = [];
+  if (report.sourceUploadPath) {
+    files.push('source');
+  }
+  if (report.answerUploadPath) {
+    files.push('answer');
+  }
+
+  const snapshot = report.reporterSnapshot && typeof report.reporterSnapshot === 'object'
+    ? report.reporterSnapshot
+    : {};
+
+  const request = snapshot.request && typeof snapshot.request === 'object'
+    ? snapshot.request
+    : {};
+
+  const message = [
+    'New quiz file report',
+    `Report ID: ${report.id}`,
+    `Quiz ID: ${report.quizId}`,
+    `Title: ${report.quizTitle || '-'}`,
+    `Slug: ${report.quizSlug || '-'}`,
+    `Question: ${snapshot.currentQuestion || '-'}`,
+    `IP: ${request.ip || '-'}`,
+    `Note: ${report.note || snapshot.note || '-'}`,
+    `Files: ${files.length ? files.join(', ') : 'none'}`,
+    '',
+    `Open: /report ${report.id}`,
+    report.sourceUploadPath ? `Source: /reportfile ${report.id} source` : null,
+    report.answerUploadPath ? `Answer: /reportfile ${report.id} answer` : null,
+  ].filter(Boolean).join('\n');
+
+  await botInstance.sendMessage(adminUserId, message, { disable_web_page_preview: true });
 }
 
 async function ensureAuthorized(bot, msg, adminUserId) {
@@ -481,8 +493,8 @@ function parseSingleCodeArgs(rawValue, commandName = 'code') {
     return {
       ok: false,
       error: commandName === 'reusecode'
-        ? 'Формат: /reusecode <type> <questions> [price] <tg_user> [label]\nПримеры:\n/reusecode 1 50 300 @ivan client-a\n/reusecode 1 50 @ivan client-a'
-        : 'Формат: /code <type> <questions> [price] <tg_user> [label]\nПримеры:\n/code 1 50 300 @ivan client-a\n/code 1 50 @ivan client-a',
+        ? 'Format: /reusecode <type> <questions> [price] <tg_user> [label]'
+        : 'Format: /code <type> <questions> [price] <tg_user> [label]',
     };
   }
 
@@ -493,19 +505,16 @@ function parseSingleCodeArgs(rawValue, commandName = 'code') {
   const clientUsername = normalizeClientUsername(hasExplicitPrice ? parts[3] : parts[2]);
 
   if (!siteType) {
-    return { ok: false, error: 'Тип сайта должен быть 1 или 2.' };
+    return { ok: false, error: 'Site type must be 1 or 2.' };
   }
-
   if (!questionCount) {
-    return { ok: false, error: 'Количество вопросов должно быть целым числом больше 0.' };
+    return { ok: false, error: 'Question count must be an integer greater than 0.' };
   }
-
   if (price === null) {
-    return { ok: false, error: 'Цена должна быть числом 0 или больше. Пример: 300 или 299.99' };
+    return { ok: false, error: 'Price must be a number 0 or greater.' };
   }
-
   if (!clientUsername) {
-    return { ok: false, error: 'Укажите Telegram user клиента. Пример: @ivan' };
+    return { ok: false, error: 'Telegram user is required, for example @ivan.' };
   }
 
   return {
@@ -524,7 +533,7 @@ function parseBatchCodeArgs(rawValue) {
   if (parts.length < 4) {
     return {
       ok: false,
-      error: 'Формат: /codes <count> <type> <questions> [price] <tg_user> [label]\nПримеры:\n/codes 5 2 80 300 @ivan april-batch\n/codes 5 2 80 @ivan april-batch',
+      error: 'Format: /codes <count> <type> <questions> [price] <tg_user> [label]',
     };
   }
 
@@ -536,23 +545,19 @@ function parseBatchCodeArgs(rawValue) {
   const clientUsername = normalizeClientUsername(hasExplicitPrice ? parts[4] : parts[3]);
 
   if (!Number.isInteger(count) || count < 1) {
-    return { ok: false, error: 'Количество кодов должно быть целым числом от 1 до 100.' };
+    return { ok: false, error: 'Code count must be between 1 and 100.' };
   }
-
   if (!siteType) {
-    return { ok: false, error: 'Тип сайта должен быть 1 или 2.' };
+    return { ok: false, error: 'Site type must be 1 or 2.' };
   }
-
   if (!questionCount) {
-    return { ok: false, error: 'Количество вопросов должно быть целым числом больше 0.' };
+    return { ok: false, error: 'Question count must be an integer greater than 0.' };
   }
-
   if (price === null) {
-    return { ok: false, error: 'Цена должна быть числом 0 или больше. Пример: 300 или 299.99' };
+    return { ok: false, error: 'Price must be a number 0 or greater.' };
   }
-
   if (!clientUsername) {
-    return { ok: false, error: 'Укажите Telegram user клиента. Пример: @ivan' };
+    return { ok: false, error: 'Telegram user is required, for example @ivan.' };
   }
 
   return {
@@ -568,43 +573,37 @@ function parseBatchCodeArgs(rawValue) {
 
 function parseSitesArgs(rawValue) {
   const parts = tokenizeArgs(rawValue);
-  const result = {
-    ok: true,
-    page: 1,
-    filters: {
-      type: null,
-      tg: null,
-      query: '',
-      minDevices: null,
-      maxDevices: null,
-      status: 'all',
-      before: null,
-      after: null,
-    },
+  let page = 1;
+  const filters = {
+    type: null,
+    tg: null,
+    query: '',
+    minDevices: null,
+    maxDevices: null,
+    status: 'all',
+    before: null,
+    after: null,
   };
 
   for (const part of parts) {
-    if (/^\d+$/.test(part) && result.page === 1) {
-      result.page = Math.max(1, Number(part));
+    if (/^\d+$/.test(part) && page === 1) {
+      page = Math.max(1, Number(part));
       continue;
     }
 
-    const parsedFilter = applyFilterPart(result.filters, part);
-    if (!parsedFilter.ok) {
-      return parsedFilter;
+    const parsed = applyFilterPart(filters, part);
+    if (!parsed.ok) {
+      return parsed;
     }
   }
 
-  return result;
+  return { ok: true, page, filters };
 }
 
 function parseSearchArgs(rawValue) {
   const query = String(rawValue || '').trim();
   if (!query) {
-    return {
-      ok: false,
-      error: 'Формат: /search <text>\nПримеры:\n/search @ivan\n/search quiz-wu5qg2t4en\n/search онко',
-    };
+    return { ok: false, error: 'Format: /search <text>' };
   }
 
   return {
@@ -623,42 +622,22 @@ function parseSearchArgs(rawValue) {
   };
 }
 
-function parseReviewArgs(rawValue) {
-  return { ok: false, error: '??????? review/fixblock/setq ?????????.' };
-}
-
-function parseManualQuestionCommand(rawValue, commandName) {
-  return { ok: false, error: '??????? review/fixblock/setq ?????????.' };
-}
-
-function parseQuestionSpec(specText, correctIndex) {
-  const parts = String(specText || '')
-    .split('||')
-    .map((part) => String(part || '').trim())
-    .filter(Boolean);
-
-  if (parts.length < 3) {
-    return { ok: false, error: 'Нужно передать вопрос и минимум 2 варианта ответа через ||.' };
+function parseReportFileArgs(rawValue) {
+  const parts = tokenizeArgs(rawValue);
+  if (parts.length < 2) {
+    return { ok: false, error: 'Format: /reportfile <id> <source|answer>' };
   }
 
-  const q = parts[0];
-  const options = parts.slice(1);
-  if (!q) {
-    return { ok: false, error: 'Текст вопроса пустой.' };
+  const id = Number(parts[0]);
+  const kind = String(parts[1] || '').trim().toLowerCase();
+  if (!Number.isInteger(id) || id < 1) {
+    return { ok: false, error: 'Report id must be a positive integer.' };
+  }
+  if (!['source', 'answer'].includes(kind)) {
+    return { ok: false, error: 'File type must be source or answer.' };
   }
 
-  if (correctIndex > options.length) {
-    return { ok: false, error: `correct не может быть больше количества вариантов (${options.length}).` };
-  }
-
-  return {
-    ok: true,
-    question: {
-      q,
-      options,
-      correctIndex: correctIndex - 1,
-    },
-  };
+  return { ok: true, id, kind };
 }
 
 function parseBanArgs(rawValue) {
@@ -667,34 +646,24 @@ function parseBanArgs(rawValue) {
   if (parts.length === 1) {
     const numericId = Number(parts[0]);
     if (!Number.isInteger(numericId) || numericId < 1) {
-      return {
-        ok: false,
-        error: 'Формат: /ban <id> или /ban <type> <N>\nПримеры:\n/ban 32\n/ban 1 3',
-      };
+      return { ok: false, error: 'Format: /ban <id> or /ban <type> <N>' };
     }
-
     return { ok: true, mode: 'single', id: numericId };
   }
 
   if (parts.length === 2) {
     const siteType = normalizeSiteType(parts[0]);
     const minDevices = Number(parts[1]);
-
     if (!siteType) {
-      return { ok: false, error: 'Тип сайта должен быть 1 или 2.' };
+      return { ok: false, error: 'Site type must be 1 or 2.' };
     }
-
     if (!Number.isInteger(minDevices) || minDevices < 0) {
-      return { ok: false, error: 'Количество устройств N должно быть целым числом 0 или больше.' };
+      return { ok: false, error: 'N must be an integer 0 or greater.' };
     }
-
     return { ok: true, mode: 'filtered', siteType, minDevices };
   }
 
-  return {
-    ok: false,
-    error: 'Формат: /ban <id> или /ban <type> <N>\nПримеры:\n/ban 32\n/ban 1 3',
-  };
+  return { ok: false, error: 'Format: /ban <id> or /ban <type> <N>' };
 }
 
 function parseDeleteArgs(rawValue) {
@@ -702,7 +671,7 @@ function parseDeleteArgs(rawValue) {
   if (!parts.length) {
     return {
       ok: false,
-      error: 'Формат: /delete <id> или /delete before=2026-04-01 [type=1] [tg=@user]',
+      error: 'Format: /delete <id> or /delete before=YYYY-MM-DD [type=1] [tg=@user]',
     };
   }
 
@@ -726,24 +695,17 @@ function parseDeleteArgs(rawValue) {
   };
 
   for (const part of parts) {
-    const parsedFilter = applyFilterPart(filters, part);
-    if (!parsedFilter.ok) {
-      return parsedFilter;
+    const parsed = applyFilterPart(filters, part);
+    if (!parsed.ok) {
+      return parsed;
     }
   }
 
-  if (!filters.before && !filters.after && !filters.type && !filters.tg && filters.minDevices === null && filters.maxDevices === null && filters.status === 'all') {
-    return {
-      ok: false,
-      error: 'Для удаления по фильтру укажите хотя бы один фильтр, например before=2026-04-01 или type=1.',
-    };
+  if (!filters.before && !filters.after && !filters.type && !filters.tg && filters.minDevices === null && filters.maxDevices === null && filters.status === 'all' && !filters.query) {
+    return { ok: false, error: 'Use at least one filter when deleting by query.' };
   }
 
-  return {
-    ok: true,
-    mode: 'filtered',
-    filters,
-  };
+  return { ok: true, mode: 'filtered', filters };
 }
 
 function applyFilterPart(filters, part) {
@@ -754,7 +716,7 @@ function applyFilterPart(filters, part) {
   if (normalizedKey === 'type') {
     const siteType = normalizeSiteType(normalizedValue);
     if (!siteType) {
-      return { ok: false, error: 'Фильтр type поддерживает только 1 или 2.' };
+      return { ok: false, error: 'type supports only 1 or 2.' };
     }
     filters.type = siteType;
     return { ok: true };
@@ -763,7 +725,7 @@ function applyFilterPart(filters, part) {
   if (normalizedKey === 'tg') {
     const username = normalizeClientUsername(normalizedValue);
     if (!username) {
-      return { ok: false, error: 'Фильтр tg указывается как tg=@username.' };
+      return { ok: false, error: 'tg must look like tg=@username.' };
     }
     filters.tg = username;
     return { ok: true };
@@ -771,7 +733,7 @@ function applyFilterPart(filters, part) {
 
   if (normalizedKey === 'q' || normalizedKey === 'query') {
     if (!normalizedValue) {
-      return { ok: false, error: 'Фильтр q указывается как q=текст.' };
+      return { ok: false, error: 'q must contain search text.' };
     }
     filters.query = normalizedValue;
     return { ok: true };
@@ -780,7 +742,7 @@ function applyFilterPart(filters, part) {
   if (normalizedKey === 'min_devices') {
     const numericValue = Number(normalizedValue);
     if (!Number.isInteger(numericValue) || numericValue < 0) {
-      return { ok: false, error: 'min_devices должен быть целым числом 0 или больше.' };
+      return { ok: false, error: 'min_devices must be an integer 0 or greater.' };
     }
     filters.minDevices = numericValue;
     return { ok: true };
@@ -789,7 +751,7 @@ function applyFilterPart(filters, part) {
   if (normalizedKey === 'max_devices') {
     const numericValue = Number(normalizedValue);
     if (!Number.isInteger(numericValue) || numericValue < 0) {
-      return { ok: false, error: 'max_devices должен быть целым числом 0 или больше.' };
+      return { ok: false, error: 'max_devices must be an integer 0 or greater.' };
     }
     filters.maxDevices = numericValue;
     return { ok: true };
@@ -798,7 +760,7 @@ function applyFilterPart(filters, part) {
   if (normalizedKey === 'status') {
     const normalizedStatus = normalizedValue.toLowerCase();
     if (!['active', 'banned', 'all'].includes(normalizedStatus)) {
-      return { ok: false, error: 'status поддерживает active, banned или all.' };
+      return { ok: false, error: 'status supports active, banned or all.' };
     }
     filters.status = normalizedStatus;
     return { ok: true };
@@ -807,7 +769,7 @@ function applyFilterPart(filters, part) {
   if (normalizedKey === 'before' || normalizedKey === 'after') {
     const timestamp = normalizeDateFilter(normalizedValue);
     if (!timestamp) {
-      return { ok: false, error: `${normalizedKey} указывается как YYYY-MM-DD.` };
+      return { ok: false, error: `${normalizedKey} must be YYYY-MM-DD.` };
     }
     filters[normalizedKey] = timestamp;
     return { ok: true };
@@ -815,28 +777,26 @@ function applyFilterPart(filters, part) {
 
   return {
     ok: false,
-    error: 'Неизвестный фильтр. Используйте: type=1 tg=@user q=текст min_devices=2 max_devices=5 status=active before=2026-04-20',
+    error: 'Unknown filter. Use type, tg, q, min_devices, max_devices, status, before, after.',
   };
 }
 
 function formatCreatedCodesMessage(codes, parsed) {
   const common = [
-    parsed.isReusable ? 'Режим: Многоразовый код' : null,
-    `Количество тестов: ${parsed.questionCount}`,
-    `Цена: ${formatPrice(parsed.price)}`,
-    `Клиент: ${parsed.clientUsername}`,
-    `Тип: ${formatSiteType(parsed.siteType)}`,
+    parsed.isReusable ? 'Mode: reusable code' : null,
+    parsed.label ? `Label: ${parsed.label}` : null,
+    `Question count: ${parsed.questionCount}`,
   ].filter(Boolean);
 
   if (codes.length === 1) {
     return [
-      `Код: ${codes[0]}`,
+      `Code: ${codes[0]}`,
       ...common,
     ].join('\n');
   }
 
   return [
-    `Создано кодов: ${codes.length}`,
+    `Created codes: ${codes.length}`,
     ...common,
     '',
     ...codes.map((code, index) => `${index + 1}. ${code}`),
@@ -850,72 +810,125 @@ function formatSitesPage(parsed) {
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const page = Math.min(parsed.page, totalPages);
   const items = filtered.slice((page - 1) * pageSize, page * pageSize);
-
   const filterSummary = summarizeFilters(parsed.filters);
+
   if (!items.length) {
     return [
-      'Сайты не найдены.',
-      filterSummary ? `Фильтры: ${filterSummary}` : null,
+      'No sites found.',
+      filterSummary ? `Filters: ${filterSummary}` : null,
     ].filter(Boolean).join('\n');
   }
 
   return [
-    `Сайты: страница ${page} из ${totalPages}`,
-    `Количество тестов: ${filtered.length}`,
-    filterSummary ? `Фильтры: ${filterSummary}` : null,
+    `Sites: page ${page} of ${totalPages}`,
+    `Total: ${filtered.length}`,
+    filterSummary ? `Filters: ${filterSummary}` : null,
     '',
     ...items.map((quiz) => formatSiteListItem(quiz)),
     '',
-    page < totalPages ? `Дальше: /sites ${page + 1}${filterSummary ? ` ${filterSummary}` : ''}` : 'Это последняя страница.',
+    page < totalPages ? `Next: /sites ${page + 1}${filterSummary ? ` ${filterSummary}` : ''}` : 'Last page.',
   ].filter(Boolean).join('\n');
 }
 
 function formatSearchResults(parsed) {
   const allQuizzes = listQuizzesForAdmin();
-  const filtered = allQuizzes.filter((quiz) => matchesQuizFilters(quiz, parsed.filters)).slice(0, 30);
-  const totalMatched = allQuizzes.filter((quiz) => matchesQuizFilters(quiz, parsed.filters)).length;
+  const matched = allQuizzes.filter((quiz) => matchesQuizFilters(quiz, parsed.filters));
+  const items = matched.slice(0, 30);
 
-  if (!filtered.length) {
-    return `Ничего не найдено по запросу: ${parsed.query}`;
+  if (!items.length) {
+    return `Nothing found for: ${parsed.query}`;
   }
 
   return [
-    `Поиск: ${parsed.query}`,
-    `Количество тестов: ${totalMatched}${totalMatched > filtered.length ? '+' : ''}`,
+    `Search: ${parsed.query}`,
+    `Matches: ${matched.length}${matched.length > items.length ? '+' : ''}`,
     '',
-    ...filtered.map((quiz) => formatSiteListItem(quiz)),
+    ...items.map((quiz) => formatSiteListItem(quiz)),
   ].join('\n');
 }
 
 function formatSiteListItem(quiz) {
-  const title = String(quiz.title || '').trim() || quiz.codeLabel || `Сайт ${quiz.id}`;
-  return `${quiz.id}. ${title}: ${quiz.deviceCount || 0}`;
+  const title = String(quiz.title || '').trim() || quiz.codeLabel || `Site ${quiz.id}`;
+  return `${quiz.id}. ${title} | devices ${quiz.deviceCount || 0}${formatQuizPublicStatus(quiz)}`;
 }
 
 function formatSiteDetails(quiz) {
   const devices = Array.isArray(quiz.devices) ? quiz.devices : [];
   const creatorLines = formatCreatorDetails(quiz.creatorSnapshot);
+  const reports = listQuizReports(100).filter((report) => report.quizId === quiz.id);
+
   return [
-    `Сайт ${quiz.id}`,
-    `Название: ${quiz.title}`,
+    `Site ${quiz.id}`,
+    `Title: ${quiz.title}`,
     `Slug: ${quiz.slug}`,
-    `Тип: ${formatSiteType(quiz.siteType)}`,
-    `Цена: ${formatPrice(quiz.price || 0)}`,
-    `Количество вопросов: ${quiz.expectedQuestionCount || quiz.requestedCount || quiz.parsedCount || 0}`,
-    `Найдено вопросов: ${quiz.parsedCount || 0}`,
-    `Устройств: ${quiz.deviceCount || 0}`,
-    `Статус: ${describeQuizPublicStatus(quiz)}`,
-    `Создан: ${formatDateTime(quiz.createdAt)}`,
-    `Ссылка активна до: ${formatDateTime(quiz.expiresAt)}`,
-    `Последний вход: ${formatDateTime(quiz.lastSeenAt)}`,
+    `Question count: ${quiz.expectedQuestionCount || quiz.requestedCount || quiz.parsedCount || 0}`,
+    `Parsed questions: ${quiz.parsedCount || 0}`,
+    `Devices: ${quiz.deviceCount || 0}`,
+    `Status: ${describeQuizPublicStatus(quiz)}`,
+    `Created: ${formatDateTime(quiz.createdAt)}`,
+    `Link expires: ${formatDateTime(quiz.expiresAt)}`,
+    `Last visit: ${formatDateTime(quiz.lastSeenAt)}`,
+    `Reports: ${reports.length}`,
     '',
     'Creator:',
     ...creatorLines,
     '',
     devices.length
-      ? devices.slice(0, 10).map((device, index) => `${index + 1}) ${maskDeviceId(device.deviceId)} | ${formatDateTime(device.lastSeenAt)} | ${device.lastIp || 'IP ?'}`).join('\n')
-      : 'Входов пока не было.',
+      ? devices.slice(0, 10).map((device, index) => `${index + 1}. ${maskDeviceId(device.deviceId)} | ${formatDateTime(device.lastSeenAt)} | ${device.lastIp || 'IP ?'}`).join('\n')
+      : 'No visits yet.',
   ].join('\n');
+}
+
+function formatReportsList(limit) {
+  const reports = listQuizReports(limit);
+  if (!reports.length) {
+    return 'No reports yet.';
+  }
+
+  return [
+    `Latest reports: ${reports.length}`,
+    '',
+    ...reports.map((report) => {
+      const note = report.note ? ` | ${truncate(report.note, 50)}` : '';
+      const files = [
+        report.sourceUploadPath ? 'source' : null,
+        report.answerUploadPath ? 'answer' : null,
+      ].filter(Boolean).join(', ') || 'no files';
+      return `${report.id}. quiz ${report.quizId} | ${report.quizTitle || '-'} | ${formatDateTime(report.createdAt)} | ${files}${note}`;
+    }),
+  ].join('\n');
+}
+
+function formatReportDetails(report) {
+  const snapshot = report.reporterSnapshot && typeof report.reporterSnapshot === 'object'
+    ? report.reporterSnapshot
+    : {};
+  const request = snapshot.request && typeof snapshot.request === 'object'
+    ? snapshot.request
+    : {};
+  const device = snapshot.device && typeof snapshot.device === 'object'
+    ? snapshot.device
+    : {};
+
+  return [
+    `Report ${report.id}`,
+    `Quiz ID: ${report.quizId}`,
+    `Title: ${report.quizTitle || '-'}`,
+    `Slug: ${report.quizSlug || '-'}`,
+    `Created: ${formatDateTime(report.createdAt)}`,
+    `Question: ${snapshot.currentQuestion || '-'}`,
+    `Page: ${snapshot.pageUrl || '-'}`,
+    `IP: ${request.ip || '-'}`,
+    `User-Agent: ${request.userAgent || '-'}`,
+    `Referrer: ${request.referer || '-'}`,
+    `Device ID: ${device.deviceId ? maskDeviceId(device.deviceId) : '-'}`,
+    `Note: ${report.note || snapshot.note || '-'}`,
+    `Source file: ${report.sourceUploadName || '-'}`,
+    `Answer file: ${report.answerUploadName || '-'}`,
+    '',
+    report.sourceUploadPath ? `Download source: /reportfile ${report.id} source` : null,
+    report.answerUploadPath ? `Download answer: /reportfile ${report.id} answer` : null,
+  ].filter(Boolean).join('\n');
 }
 
 function formatCreatorDetails(snapshot) {
@@ -935,19 +948,19 @@ function formatCreatorDetails(snapshot) {
 
   return [
     `Captured: ${formatDateTime(snapshot.capturedAt)}`,
-    `Browser ID: ${snapshot.browserId || '—'}`,
-    `Fingerprint: ${maskDeviceId(snapshot.fingerprint || '') || '—'}`,
-    `Class: ${snapshot.deviceClass || '—'}`,
-    `IP: ${request.ip || request.realIp || request.forwardedFor || '—'}`,
-    `Lang/TZ: ${[client.language, client.timezone].filter(Boolean).join(' | ') || '—'}`,
-    `Platform: ${[client.platform || uaData.platform, uaData.architecture, uaData.bitness].filter(Boolean).join(' | ') || '—'}`,
-    `Browser: ${brands || request.userAgent || client.userAgent || '—'}`,
-    `Screen: ${screen || '—'}`,
-    `Viewport: ${viewport || '—'}`,
+    `Browser ID: ${snapshot.browserId || '-'}`,
+    `Fingerprint: ${maskDeviceId(snapshot.fingerprint || '') || '-'}`,
+    `Class: ${snapshot.deviceClass || '-'}`,
+    `IP: ${request.ip || request.realIp || request.forwardedFor || '-'}`,
+    `Lang/TZ: ${[client.language, client.timezone].filter(Boolean).join(' | ') || '-'}`,
+    `Platform: ${[client.platform || uaData.platform, uaData.architecture, uaData.bitness].filter(Boolean).join(' | ') || '-'}`,
+    `Browser: ${brands || request.userAgent || client.userAgent || '-'}`,
+    `Screen: ${screen || '-'}`,
+    `Viewport: ${viewport || '-'}`,
     `Touch/CPU/RAM: ${formatHardware(client)}`,
-    `Connection: ${connection || '—'}`,
-    `Source page: ${client.pageUrl || '—'}`,
-    `Referrer: ${client.referrer || request.referer || '—'}`,
+    `Connection: ${connection || '-'}`,
+    `Source page: ${client.pageUrl || '-'}`,
+    `Referrer: ${client.referrer || request.referer || '-'}`,
   ];
 }
 
@@ -955,34 +968,27 @@ function formatScreen(screen) {
   if (!screen || typeof screen !== 'object') {
     return '';
   }
-
   const width = Number(screen.width || 0);
   const height = Number(screen.height || 0);
-  if (!width || !height) {
-    return '';
-  }
-
-  return `${width}x${height}`;
+  return width && height ? `${width}x${height}` : '';
 }
 
 function formatViewport(viewport) {
   if (!viewport || typeof viewport !== 'object') {
     return '';
   }
-
   const width = Number(viewport.width || 0);
   const height = Number(viewport.height || 0);
   if (!width || !height) {
     return '';
   }
-
   const ratio = viewport.pixelRatio ? ` @${viewport.pixelRatio}` : '';
   return `${width}x${height}${ratio}`;
 }
 
 function formatHardware(client) {
   if (!client || typeof client !== 'object') {
-    return '—';
+    return '-';
   }
 
   const parts = [
@@ -991,7 +997,7 @@ function formatHardware(client) {
     client.deviceMemory != null ? `ram ${client.deviceMemory}` : null,
   ].filter(Boolean);
 
-  return parts.join(' | ') || '—';
+  return parts.join(' | ') || '-';
 }
 
 function formatConnection(connection) {
@@ -1011,11 +1017,9 @@ function matchesQuizFilters(quiz, filters) {
   if (filters.type && String(quiz.siteType || '') !== String(filters.type)) {
     return false;
   }
-
   if (filters.tg && normalizeClientUsername(quiz.clientTgUsername) !== filters.tg) {
     return false;
   }
-
   if (filters.query) {
     const query = String(filters.query || '').trim().toLowerCase();
     const haystack = [
@@ -1024,10 +1028,7 @@ function matchesQuizFilters(quiz, filters) {
       quiz.sourceFilename,
       quiz.clientTgUsername,
       quiz.codeLabel,
-    ]
-      .map((value) => String(value || '').toLowerCase())
-      .join(' ');
-
+    ].map((value) => String(value || '').toLowerCase()).join(' ');
     if (!haystack.includes(query)) {
       return false;
     }
@@ -1037,23 +1038,18 @@ function matchesQuizFilters(quiz, filters) {
   if (filters.minDevices !== null && deviceCount < filters.minDevices) {
     return false;
   }
-
   if (filters.maxDevices !== null && deviceCount > filters.maxDevices) {
     return false;
   }
-
   if (filters.status === 'active' && quiz.bannedAt) {
     return false;
   }
-
   if (filters.status === 'banned' && !quiz.bannedAt) {
     return false;
   }
-
   if (filters.before && Number(quiz.createdAt || 0) >= filters.before) {
     return false;
   }
-
   if (filters.after && Number(quiz.createdAt || 0) < filters.after) {
     return false;
   }
@@ -1063,26 +1059,22 @@ function matchesQuizFilters(quiz, filters) {
 
 function formatQuizPublicStatus(quiz) {
   if (quiz.bannedAt) {
-    return ' | БАН';
+    return ' | BANNED';
   }
-
   if (isExpiredQuiz(quiz)) {
-    return ' | ССЫЛКА ИСТЕКЛА';
+    return ' | EXPIRED';
   }
-
   return '';
 }
 
 function describeQuizPublicStatus(quiz) {
   if (quiz.bannedAt) {
-    return 'забанен';
+    return 'banned';
   }
-
   if (isExpiredQuiz(quiz)) {
-    return 'ссылка истекла';
+    return 'expired';
   }
-
-  return 'активен';
+  return 'active';
 }
 
 function isExpiredQuiz(quiz) {
@@ -1120,7 +1112,6 @@ function normalizeQuestionCount(value) {
   if (!Number.isInteger(numericValue) || numericValue < 1) {
     return 0;
   }
-
   return numericValue;
 }
 
@@ -1128,13 +1119,11 @@ function normalizePrice(value) {
   if (value == null || value === '') {
     return 0;
   }
-
   const normalized = String(value).trim().replace(',', '.');
   const numericValue = Number(normalized);
   if (!Number.isFinite(numericValue) || numericValue < 0) {
     return null;
   }
-
   return Math.round(numericValue * 100) / 100;
 }
 
@@ -1157,21 +1146,16 @@ function normalizeDateFilter(value) {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function formatSiteType(siteType) {
-  return String(siteType || '') === '2' ? 'Групповой' : 'Одиночный';
-}
-
 function formatPrice(value) {
   const numericValue = Number(value || 0);
   const normalized = Number.isFinite(numericValue) ? Math.round(numericValue * 100) / 100 : 0;
-  return `${normalized.toFixed(2)} грн`;
+  return `${normalized.toFixed(2)} UAH`;
 }
 
 function formatDateTime(value) {
   if (!value) {
-    return '—';
+    return '-';
   }
-
   return new Date(Number(value)).toLocaleString('ru-RU');
 }
 
@@ -1179,9 +1163,7 @@ function formatDateOnly(value) {
   if (!value) {
     return '';
   }
-
-  const date = new Date(Number(value));
-  return date.toISOString().slice(0, 10);
+  return new Date(Number(value)).toISOString().slice(0, 10);
 }
 
 function maskDeviceId(value) {
@@ -1189,26 +1171,31 @@ function maskDeviceId(value) {
   if (text.length <= 12) {
     return text || 'device';
   }
-
   return `${text.slice(0, 8)}...${text.slice(-4)}`;
+}
+
+function truncate(value, maxLength) {
+  const text = String(value || '').trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 async function deny(bot, msg) {
   if (!isPrivateChat(msg)) {
     return;
   }
-
-  await bot.sendMessage(msg.chat.id, 'Нет доступа к этому боту.');
+  await bot.sendMessage(msg.chat.id, 'No access to this bot.');
 }
 
 async function explainSetup(bot, msg) {
   if (!isPrivateChat(msg)) {
     return;
   }
-
   await bot.sendMessage(msg.chat.id, [
-    'Бот еще не привязан к вашему Telegram ID.',
-    'Отправьте /id, затем вставьте это значение в TELEGRAM_ADMIN_USER_ID и перезапустите сервер.',
+    'This bot is not linked to your Telegram ID yet.',
+    'Send /id, put that value into TELEGRAM_ADMIN_USER_ID, then restart the server.',
   ].join('\n'));
 }
 

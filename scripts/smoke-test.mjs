@@ -135,6 +135,42 @@ try {
     throw new Error(`admin quiz failed: ${JSON.stringify(adminQuizPayload)}`);
   }
 
+  const reportResponse = await fetch(`http://localhost:${port}/api/quizzes/${quizPayload.slug}/report`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      note: 'Smoke report',
+      pageUrl: quizPayload.quizUrl,
+      currentQuestion: 2,
+    }),
+  });
+  const reportPayload = await reportResponse.json();
+  if (!reportResponse.ok) {
+    throw new Error(`report failed: ${JSON.stringify(reportPayload)}`);
+  }
+
+  const adminReportsResponse = await fetch(`http://localhost:${port}/api/admin/reports?limit=5`, {
+    headers: {
+      'X-Admin-Secret': adminSecret,
+    },
+  });
+  const adminReportsPayload = await adminReportsResponse.json();
+  if (!adminReportsResponse.ok) {
+    throw new Error(`admin reports failed: ${JSON.stringify(adminReportsPayload)}`);
+  }
+
+  const adminReportResponse = await fetch(`http://localhost:${port}/api/admin/reports/${reportPayload.reportId}`, {
+    headers: {
+      'X-Admin-Secret': adminSecret,
+    },
+  });
+  const adminReportPayload = await adminReportResponse.json();
+  if (!adminReportResponse.ok) {
+    throw new Error(`admin report failed: ${JSON.stringify(adminReportPayload)}`);
+  }
+
   const publicResponse = await fetch(quizPayload.quizUrl);
   const jsonResponse = await fetch(quizPayload.apiUrl);
   const downloadResponse = await fetch(quizPayload.downloadUrl);
@@ -145,6 +181,9 @@ try {
     parsePayload,
     quizPayload,
     adminQuizPayload,
+    reportPayload,
+    adminReportsPayload,
+    adminReportPayload,
     publicStatus: publicResponse.status,
     jsonStatus: jsonResponse.status,
     downloadStatus: downloadResponse.status,

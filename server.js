@@ -1,16 +1,20 @@
 import 'dotenv/config';
+import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import multer from 'multer';
 import archiver from 'archiver';
 import {
+  createQuizReport,
   createAccessCodes,
   createQuizDraft,
   deleteQuizById,
   finalizeQuizFromDraftReservation,
   getDbMeta,
   getQuizById,
+  getQuizReportById,
   getQuizBySlug,
+  listQuizReports,
   recordQuizVisit,
   releaseReservation,
   reserveAccessCode,
@@ -22,7 +26,7 @@ import {
   SUPPORTED_ANSWER_EXTENSIONS,
   SUPPORTED_UPLOAD_EXTENSIONS,
 } from './src/parser.js';
-import { startTelegramBot } from './src/telegram-bot.js';
+import { notifyAdminAboutQuizReport, startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
 import {
   buildAbsoluteUrl,
@@ -36,6 +40,9 @@ import {
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_MB || 20) * 1024 * 1024;
+const uploadsDir = path.join(getDbMeta().dataDir, 'reported-source-files');
+
+fs.mkdirSync(uploadsDir, { recursive: true });
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -151,6 +158,10 @@ app.post('/api/parse', upload.fields([
     const requestedCount = questionMode === 'all'
       ? parsedQuiz.questions.length
       : questionLimit;
+    const savedUploads = saveUploadedQuizFiles({
+      sourceFile,
+      answerFile,
+    });
 
     const draft = createQuizDraft({
       title: clientTitle,
@@ -160,6 +171,10 @@ app.post('/api/parse', upload.fields([
       questions: parsedQuiz.questions,
       reviewBlocks: parsedQuiz.reviewBlocks,
       rawModelJson: parsedQuiz.rawModelJson,
+      sourceUploadPath: savedUploads.sourceUploadPath,
+      sourceUploadName: savedUploads.sourceUploadName,
+      answerUploadPath: savedUploads.answerUploadPath,
+      answerUploadName: savedUploads.answerUploadName,
     });
 
     return res.status(201).json({
@@ -280,7 +295,39 @@ app.get('/quiz/:slug', (req, res) => {
     userAgent: req.get('user-agent'),
   });
 
-  res.type('html').send(renderHostedQuizHtml(quiz, buildAbsoluteUrl(req, `/quiz/${quiz.slug}`)));
+  res.type('html').send(renderHostedQuizHtml(quiz, {
+    quizUrl: buildAbsoluteUrl(req, `/quiz/${quiz.slug}`),
+    reportUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/report`),
+  }));
+});
+
+app.post('/api/quizzes/:slug/report', (req, res, next) => {
+  try {
+    const quiz = getQuizBySlug(req.params.slug);
+    if (!quiz) {
+      return res.status(404).json({ error: 'Ð¢ÐµÑÑ‚ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.' });
+    }
+
+    const report = createQuizReport({
+      quizId: quiz.id,
+      note: sanitizeText(req.body.note || ''),
+      reporterSnapshot: buildReportSnapshot(req, req.body),
+    });
+
+    if (!report) {
+      return res.status(400).json({ error: 'ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ ÑÑ‚Ð²Ð¾Ñ€Ð¸Ñ‚Ð¸ Ð·Ð²ÐµÑ€Ð½ÐµÐ½Ð½Ñ.' });
+    }
+
+    notifyAdminAboutQuizReport(report).catch(() => {});
+
+    return res.status(201).json({
+      ok: true,
+      reportId: report.id,
+      createdAt: report.createdAt,
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.get('/api/download/:slug', (req, res) => {
@@ -334,6 +381,40 @@ app.get('/api/admin/quizzes/:id', requireAdminSecret, (req, res) => {
   }
 
   return res.json(serializeAdminQuiz(quiz));
+});
+
+app.get('/api/admin/reports', requireAdminSecret, (req, res) => {
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit || 30)));
+  return res.json({
+    reports: listQuizReports(limit),
+  });
+});
+
+app.get('/api/admin/reports/:id', requireAdminSecret, (req, res) => {
+  const report = getQuizReportById(req.params.id);
+  if (!report) {
+    return res.status(404).json({ error: 'Report not found.' });
+  }
+
+  return res.json(report);
+});
+
+app.get('/api/admin/reports/:id/files/:kind', requireAdminSecret, (req, res) => {
+  const report = getQuizReportById(req.params.id);
+  if (!report) {
+    return res.status(404).json({ error: 'Report not found.' });
+  }
+
+  const fileRef = resolveReportFileRef(report, req.params.kind);
+  if (!fileRef) {
+    return res.status(404).json({ error: 'File not found.' });
+  }
+
+  if (!fs.existsSync(fileRef.filePath)) {
+    return res.status(404).json({ error: 'Saved file missing on disk.' });
+  }
+
+  return res.download(fileRef.filePath, fileRef.downloadName);
 });
 
 app.post('/api/admin/quizzes/:slug/ban', requireAdminSecret, (req, res) => {
@@ -497,6 +578,86 @@ function formatSiteType(siteType) {
 
 function getDeviceWarningLimit(siteType) {
   return String(siteType || '') === '2' ? 20 : 2;
+}
+
+function saveUploadedQuizFiles({ sourceFile, answerFile }) {
+  const batchDir = path.join(uploadsDir, randomToken());
+  fs.mkdirSync(batchDir, { recursive: true });
+
+  const sourceUpload = sourceFile
+    ? writeSavedUpload(batchDir, 'source', sourceFile.originalname, sourceFile.buffer)
+    : null;
+  const answerUpload = answerFile
+    ? writeSavedUpload(batchDir, 'answers', answerFile.originalname, answerFile.buffer)
+    : null;
+
+  return {
+    sourceUploadPath: sourceUpload?.filePath || null,
+    sourceUploadName: sourceUpload?.originalName || null,
+    answerUploadPath: answerUpload?.filePath || null,
+    answerUploadName: answerUpload?.originalName || null,
+  };
+}
+
+function writeSavedUpload(targetDir, prefix, originalName, buffer) {
+  const normalizedName = sanitizeStoredUploadName(originalName);
+  const filePath = path.join(targetDir, `${prefix}-${normalizedName}`);
+  fs.writeFileSync(filePath, buffer);
+
+  return {
+    filePath,
+    originalName: normalizedName,
+  };
+}
+
+function sanitizeStoredUploadName(value) {
+  const normalized = normalizeUploadedFilename(value || '').trim();
+  if (!normalized) {
+    return 'upload.bin';
+  }
+
+  return path.basename(normalized).replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').slice(0, 160) || 'upload.bin';
+}
+
+function buildReportSnapshot(req, body) {
+  const currentQuestion = Number(body?.currentQuestion);
+  return {
+    createdAt: Date.now(),
+    note: sanitizeText(body?.note || ''),
+    pageUrl: String(body?.pageUrl || '').trim().slice(0, 400),
+    currentQuestion: Number.isInteger(currentQuestion) && currentQuestion > 0 ? currentQuestion : null,
+    request: {
+      ip: getClientIp(req),
+      userAgent: String(req.get('user-agent') || '').trim().slice(0, 500),
+      referer: String(req.get('referer') || '').trim().slice(0, 400),
+    },
+    device: {
+      deviceId: getCookieValue(req, 'pdmu_device_id') || null,
+    },
+  };
+}
+
+function resolveReportFileRef(report, kind) {
+  const normalizedKind = String(kind || '').trim().toLowerCase();
+  if (normalizedKind === 'source') {
+    return report.sourceUploadPath
+      ? {
+        filePath: report.sourceUploadPath,
+        downloadName: report.sourceUploadName || path.basename(report.sourceUploadPath),
+      }
+      : null;
+  }
+
+  if (normalizedKind === 'answer') {
+    return report.answerUploadPath
+      ? {
+        filePath: report.answerUploadPath,
+        downloadName: report.answerUploadName || path.basename(report.answerUploadPath),
+      }
+      : null;
+  }
+
+  return null;
 }
 
 function serializeAdminQuiz(quiz) {
