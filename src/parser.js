@@ -1692,7 +1692,7 @@ function matchOptionStart(line, optionCount) {
   }
 
   const marker = String(match[1] || '');
-  const separator = String(match[2] || '');
+  const _separator = String(match[2] || '');
   const spacing = String(match[3] || '');
   const text = sanitizeText(match[4]);
   if (!text) {
@@ -1700,12 +1700,11 @@ function matchOptionStart(line, optionCount) {
   }
 
   const markerIsLetter = /^[A-Za-z\u0400-\u04FF]$/u.test(marker);
-  const separatorHasDash = new RegExp(`[${DASH_CHARS}]`).test(separator);
   const textStartsLowercase = /^\p{Ll}/u.test(text);
 
   // Prevent false positives like "В-рус ..." where the first letter is part of the word,
   // not an answer marker extracted from the source file.
-  if (markerIsLetter && separatorHasDash && !spacing && textStartsLowercase) {
+  if (markerIsLetter && !spacing && textStartsLowercase) {
     return null;
   }
 

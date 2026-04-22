@@ -4,6 +4,7 @@ export async function solveQuizAnswersWithAI({
   filename,
   questions,
   optionCount,
+  onProgress = null,
 }) {
   if (String(process.env.USE_MOCK_AI || '0') === '1') {
     return buildMockAiResult(questions);
@@ -33,10 +34,21 @@ export async function solveQuizAnswersWithAI({
   }));
   const chunkSize = resolveChunkSize();
   const questionChunks = chunkQuestions(compactQuestions, chunkSize);
+  const totalSteps = Math.max(1, questionChunks.length * 2);
   const primaryAnswers = {};
   const checkAnswers = {};
   const primaryTexts = [];
   const checkTexts = [];
+  let completedSteps = 0;
+
+  reportAiProgress(onProgress, {
+    stage: 'starting',
+    percent: 0,
+    chunkIndex: 0,
+    chunkCount: questionChunks.length,
+    completedSteps,
+    totalSteps,
+  });
 
   for (let chunkIndex = 0; chunkIndex < questionChunks.length; chunkIndex += 1) {
     const chunk = questionChunks[chunkIndex];
@@ -69,6 +81,15 @@ export async function solveQuizAnswersWithAI({
       maxOutputTokens: resolveInitialMaxOutputTokens(chunk.length, 'primary'),
     });
     const primaryChunkAnswers = primaryResult.answers;
+    completedSteps += 1;
+    reportAiProgress(onProgress, {
+      stage: 'primary-complete',
+      percent: Math.round((completedSteps / totalSteps) * 100),
+      chunkIndex: chunkIndex + 1,
+      chunkCount: questionChunks.length,
+      completedSteps,
+      totalSteps,
+    });
 
     const checkResult = await createOpenAIAnswersResponse({
       apiKey,
@@ -80,6 +101,15 @@ export async function solveQuizAnswersWithAI({
       maxOutputTokens: resolveInitialMaxOutputTokens(chunk.length, 'check'),
     });
     const checkChunkAnswers = checkResult.answers;
+    completedSteps += 1;
+    reportAiProgress(onProgress, {
+      stage: 'check-complete',
+      percent: Math.round((completedSteps / totalSteps) * 100),
+      chunkIndex: chunkIndex + 1,
+      chunkCount: questionChunks.length,
+      completedSteps,
+      totalSteps,
+    });
 
     Object.assign(primaryAnswers, primaryChunkAnswers);
     Object.assign(checkAnswers, checkChunkAnswers);
@@ -123,6 +153,21 @@ export async function solveQuizAnswersWithAI({
     primaryRaw: primaryTexts.join('\n'),
     checkRaw: checkTexts.join('\n'),
   };
+}
+
+function reportAiProgress(callback, payload) {
+  if (typeof callback !== 'function') {
+    return;
+  }
+
+  callback({
+    stage: payload.stage,
+    percent: Math.max(0, Math.min(100, Number(payload.percent) || 0)),
+    chunkIndex: Number(payload.chunkIndex || 0),
+    chunkCount: Number(payload.chunkCount || 0),
+    completedSteps: Number(payload.completedSteps || 0),
+    totalSteps: Number(payload.totalSteps || 0),
+  });
 }
 
 function buildMockAiResult(questions) {

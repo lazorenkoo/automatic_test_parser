@@ -47,6 +47,7 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_MB || 20) * 1024 * 1024;
 const uploadsDir = path.join(getDbMeta().dataDir, 'reported-source-files');
+const aiPrepareJobs = new Map();
 
 fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -247,70 +248,233 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       return res.status(409).json({ error: 'This code has already been used.' });
     }
 
-    const parsedQuiz = await parseQuizFromFile({
-      buffer: sourceFile.buffer,
-      filename: originalFilename,
-      answerIndex: 1,
-      limit: questionMode === 'all' ? null : questionLimit,
+    const job = createAiPrepareJob({
+      id: randomToken(24),
+      clientTitle,
+      sourceFile,
+      originalFilename,
+      questionMode,
+      questionLimit,
       optionCount,
-      answerKey: null,
-    });
-
-    if (code.expectedQuestionCount && parsedQuiz.questions.length > code.expectedQuestionCount) {
-      return res.status(422).json({
-        error: `This code supports up to ${code.expectedQuestionCount} questions, but ${parsedQuiz.questions.length} were found.`,
-      });
-    }
-
-    const solved = await solveQuizAnswersWithAI({
-      filename: originalFilename,
-      extractedText: parsedQuiz.extractedText,
-      questions: parsedQuiz.questions,
-      optionCount,
-    });
-
-    const requestedCount = questionMode === 'all'
-      ? solved.questions.length
-      : questionLimit;
-
-    const savedUploads = saveUploadedQuizFiles({ sourceFile, answerFile: null });
-
-    const draft = createQuizDraft({
-      title: clientTitle,
-      sourceFilename: buildStoredFilename(clientTitle),
-      answerIndex: 0,
-      requestedCount,
-      questions: solved.questions,
-      reviewBlocks: parsedQuiz.reviewBlocks,
-      rawModelJson: {
-        ...parsedQuiz.rawModelJson,
-        answerMode: 'openai-double-check',
-        aiPrimaryModel: solved.primaryModel,
-        aiCheckModel: solved.checkModel,
-        aiAnswerKeyText: solved.answerKeyText,
-        aiDisagreements: solved.disagreements,
-      },
-      sourceUploadPath: savedUploads.sourceUploadPath,
-      sourceUploadName: savedUploads.sourceUploadName,
-      answerUploadPath: null,
-      answerUploadName: null,
-    });
-
-    return res.status(201).json({
-      draftToken: draft.draftToken,
-      title: clientTitle,
-      parsedCount: solved.questions.length,
-      requestedCount,
+      code,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
-      aiPrimaryModel: solved.primaryModel,
-      aiCheckModel: solved.checkModel,
-      aiDisagreements: solved.disagreements,
-      aiAnswerKeyPreview: solved.answerKeyText.split('\n').slice(0, 10),
+    });
+    aiPrepareJobs.set(job.id, job);
+    runAiPrepareJob(job).catch((error) => {
+      markAiPrepareJobFailed(job, error);
+    });
+
+    return res.status(202).json({
+      jobId: job.id,
+      status: job.status,
+      progressPercent: job.progressPercent,
+      message: job.message,
     });
   } catch (error) {
     return next(error);
   }
 });
+
+app.get('/api/ai-quizzes/jobs/:jobId', (req, res) => {
+  const jobId = String(req.params.jobId || '').trim();
+  const job = aiPrepareJobs.get(jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'AI job not found.' });
+  }
+
+  const response = {
+    jobId: job.id,
+    status: job.status,
+    progressPercent: job.progressPercent,
+    message: job.message,
+    chunkIndex: job.chunkIndex,
+    chunkCount: job.chunkCount,
+    completedSteps: job.completedSteps,
+    totalSteps: job.totalSteps,
+  };
+
+  if (job.status === 'completed') {
+    return res.json({
+      ...response,
+      result: job.result,
+    });
+  }
+
+  if (job.status === 'failed') {
+    return res.status(Number(job.errorStatusCode || 500)).json({
+      ...response,
+      error: job.errorMessage || 'Failed to prepare AI quiz.',
+    });
+  }
+
+  return res.json(response);
+});
+
+function createAiPrepareJob({
+  id,
+  clientTitle,
+  sourceFile,
+  originalFilename,
+  questionMode,
+  questionLimit,
+  optionCount,
+  code,
+  adminContactTg,
+}) {
+  return {
+    id,
+    status: 'queued',
+    progressPercent: 0,
+    message: 'Готую AI-обробку.',
+    chunkIndex: 0,
+    chunkCount: 0,
+    completedSteps: 0,
+    totalSteps: 0,
+    clientTitle,
+    sourceFile,
+    originalFilename,
+    questionMode,
+    questionLimit,
+    optionCount,
+    code,
+    adminContactTg,
+    result: null,
+    errorMessage: '',
+    errorStatusCode: 500,
+    createdAt: Date.now(),
+  };
+}
+
+async function runAiPrepareJob(job) {
+  updateAiPrepareJob(job, {
+    status: 'running',
+    progressPercent: 5,
+    message: 'Парсер обробляє файл.',
+  });
+
+  const parsedQuiz = await parseQuizFromFile({
+    buffer: job.sourceFile.buffer,
+    filename: job.originalFilename,
+    answerIndex: 1,
+    limit: job.questionMode === 'all' ? null : job.questionLimit,
+    optionCount: job.optionCount,
+    answerKey: null,
+  });
+
+  if (job.code.expectedQuestionCount && parsedQuiz.questions.length > job.code.expectedQuestionCount) {
+    const error = new Error(`This code supports up to ${job.code.expectedQuestionCount} questions, but ${parsedQuiz.questions.length} were found.`);
+    error.statusCode = 422;
+    throw error;
+  }
+
+  updateAiPrepareJob(job, {
+    progressPercent: 15,
+    message: `Парсер знайшов ${parsedQuiz.questions.length} питань. Запускаю AI.`,
+  });
+
+  const solved = await solveQuizAnswersWithAI({
+    filename: job.originalFilename,
+    questions: parsedQuiz.questions,
+    optionCount: job.optionCount,
+    onProgress: (progress) => {
+      const aiPercent = 15 + Math.round((Math.max(0, Math.min(100, progress.percent)) / 100) * 80);
+      updateAiPrepareJob(job, {
+        progressPercent: aiPercent,
+        chunkIndex: progress.chunkIndex,
+        chunkCount: progress.chunkCount,
+        completedSteps: progress.completedSteps,
+        totalSteps: progress.totalSteps,
+        message: buildAiProgressMessage(progress),
+      });
+    },
+  });
+
+  updateAiPrepareJob(job, {
+    progressPercent: 96,
+    message: 'Зберігаю готовий AI-тест.',
+  });
+
+  const requestedCount = job.questionMode === 'all'
+    ? solved.questions.length
+    : job.questionLimit;
+  const savedUploads = saveUploadedQuizFiles({ sourceFile: job.sourceFile, answerFile: null });
+  const draft = createQuizDraft({
+    title: job.clientTitle,
+    sourceFilename: buildStoredFilename(job.clientTitle),
+    answerIndex: 0,
+    requestedCount,
+    questions: solved.questions,
+    reviewBlocks: parsedQuiz.reviewBlocks,
+    rawModelJson: {
+      ...parsedQuiz.rawModelJson,
+      answerMode: 'openai-double-check',
+      aiPrimaryModel: solved.primaryModel,
+      aiCheckModel: solved.checkModel,
+      aiAnswerKeyText: solved.answerKeyText,
+      aiDisagreements: solved.disagreements,
+    },
+    sourceUploadPath: savedUploads.sourceUploadPath,
+    sourceUploadName: savedUploads.sourceUploadName,
+    answerUploadPath: null,
+    answerUploadName: null,
+  });
+
+  updateAiPrepareJob(job, {
+    status: 'completed',
+    progressPercent: 100,
+    message: 'AI-тест готовий.',
+    result: {
+      draftToken: draft.draftToken,
+      title: job.clientTitle,
+      parsedCount: solved.questions.length,
+      requestedCount,
+      adminContactTg: job.adminContactTg,
+      aiPrimaryModel: solved.primaryModel,
+      aiCheckModel: solved.checkModel,
+      aiDisagreements: solved.disagreements,
+      aiAnswerKeyPreview: solved.answerKeyText.split('\n').slice(0, 10),
+    },
+  });
+
+  scheduleAiPrepareJobCleanup(job.id);
+}
+
+function updateAiPrepareJob(job, patch) {
+  Object.assign(job, patch);
+}
+
+function markAiPrepareJobFailed(job, error) {
+  updateAiPrepareJob(job, {
+    status: 'failed',
+    progressPercent: Math.max(0, Number(job.progressPercent) || 0),
+    errorMessage: error?.message || 'Failed to prepare AI quiz.',
+    errorStatusCode: Number(error?.statusCode || 500),
+    message: 'AI-обробка завершилась з помилкою.',
+  });
+  scheduleAiPrepareJobCleanup(job.id);
+}
+
+function scheduleAiPrepareJobCleanup(jobId) {
+  setTimeout(() => {
+    aiPrepareJobs.delete(jobId);
+  }, 1000 * 60 * 30);
+}
+
+function buildAiProgressMessage(progress) {
+  const chunkPart = progress.chunkCount > 1
+    ? ` Блок ${progress.chunkIndex}/${progress.chunkCount}.`
+    : '';
+
+  if (progress.stage === 'primary-complete') {
+    return `AI обробив основний прохід.${chunkPart}`;
+  }
+
+  if (progress.stage === 'check-complete') {
+    return `AI завершив перевірку.${chunkPart}`;
+  }
+
+  return 'AI обробляє питання.';
+}
 
 app.post('/api/ai-quizzes/inspect', upload.fields([
   { name: 'sourceFile', maxCount: 1 },

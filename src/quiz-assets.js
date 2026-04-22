@@ -352,7 +352,7 @@ const i18n = {
   reportSuccess: 'The original file was sent to the admin for review.',
   reportError: 'Could not send the report. Please try again later.',
   reportUnavailable: 'This quiz cannot send a report right now.',
-  warningTitle: 'Please double-check these questions:',
+  warningTitle: 'Будь ласка, перевірте ще раз такі питання:',
 };
 
 const state = {

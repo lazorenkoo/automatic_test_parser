@@ -21,6 +21,7 @@ let currentDraftToken = '';
 let currentDraftPayload = null;
 let validatedAccessCode = '';
 let validatedCodePayload = null;
+let currentAiJobId = '';
 
 syncAnswerIndexOptions();
 syncQuestionLimitMode();
@@ -109,6 +110,7 @@ function clearResultState() {
   currentDraftPayload = null;
   validatedAccessCode = '';
   validatedCodePayload = null;
+  currentAiJobId = '';
   resultBox.classList.add('hidden');
   resultBox.innerHTML = '';
 }
@@ -273,7 +275,7 @@ async function finalizeAiDraft() {
   aiCreateBtn.disabled = true;
   submitBtn.disabled = true;
   reportIssueBtn.disabled = true;
-  setStatus('loading', 'Обробляю файл і запускаю AI після підтвердженого коду.');
+  setStatus('loading', 'Файл відправленний');
 
   try {
     const formData = new FormData();
@@ -290,13 +292,20 @@ async function finalizeAiDraft() {
       method: 'POST',
       body: formData,
     });
-    const preparePayload = await prepareResponse.json();
+    const preparePayload = await readJsonResponse(prepareResponse);
     if (!prepareResponse.ok) {
       throw new Error(preparePayload.error || 'Не вдалося підготувати AI-тест.');
     }
 
-    currentDraftToken = preparePayload.draftToken;
-    currentDraftPayload = preparePayload;
+    currentAiJobId = String(preparePayload.jobId || '');
+    if (!currentAiJobId) {
+      throw new Error('Не вдалося запустити AI-обробку.');
+    }
+
+    setStatus('loading', buildAiProgressStatus(preparePayload));
+    const completedPayload = await waitForAiPrepareJob(currentAiJobId);
+    currentDraftToken = completedPayload.draftToken;
+    currentDraftPayload = completedPayload;
     await finalizeCurrentDraft(validatedAccessCode);
   } catch (error) {
     setStatus('error', error.message || 'Не вдалося створити AI-тест.');
@@ -314,6 +323,58 @@ async function finalizeAiDraft() {
     submitBtn.disabled = false;
     reportIssueBtn.disabled = false;
   }
+}
+
+async function waitForAiPrepareJob(jobId) {
+  for (;;) {
+    await delay(1200);
+    const response = await fetch(`/api/ai-quizzes/jobs/${encodeURIComponent(jobId)}`);
+    const payload = await readJsonResponse(response);
+
+    if (!response.ok) {
+      throw new Error(payload.error || 'Не вдалося отримати статус AI-обробки.');
+    }
+
+    setStatus('loading', buildAiProgressStatus(payload));
+
+    if (payload.status === 'completed') {
+      currentAiJobId = '';
+      return payload.result;
+    }
+
+    if (payload.status === 'failed') {
+      currentAiJobId = '';
+      throw new Error(payload.error || 'AI-обробка завершилась з помилкою.');
+    }
+  }
+}
+
+function buildAiProgressStatus(payload) {
+  const percent = Math.max(0, Math.min(100, Number(payload?.progressPercent) || 0));
+  const chunkIndex = Number(payload?.chunkIndex || 0);
+  const chunkCount = Number(payload?.chunkCount || 0);
+  const message = String(payload?.message || 'AI обробляє питання.');
+  const chunkText = chunkCount > 1 && chunkIndex > 0 ? ` Блок ${chunkIndex}/${chunkCount}.` : '';
+  return `${message} ${percent}%${chunkText}`.trim();
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    return { error: text };
+  }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 async function reportCurrentUploadIssue() {
@@ -502,7 +563,7 @@ function renderFinalResult(payload) {
   const disagreementHtml = disagreements.length
     ? `
       <div class="notes-box">
-        <p><strong>Просьба перепроверить вот такие вопросы:</strong></p>
+        <p><strong>Будь ласка, перевірте ще раз такі питання:</strong></p>
         <p>${escapeHtml(disagreements.map((item) => String(item.questionNumber || '?')).join(', '))}</p>
       </div>
     `
