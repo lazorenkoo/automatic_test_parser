@@ -509,6 +509,29 @@ export function startTelegramBot() {
         return;
       }
 
+      if (parsed.mode === 'list') {
+        const deletedLines = [];
+        const missingIds = [];
+
+        for (const id of parsed.ids) {
+          const deletedQuiz = deleteQuizById(id);
+          if (deletedQuiz) {
+            deletedLines.push(`${deletedQuiz.id}. ${deletedQuiz.title}`);
+          } else {
+            missingIds.push(id);
+          }
+        }
+
+        await bot.sendMessage(msg.chat.id, [
+          `Deleted sites: ${deletedLines.length}`,
+          missingIds.length ? `Not found: ${missingIds.join(', ')}` : null,
+          '',
+          ...deletedLines.slice(0, 30),
+          deletedLines.length > 30 ? '...' : null,
+        ].filter(Boolean).join('\n'));
+        return;
+      }
+
       const candidates = listQuizzesForAdmin().filter((quiz) => matchesQuizFilters(quiz, parsed.filters));
       if (!candidates.length) {
         await bot.sendMessage(msg.chat.id, 'Nothing matched these filters.');
@@ -829,11 +852,32 @@ function parseBanArgs(rawValue) {
 }
 
 function parseDeleteArgs(rawValue) {
+  const rawText = String(rawValue || '').trim();
   const parts = tokenizeArgs(rawValue);
   if (!parts.length) {
     return {
       ok: false,
-      error: 'Format: /delete <id> or /delete before=YYYY-MM-DD [type=1] [tg=@user]',
+      error: 'Format: /delete <id> | /delete <id1,id2,id3> | /delete before=YYYY-MM-DD [type=1] [tg=@user]',
+    };
+  }
+
+  if (/^\d+(?:\s*,\s*\d+)+$/.test(rawText)) {
+    const ids = rawText
+      .split(',')
+      .map((part) => Number(String(part || '').trim()))
+      .filter((value) => Number.isInteger(value) && value > 0);
+
+    if (!ids.length) {
+      return {
+        ok: false,
+        error: 'Format: /delete <id> | /delete <id1,id2,id3> | /delete before=YYYY-MM-DD [type=1] [tg=@user]',
+      };
+    }
+
+    return {
+      ok: true,
+      mode: 'list',
+      ids: [...new Set(ids)],
     };
   }
 

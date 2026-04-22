@@ -1701,10 +1701,17 @@ function matchOptionStart(line, optionCount) {
 
   const markerIsLetter = /^[A-Za-z\u0400-\u04FF]$/u.test(marker);
   const textStartsLowercase = /^\p{Ll}/u.test(text);
+  const textStartsUppercaseOrDigit = /^[\p{Lu}\d]/u.test(text);
 
   // Prevent false positives like "В-рус ..." where the first letter is part of the word,
   // not an answer marker extracted from the source file.
   if (markerIsLetter && !spacing && textStartsLowercase) {
+    return null;
+  }
+
+  // Prevent false positives like "C.D 4" / "CD 4" OCR splits where the leading
+  // single-letter "marker" is actually part of an abbreviation in the option text.
+  if (markerIsLetter && !spacing && textStartsUppercaseOrDigit) {
     return null;
   }
 
