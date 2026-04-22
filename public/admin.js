@@ -137,13 +137,41 @@ async function prepareAiQuiz() {
     return;
   }
 
+  aiCreateBtn.disabled = true;
+  submitBtn.disabled = true;
+  reportIssueBtn.disabled = true;
   clearResultState();
-  currentDraftPayload = {
-    title: clientTitle,
-    adminContactTg: '',
-  };
-  setStatus('success', 'Enter a code first. AI will start only after the code is confirmed.');
-  renderAiCodeGate(currentDraftPayload);
+  setStatus('loading', 'Running local parser before AI.');
+
+  try {
+    const formData = new FormData();
+    formData.append('clientTitle', clientTitle);
+    formData.append('sourceFile', sourceFile);
+    formData.append('optionCount', String(optionCountInput.value || 5));
+    formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
+    if (!useAllQuestionsInput.checked) {
+      formData.append('questionLimit', String(questionLimitInput.value || ''));
+    }
+
+    const response = await fetch('/api/ai-quizzes/inspect', {
+      method: 'POST',
+      body: formData,
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || 'Failed to inspect the file.');
+    }
+
+    currentDraftPayload = payload;
+    setStatus('success', `Parser found ${payload.parsedCount || 0} questions.`);
+    renderAiCodeGate(payload);
+  } catch (error) {
+    setStatus('error', error.message || 'Failed to inspect the file.');
+  } finally {
+    aiCreateBtn.disabled = false;
+    submitBtn.disabled = false;
+    reportIssueBtn.disabled = false;
+  }
 }
 
 async function validateAiAccessCode() {
@@ -380,9 +408,14 @@ function renderAiCodeGate(payload) {
   const adminContactHtml = adminContact
     ? `<p class="admin-contact">Контакт: <strong>${escapeHtml(adminContact)}</strong></p>`
     : '';
+  const parsedCount = Number(payload.parsedCount || 0);
+  const parsedCountHtml = parsedCount > 0
+    ? `<p>Parser found: <strong>${escapeHtml(String(parsedCount))}</strong></p>`
+    : '';
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
+    ${parsedCountHtml}
     ${adminContactHtml}
     <div class="activation-box">
       <p class="activation-text">Код:</p>

@@ -312,6 +312,62 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
   }
 });
 
+app.post('/api/ai-quizzes/inspect', upload.fields([
+  { name: 'sourceFile', maxCount: 1 },
+  { name: 'pdf', maxCount: 1 },
+]), async (req, res, next) => {
+  const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
+  const clientTitle = sanitizeText(req.body.clientTitle || '');
+  const optionCount = Number(req.body.optionCount);
+  const questionMode = String(req.body.questionMode || 'manual');
+  const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
+  const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
+  const sourceExtension = path.extname(originalFilename).toLowerCase();
+
+  if (!sourceFile) {
+    return res.status(400).json({ error: 'Please attach a source file.' });
+  }
+
+  if (!clientTitle) {
+    return res.status(400).json({ error: 'Please enter a test title.' });
+  }
+
+  if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
+    return res.status(400).json({
+      error: `Supported file types: ${SUPPORTED_UPLOAD_EXTENSIONS.join(', ')}.`,
+    });
+  }
+
+  if (!Number.isInteger(optionCount) || optionCount < 2 || optionCount > 10) {
+    return res.status(400).json({ error: 'Option count must be between 2 and 10.' });
+  }
+
+  if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
+    return res.status(400).json({ error: 'Question count must be greater than 0.' });
+  }
+
+  try {
+    const parsedQuiz = await parseQuizFromFile({
+      buffer: sourceFile.buffer,
+      filename: originalFilename,
+      answerIndex: 1,
+      limit: questionMode === 'all' ? null : questionLimit,
+      optionCount,
+      answerKey: null,
+    });
+
+    return res.json({
+      title: clientTitle,
+      parsedCount: parsedQuiz.questions.length,
+      requestedCount: questionMode === 'all' ? parsedQuiz.questions.length : questionLimit,
+      adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
+      notes: parsedQuiz.notes,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post('/api/access-codes/check', (req, res) => {
   const accessCode = String(req.body.accessCode || '').trim();
   const hasParsedCount = req.body.parsedCount !== undefined && req.body.parsedCount !== null && req.body.parsedCount !== '';
