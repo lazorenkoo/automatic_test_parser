@@ -49,6 +49,7 @@ export function startTelegramBot() {
     '/reports [limit]',
     '/report <id|q-12|u-7>',
     '/reportfile <id|q-12|u-7> <source|answer>',
+    '/delreport <id|q-12|u-7>',
     '/money',
     '/ban <id> or /ban <type> <N>',
     '/unban <id>',
@@ -69,6 +70,7 @@ export function startTelegramBot() {
     { command: 'reports', description: 'Latest file reports' },
     { command: 'report', description: 'Show report details' },
     { command: 'reportfile', description: 'Send reported file' },
+    { command: 'delreport', description: 'Delete report' },
     { command: 'money', description: 'Accounting summary' },
     { command: 'ban', description: 'Ban site(s)' },
     { command: 'unban', description: 'Unban site' },
@@ -317,6 +319,36 @@ export function startTelegramBot() {
     });
 
     await bot.sendMessage(msg.chat.id, `Удалить репорт ${formatReportHandle(report)}?\nНапиши +`);
+  });
+
+  bot.onText(/^\/delreport(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseReportTarget(String(match?.[1] || '').trim());
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, 'Format: /delreport <id|q-12|u-7>');
+      return;
+    }
+
+    const report = getReportByTarget(parsed.target);
+    if (!report) {
+      await bot.sendMessage(msg.chat.id, `Репорт ${parsed.target} не найден.`);
+      return;
+    }
+
+    const deleted = report.reportType === 'upload'
+      ? deleteUploadReportById(report.id)
+      : deleteQuizReportById(report.id);
+
+    if (!deleted) {
+      await bot.sendMessage(msg.chat.id, `Репорт ${parsed.target} не найден.`);
+      return;
+    }
+
+    pendingReportDeletionByChat.delete(msg.chat.id);
+    await bot.sendMessage(msg.chat.id, `Репорт ${formatReportHandle(report)} удален.`);
   });
 
   bot.on('message', async (msg) => {
