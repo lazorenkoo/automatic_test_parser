@@ -3,12 +3,10 @@ import {
   createAccessCodes,
   createReusableAccessCode,
   deleteQuizById,
-  fixQuizReviewBlock,
   getQuizById,
   getAccountingSummary,
   getDbMeta,
   listQuizzesForAdmin,
-  replaceQuizQuestion,
   revokeAccessCode,
   setQuizBanStatusById,
 } from './db.js';
@@ -33,48 +31,40 @@ export function startTelegramBot() {
   botInstance = bot;
 
   const helpText = [
-    'Команды бота:',
-    '/code <type> <questions> [price] <tg_user> [label] - создать 1 код',
-    '/reusecode <type> <questions> [price] <tg_user> [label] - создать многоразовый код',
-    '/codes <count> <type> <questions> [price] <tg_user> [label] - создать несколько кодов',
-    '/delcode <CODE> - отключить код, чтобы он больше не создавал сайты',
-    '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01] - список сайтов',
-    '/search <text> - поиск сайтов по @user, slug или названию',
-    '/site <id> - подробности по одному сайту',
-    '/review <id> - сводка по тесту и проблемным блокам',
-    '/review <id> q <number> - показать конкретный вопрос',
-    '/review <id> block <number> - показать проблемный блок',
-    '/fixblock <id> <block> <correct> <question> || <answer1> || ... - добавить вопрос из блока',
-    '/setq <id> <question> <correct> <new question> || <answer1> || ... - заменить вопрос',
-    '/money - сумма по ценам всех созданных сайтов за историю',
-    '/ban <id> - забанить один сайт',
-    '/ban <type> <N> - забанить сайты типа 1 или 2, где устройств больше N',
-    '/unban <id> - вернуть сайт',
-    '/delete <id> - удалить один сайт',
-    '/delete before=2026-04-01 [type=1] [tg=@user] [status=banned] - удалить сайты по фильтру',
-    '/db - показать путь к SQLite базе',
-    '/id - показать ваш Telegram ID',
-    '/help - показать помощь',
+    '??????? ????:',
+    '/code <type> <questions> [price] <tg_user> [label] - ??????? 1 ???',
+    '/reusecode <type> <questions> [price] <tg_user> [label] - ??????? ???????????? ???',
+    '/codes <count> <type> <questions> [price] <tg_user> [label] - ??????? ????????? ?????',
+    '/delcode <CODE> - ????????? ???, ????? ?? ?????? ?? ???????? ?????',
+    '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01] - ?????? ??????',
+    '/search <text> - ????? ?????? ?? @user, slug ??? ????????',
+    '/site <id> - ??????????? ?? ?????? ?????',
+    '/money - ????? ?? ????? ???? ????????? ?????? ?? ???????',
+    '/ban <id> - ???????? ???? ????',
+    '/ban <type> <N> - ???????? ????? ???? 1 ??? 2, ??? ????????? ?????? N',
+    '/unban <id> - ??????? ????',
+    '/delete <id> - ??????? ???? ????',
+    '/delete before=2026-04-01 [type=1] [tg=@user] [status=banned] - ??????? ????? ?? ???????',
+    '/db - ???????? ???? ? SQLite ????',
+    '/id - ???????? ??? Telegram ID',
+    '/help - ???????? ??????',
   ].join('\n');
 
   bot.setMyCommands([
-    { command: 'code', description: 'Создать 1 код доступа' },
-    { command: 'reusecode', description: 'Создать многоразовый код' },
-    { command: 'codes', description: 'Создать несколько кодов' },
-    { command: 'delcode', description: 'Отключить код доступа' },
-    { command: 'sites', description: 'Список сайтов' },
-    { command: 'search', description: 'Поиск среди сайтов' },
-    { command: 'site', description: 'Детали по сайту' },
-    { command: 'review', description: 'Разбор теста и проблемных блоков' },
-    { command: 'fixblock', description: 'Добавить вопрос из проблемного блока' },
-    { command: 'setq', description: 'Заменить готовый вопрос' },
-    { command: 'money', description: 'Сумма по ценам сайтов' },
-    { command: 'ban', description: 'Забанить сайт' },
-    { command: 'unban', description: 'Вернуть сайт' },
-    { command: 'delete', description: 'Удалить сайт' },
-    { command: 'db', description: 'Путь к SQLite базе' },
-    { command: 'id', description: 'Ваш Telegram ID' },
-    { command: 'help', description: 'Помощь' },
+    { command: 'code', description: '??????? 1 ??? ???????' },
+    { command: 'reusecode', description: '??????? ???????????? ???' },
+    { command: 'codes', description: '??????? ????????? ?????' },
+    { command: 'delcode', description: '????????? ??? ???????' },
+    { command: 'sites', description: '?????? ??????' },
+    { command: 'search', description: '????? ????? ??????' },
+    { command: 'site', description: '?????? ?? ?????' },
+    { command: 'money', description: '????? ?? ????? ??????' },
+    { command: 'ban', description: '???????? ????' },
+    { command: 'unban', description: '??????? ????' },
+    { command: 'delete', description: '??????? ????' },
+    { command: 'db', description: '???? ? SQLite ????' },
+    { command: 'id', description: '??? Telegram ID' },
+    { command: 'help', description: '??????' },
   ]).catch(() => {});
 
   bot.onText(/^\/id(?:@[\w_]+)?$/i, async (msg) => {
@@ -202,9 +192,7 @@ export function startTelegramBot() {
       result.alreadyRevoked ? 'Код уже был отключен.' : 'Код отключен.',
       `Тип: ${formatSiteType(result.siteType)}`,
       `Количество тестов: ${result.expectedQuestionCount || '—'}`,
-      `Клиент: ${result.clientTgUsername || 'не привязан'}`,
       `Цена: ${formatPrice(result.price)}`,
-      result.label ? `Label: ${result.label}` : null,
     ].filter(Boolean).join('\n'));
   });
 
@@ -286,7 +274,6 @@ export function startTelegramBot() {
     await bot.sendMessage(msg.chat.id, [
       `Блок ${parsed.targetIndex} обработан.`,
       `Вопросов теперь: ${updatedQuiz.questions.length}`,
-      `Проблемных блоков осталось: ${(updatedQuiz.reviewBlocks || []).length}`,
     ].join('\n'));
   });
 
@@ -637,71 +624,11 @@ function parseSearchArgs(rawValue) {
 }
 
 function parseReviewArgs(rawValue) {
-  const parts = tokenizeArgs(rawValue);
-  const id = Number(parts[0]);
-  if (!Number.isInteger(id) || id < 1) {
-    return {
-      ok: false,
-      error: 'Форматы:\n/review <id>\n/review <id> q <номер>\n/review <id> block <номер>',
-    };
-  }
-
-  if (parts.length === 1) {
-    return { ok: true, id, mode: 'summary' };
-  }
-
-  if (parts.length === 3) {
-    const mode = String(parts[1] || '').toLowerCase();
-    const index = Number(parts[2]);
-    if (!Number.isInteger(index) || index < 1) {
-      return { ok: false, error: 'Номер вопроса или блока должен быть целым числом больше 0.' };
-    }
-
-    if (mode === 'q' || mode === 'question') {
-      return { ok: true, id, mode: 'question', index };
-    }
-
-    if (mode === 'block') {
-      return { ok: true, id, mode: 'block', index };
-    }
-  }
-
-  return {
-    ok: false,
-    error: 'Форматы:\n/review <id>\n/review <id> q <номер>\n/review <id> block <номер>',
-  };
+  return { ok: false, error: '??????? review/fixblock/setq ?????????.' };
 }
 
 function parseManualQuestionCommand(rawValue, commandName) {
-  const input = String(rawValue || '').trim();
-  const match = input.match(/^(\d+)\s+(\d+)\s+(\d+)\s+([\s\S]+)$/);
-  if (!match) {
-    return {
-      ok: false,
-      error: commandName === 'fixblock'
-        ? 'Формат: /fixblock <id> <block> <correct> <вопрос> || <ответ1> || <ответ2> ...'
-        : 'Формат: /setq <id> <вопрос> <correct> <новый вопрос> || <ответ1> || <ответ2> ...',
-    };
-  }
-
-  const id = Number(match[1]);
-  const targetIndex = Number(match[2]);
-  const correctIndex = Number(match[3]);
-  if (!Number.isInteger(id) || id < 1 || !Number.isInteger(targetIndex) || targetIndex < 1 || !Number.isInteger(correctIndex) || correctIndex < 1) {
-    return { ok: false, error: 'id, номер блока/вопроса и correct должны быть целыми числами больше 0.' };
-  }
-
-  const spec = parseQuestionSpec(match[4], correctIndex);
-  if (!spec.ok) {
-    return spec;
-  }
-
-  return {
-    ok: true,
-    id,
-    targetIndex,
-    question: spec.question,
-  };
+  return { ok: false, error: '??????? review/fixblock/setq ?????????.' };
 }
 
 function parseQuestionSpec(specText, correctIndex) {
@@ -899,7 +826,6 @@ function formatCreatedCodesMessage(codes, parsed) {
     `Цена: ${formatPrice(parsed.price)}`,
     `Клиент: ${parsed.clientUsername}`,
     `Тип: ${formatSiteType(parsed.siteType)}`,
-    parsed.label ? `Label: ${parsed.label}` : null,
   ].filter(Boolean);
 
   if (codes.length === 1) {
@@ -961,52 +887,6 @@ function formatSearchResults(parsed) {
   ].join('\n');
 }
 
-function formatReviewMessage(quiz, parsed) {
-  const questions = Array.isArray(quiz.questions) ? quiz.questions : [];
-  const reviewBlocks = Array.isArray(quiz.reviewBlocks) ? quiz.reviewBlocks : [];
-
-  if (parsed.mode === 'question') {
-    const question = questions[parsed.index - 1];
-    if (!question) {
-      return `Вопрос ${parsed.index} не найден.`;
-    }
-
-    return [
-      `Сайт ${quiz.id}`,
-      `Вопрос ${parsed.index} из ${questions.length}`,
-      '',
-      question.q,
-      '',
-      ...question.options.map((option, index) => `${index + 1}. ${option}${question.correctIndex === index ? '  [ПРАВИЛЬНО]' : ''}`),
-    ].join('\n');
-  }
-
-  if (parsed.mode === 'block') {
-    const block = reviewBlocks[parsed.index - 1];
-    if (!block) {
-      return `Проблемный блок ${parsed.index} не найден.`;
-    }
-
-    return [
-      `Сайт ${quiz.id}`,
-      `Проблемный блок ${parsed.index} из ${reviewBlocks.length}`,
-      `Причина: ${block.reason || 'manual-review'}`,
-      '',
-      block.text || 'Пустой блок',
-    ].join('\n');
-  }
-
-  return [
-    `Сайт ${quiz.id}`,
-    `Название: ${quiz.title}`,
-    `Вопросов распарсено: ${questions.length}`,
-    `Проблемных блоков: ${reviewBlocks.length}`,
-    '',
-    reviewBlocks.length ? 'Команды:\n/review <id> block 1\n/fixblock <id> <block> <correct> <вопрос> || <ответ1> || ...' : 'Проблемных блоков нет.',
-    questions.length ? `\nДля просмотра вопроса:\n/review ${quiz.id} q 1` : '',
-  ].join('\n');
-}
-
 function formatSiteListItem(quiz) {
   const title = String(quiz.title || '').trim() || quiz.codeLabel || `Сайт ${quiz.id}`;
   return `${quiz.id}. ${title}: ${quiz.deviceCount || 0}`;
@@ -1020,12 +900,9 @@ function formatSiteDetails(quiz) {
     `Название: ${quiz.title}`,
     `Slug: ${quiz.slug}`,
     `Тип: ${formatSiteType(quiz.siteType)}`,
-    `Описание: ${quiz.codeLabel || '—'}`,
     `Цена: ${formatPrice(quiz.price || 0)}`,
-    `Клиент: ${quiz.clientTgUsername || 'не привязан'}`,
     `Количество вопросов: ${quiz.expectedQuestionCount || quiz.requestedCount || quiz.parsedCount || 0}`,
     `Найдено вопросов: ${quiz.parsedCount || 0}`,
-    `Проблемных блоков: ${Array.isArray(quiz.reviewBlocks) ? quiz.reviewBlocks.length : 0}`,
     `Устройств: ${quiz.deviceCount || 0}`,
     `Статус: ${describeQuizPublicStatus(quiz)}`,
     `Создан: ${formatDateTime(quiz.createdAt)}`,
