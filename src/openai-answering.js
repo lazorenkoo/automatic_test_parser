@@ -62,7 +62,7 @@ export async function solveQuizAnswersWithAI({
     const primaryResult = await createOpenAIAnswersResponse({
       apiKey,
       model: primaryModel,
-      reasoningEffort: resolvePrimaryReasoningEffort(chunk.length),
+      reasoningEffort: resolveReasoningEffort('primary'),
       prompt: primaryPrompt,
       expectedQuestionNumbers: questionNumbers,
       maxAnswerIndex,
@@ -73,7 +73,7 @@ export async function solveQuizAnswersWithAI({
     const checkResult = await createOpenAIAnswersResponse({
       apiKey,
       model: checkModel,
-      reasoningEffort: 'medium',
+      reasoningEffort: resolveReasoningEffort('check'),
       prompt: checkPrompt,
       expectedQuestionNumbers: questionNumbers,
       maxAnswerIndex,
@@ -160,7 +160,7 @@ async function createOpenAIAnswersResponse({
     schema: buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex),
   };
 
-  let currentMaxOutputTokens = Math.max(600, Number(maxOutputTokens) || 0);
+  let currentMaxOutputTokens = Math.max(2000, Number(maxOutputTokens) || 0);
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const response = await fetch(OPENAI_API_URL, {
       method: 'POST',
@@ -213,7 +213,7 @@ async function createOpenAIAnswersResponse({
     }));
 
     if (canRetryForOutputLimit) {
-      currentMaxOutputTokens = Math.min(currentMaxOutputTokens * 2, 12000);
+      currentMaxOutputTokens = Math.min(currentMaxOutputTokens * 2, 24000);
       continue;
     }
 
@@ -368,17 +368,19 @@ function resolveChunkSize() {
 }
 
 function resolveInitialMaxOutputTokens(chunkLength, passType) {
-  const multiplier = passType === 'primary' ? 28 : 20;
-  const floor = passType === 'primary' ? 900 : 700;
+  const multiplier = passType === 'primary' ? 48 : 36;
+  const floor = passType === 'primary' ? 4000 : 3000;
   return Math.max(floor, chunkLength * multiplier);
 }
 
-function resolvePrimaryReasoningEffort(chunkLength) {
-  if (chunkLength >= 140) {
-    return 'medium';
+function resolveReasoningEffort(passType) {
+  const envKey = passType === 'primary' ? 'OPENAI_PRIMARY_REASONING' : 'OPENAI_CHECK_REASONING';
+  const configured = String(process.env[envKey] || '').trim().toLowerCase();
+  if (configured === 'low' || configured === 'medium' || configured === 'high') {
+    return configured;
   }
 
-  return 'high';
+  return 'low';
 }
 
 function chunkQuestions(questions, chunkSize) {
