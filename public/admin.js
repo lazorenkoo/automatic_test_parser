@@ -22,11 +22,14 @@ let currentDraftPayload = null;
 syncAnswerIndexOptions();
 syncQuestionLimitMode();
 syncAnswerMode();
+syncReportButtonVisibility();
 
 optionCountInput.addEventListener('input', syncAnswerIndexOptions);
 useAllQuestionsInput.addEventListener('change', syncQuestionLimitMode);
 answerModeSingleInput.addEventListener('change', syncAnswerMode);
 answerModeFileInput.addEventListener('change', syncAnswerMode);
+sourceFileInput.addEventListener('change', syncReportButtonVisibility);
+answerFileInput.addEventListener('change', syncReportButtonVisibility);
 reportIssueBtn?.addEventListener('click', reportCurrentUploadIssue);
 
 quizForm.addEventListener('submit', async (event) => {
@@ -98,6 +101,15 @@ quizForm.addEventListener('submit', async (event) => {
 function setStatus(kind, message) {
   statusBox.className = `status ${kind}`;
   statusBox.textContent = message;
+}
+
+function syncReportButtonVisibility() {
+  if (!reportIssueBtn) {
+    return;
+  }
+
+  const hasFile = Boolean(sourceFileInput.files?.[0] || answerFileInput.files?.[0]);
+  reportIssueBtn.classList.toggle('hidden', !hasFile);
 }
 
 async function reportCurrentUploadIssue() {
