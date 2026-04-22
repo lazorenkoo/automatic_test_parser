@@ -39,7 +39,7 @@ reportIssueBtn?.addEventListener('click', reportCurrentUploadIssue);
 quizForm.addEventListener('submit', async (event) => {
   event.preventDefault();
 
-  setStatus('loading', '???? ???????????? ????????? ????????. ?? ???? ??????? ????? ????.');
+  setStatus('loading', 'Файл обробляється локальним парсером. Це може зайняти трохи часу.');
   clearResultState();
   submitBtn.disabled = true;
 
@@ -49,11 +49,11 @@ quizForm.addEventListener('submit', async (event) => {
     const answerMode = getAnswerMode();
 
     if (!clientTitle) {
-      throw new Error('???????? ??????? ????? ?????.');
+      throw new Error('Спочатку введіть назву тесту.');
     }
 
     if (!sourceFile) {
-      throw new Error('???????? ???????? ???? ?? ???????.');
+      throw new Error('Спочатку виберіть файл із тестами.');
     }
 
     const formData = new FormData();
@@ -68,7 +68,7 @@ quizForm.addEventListener('submit', async (event) => {
     } else {
       const answerFile = answerFileInput.files?.[0];
       if (!answerFile) {
-        throw new Error('???????? ??????????? ??????? ???? ?? ???????????.');
+        throw new Error('Потрібно завантажити окремий файл із відповідями.');
       }
       formData.append('answerFile', answerFile);
     }
@@ -84,16 +84,16 @@ quizForm.addEventListener('submit', async (event) => {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || '?? ??????? ???????? ????.');
+      throw new Error(payload.error || 'Не вдалося обробити файл.');
     }
 
     currentDraftToken = payload.draftToken;
     currentDraftPayload = payload;
-    setStatus('success', '???? ???????.');
+    setStatus('success', 'Тест готовий.');
     renderDraftResult(payload);
     await finalizeCurrentDraft('');
   } catch (error) {
-    setStatus('error', error.message || '?? ??????? ???????? ????.');
+    setStatus('error', error.message || 'Не вдалося обробити файл.');
   } finally {
     submitBtn.disabled = false;
   }
@@ -128,12 +128,12 @@ async function prepareAiQuiz() {
   const sourceFile = sourceFileInput.files?.[0] || null;
 
   if (!clientTitle) {
-    setStatus('error', 'Enter a test title first.');
+    setStatus('error', 'Спочатку введіть назву тесту.');
     return;
   }
 
   if (!sourceFile) {
-    setStatus('error', 'Attach a source file first.');
+    setStatus('error', 'Спочатку прикріпіть файл із тестами.');
     return;
   }
 
@@ -141,7 +141,7 @@ async function prepareAiQuiz() {
   submitBtn.disabled = true;
   reportIssueBtn.disabled = true;
   clearResultState();
-  setStatus('loading', 'Running local parser before AI.');
+  setStatus('loading', 'Запускаю локальний парсер перед AI.');
 
   try {
     const formData = new FormData();
@@ -159,14 +159,14 @@ async function prepareAiQuiz() {
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || 'Failed to inspect the file.');
+      throw new Error(payload.error || 'Не вдалося перевірити файл.');
     }
 
     currentDraftPayload = payload;
-    setStatus('success', `Parser found ${payload.parsedCount || 0} questions.`);
+    setStatus('success', `Парсер знайшов ${payload.parsedCount || 0} питань.`);
     renderAiCodeGate(payload);
   } catch (error) {
-    setStatus('error', error.message || 'Failed to inspect the file.');
+    setStatus('error', error.message || 'Не вдалося перевірити файл.');
   } finally {
     aiCreateBtn.disabled = false;
     submitBtn.disabled = false;
@@ -176,7 +176,7 @@ async function prepareAiQuiz() {
 
 async function validateAiAccessCode() {
   if (!currentDraftPayload) {
-    setStatus('error', 'Start AI mode first.');
+    setStatus('error', 'Спочатку запусти AI-режим.');
     return;
   }
 
@@ -194,14 +194,14 @@ async function validateAiAccessCode() {
 
   if (!code) {
     if (messageBox) {
-      messageBox.textContent = 'Enter an access code.';
+      messageBox.textContent = 'Введіть код доступу.';
     }
-    setStatus('error', 'Enter an access code.');
+    setStatus('error', 'Введіть код доступу.');
     return;
   }
 
   if (messageBox) {
-    messageBox.textContent = 'Checking code...';
+    messageBox.textContent = 'Перевіряю код...';
   }
 
   try {
@@ -217,7 +217,7 @@ async function validateAiAccessCode() {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || 'Code validation failed.');
+      throw new Error(payload.error || 'Код не пройшов перевірку.');
     }
 
     validatedAccessCode = code;
@@ -229,18 +229,18 @@ async function validateAiAccessCode() {
       sendBtn.classList.remove('hidden');
       sendBtn.disabled = false;
     }
-    setStatus('success', 'Code confirmed. AI can start now.');
+    setStatus('success', 'Код підтверджено. Можна запускати AI.');
   } catch (error) {
     if (messageBox) {
-      messageBox.textContent = error.message || 'Code validation failed.';
+      messageBox.textContent = error.message || 'Код не пройшов перевірку.';
     }
-    setStatus('error', error.message || 'Code validation failed.');
+    setStatus('error', error.message || 'Код не пройшов перевірку.');
   }
 }
 
 async function finalizeAiDraft() {
   if (!validatedAccessCode) {
-    setStatus('error', 'Confirm the access code first.');
+    setStatus('error', 'Спочатку підтвердьте код.');
     return;
   }
 
@@ -251,12 +251,12 @@ async function finalizeAiDraft() {
   const sourceFile = sourceFileInput.files?.[0] || null;
 
   if (!clientTitle) {
-    setStatus('error', 'Enter a test title first.');
+    setStatus('error', 'Спочатку введіть назву тесту.');
     return;
   }
 
   if (!sourceFile) {
-    setStatus('error', 'Attach a source file first.');
+    setStatus('error', 'Спочатку прикріпіть файл із тестами.');
     return;
   }
 
@@ -273,7 +273,7 @@ async function finalizeAiDraft() {
   aiCreateBtn.disabled = true;
   submitBtn.disabled = true;
   reportIssueBtn.disabled = true;
-  setStatus('loading', 'Parsing file and running AI after confirmed code.');
+  setStatus('loading', 'Обробляю файл і запускаю AI після підтвердженого коду.');
 
   try {
     const formData = new FormData();
@@ -292,14 +292,14 @@ async function finalizeAiDraft() {
     });
     const preparePayload = await prepareResponse.json();
     if (!prepareResponse.ok) {
-      throw new Error(preparePayload.error || 'Failed to prepare AI quiz.');
+      throw new Error(preparePayload.error || 'Не вдалося підготувати AI-тест.');
     }
 
     currentDraftToken = preparePayload.draftToken;
     currentDraftPayload = preparePayload;
     await finalizeCurrentDraft(validatedAccessCode);
   } catch (error) {
-    setStatus('error', error.message || 'Failed to create the AI quiz.');
+    setStatus('error', error.message || 'Не вдалося створити AI-тест.');
     if (sendBtn) {
       sendBtn.disabled = false;
     }
@@ -322,13 +322,13 @@ async function reportCurrentUploadIssue() {
   const title = String(clientTitleInput?.value || '').trim();
 
   if (!sourceFile && !answerFile) {
-    setStatus('error', '???????? ???????? ????, ???? ????? ?????????? ?? ?????????.');
+    setStatus('error', 'Спочатку виберіть файл, який треба відправити на перевірку.');
     return;
   }
 
-  const note = window.prompt('???????, ?? ?? ??? ?? ?????? ??? ???? ???? ?? ????????.', '') || '';
+  const note = window.prompt('Опишіть, що не так із файлом або чому тест не зібрався.', '') || '';
   reportIssueBtn.disabled = true;
-  setStatus('loading', '???????? ???? ?????????????? ?? ?????????.');
+  setStatus('loading', 'Надсилаю файл адміністратору на перевірку.');
 
   try {
     const formData = new FormData();
@@ -356,18 +356,18 @@ async function reportCurrentUploadIssue() {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || '?? ??????? ?????????? ??????.');
+      throw new Error(payload.error || 'Не вдалося відправити репорт.');
     }
 
-    setStatus('success', '???? ???????????.');
+    setStatus('success', 'Файл відправлено.');
     resultBox.classList.remove('hidden');
     resultBox.innerHTML = `
       <h3>${escapeHtml(title || sourceFile?.name || answerFile?.name || 'Upload report')}</h3>
-      <p>?????? ????????: <strong>${escapeHtml(String(payload.reportType || 'upload'))} ${escapeHtml(String(payload.reportId || ''))}</strong></p>
-      <p>???? ????????? ??? ???????? ???????.</p>
+      <p>Репорт створено: <strong>${escapeHtml(String(payload.reportType || 'upload'))} ${escapeHtml(String(payload.reportId || ''))}</strong></p>
+      <p>Файл збережено для окремого аналізу.</p>
     `;
   } catch (error) {
-    setStatus('error', error.message || '?? ??????? ?????????? ??????.');
+    setStatus('error', error.message || 'Не вдалося відправити репорт.');
   } finally {
     reportIssueBtn.disabled = false;
   }
@@ -381,22 +381,22 @@ function renderDraftResult(payload) {
   const notesHtml = notes.length
     ? `
       <div class="notes-box">
-        <p><strong>?? ??????? ??????</strong></p>
+        <p><strong>Що помітив парсер</strong></p>
         ${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join('')}
       </div>
     `
     : '';
   const adminContactHtml = adminContact
-    ? `<p class="admin-contact">??'???? ? ???????????????: <strong>${escapeHtml(adminContact)}</strong></p>`
+    ? `<p class="admin-contact">Зв'язок з адміністратором: <strong>${escapeHtml(adminContact)}</strong></p>`
     : '';
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
-    <p>?????? ????????: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
+    <p>Питань знайдено: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
     ${adminContactHtml}
     ${notesHtml}
     <div class="activation-box">
-      <p class="activation-text">????? ?????????...</p>
+      <p class="activation-text">Готую посилання...</p>
     </div>
   `;
 }
@@ -410,7 +410,7 @@ function renderAiCodeGate(payload) {
     : '';
   const parsedCount = Number(payload.parsedCount || 0);
   const parsedCountHtml = parsedCount > 0
-    ? `<p>Parser found: <strong>${escapeHtml(String(parsedCount))}</strong></p>`
+    ? `<p>Парсер знайшов: <strong>${escapeHtml(String(parsedCount))}</strong></p>`
     : '';
 
   resultBox.innerHTML = `
@@ -421,9 +421,9 @@ function renderAiCodeGate(payload) {
       <p class="activation-text">Код:</p>
       <div style="margin-top:12px; display:grid; gap:10px;">
         <input id="aiAccessCodeInput" type="text" placeholder="Код" autocomplete="off" />
-        <button id="aiCheckCodeBtn" class="secondary-btn" type="button">Check code</button>
+        <button id="aiCheckCodeBtn" class="secondary-btn" type="button">Перевірити код</button>
         <p id="aiCodeMessage" style="margin:0; line-height:1.5;"></p>
-        <button id="aiFinalizeBtn" class="primary-btn hidden" type="button">Send</button>
+        <button id="aiFinalizeBtn" class="primary-btn hidden" type="button">Відправити</button>
       </div>
     </div>
   `;
@@ -455,19 +455,19 @@ function renderAiCodeGate(payload) {
 }
 
 function buildCodeSuccessMessage(payload) {
-  const parts = ['Code is valid.'];
+  const parts = ['Код дійсний.'];
   if (payload.expectedQuestionCount) {
-    parts.push(`Limit: ${payload.expectedQuestionCount} questions.`);
+    parts.push(`Ліміт: ${payload.expectedQuestionCount} питань.`);
   }
   if (payload.siteTypeLabel) {
-    parts.push(`Type: ${payload.siteTypeLabel}.`);
+    parts.push(`Тип: ${payload.siteTypeLabel}.`);
   }
   return parts.join(' ');
 }
 
 async function finalizeCurrentDraft(accessCode = '') {
   if (!currentDraftToken) {
-    throw new Error('???????? ?? ????????. ????????? ???? ?? ???.');
+    throw new Error('Чернетку не знайдено. Передайте файл ще раз.');
   }
 
   const response = await fetch('/api/quizzes/finalize', {
@@ -484,14 +484,14 @@ async function finalizeCurrentDraft(accessCode = '') {
 
   const payload = await response.json();
   if (!response.ok) {
-    throw new Error(payload.error || '?? ??????? ???????? ?????????.');
+    throw new Error(payload.error || 'Не вдалося отримати посилання.');
   }
 
   currentDraftToken = '';
   currentDraftPayload = payload;
   validatedAccessCode = '';
   validatedCodePayload = null;
-  setStatus('success', '????????? ??????.');
+  setStatus('success', 'Посилання готове.');
   renderFinalResult(payload);
   return payload;
 }
@@ -511,7 +511,7 @@ function renderFinalResult(payload) {
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
     ${disagreementHtml}
-    <p>?????? ????????: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
+    <p>Питань знайдено: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
     <div id="quizLinkBox">
       <p><a href="${escapeAttr(String(payload.quizUrl || ''))}" target="_blank" rel="noreferrer">${escapeHtml(String(payload.quizUrl || ''))}</a></p>
     </div>
