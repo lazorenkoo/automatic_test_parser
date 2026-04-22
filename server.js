@@ -288,6 +288,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
         aiPrimaryModel: solved.primaryModel,
         aiCheckModel: solved.checkModel,
         aiAnswerKeyText: solved.answerKeyText,
+        aiDisagreements: solved.disagreements,
       },
       sourceUploadPath: savedUploads.sourceUploadPath,
       sourceUploadName: savedUploads.sourceUploadName,
@@ -303,6 +304,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
       aiPrimaryModel: solved.primaryModel,
       aiCheckModel: solved.checkModel,
+      aiDisagreements: solved.disagreements,
       aiAnswerKeyPreview: solved.answerKeyText.split('\n').slice(0, 10),
     });
   } catch (error) {
@@ -388,6 +390,7 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
       slug: savedQuiz.slug,
       title: quiz.title,
       parsedCount: quiz.parsedCount,
+      aiDisagreements: Array.isArray(quiz.rawModelJson?.aiDisagreements) ? quiz.rawModelJson.aiDisagreements : [],
       quizUrl: buildAbsoluteUrl(req, `/quiz/${savedQuiz.slug}`),
       downloadUrl: buildAbsoluteUrl(req, `/api/download/${savedQuiz.slug}`),
       apiUrl: buildAbsoluteUrl(req, `/api/quizzes/${savedQuiz.slug}`),
@@ -431,6 +434,7 @@ app.get('/api/quizzes/:slug', (req, res) => {
     createdAt: quiz.createdAt,
     expiresAt: quiz.expiresAt,
     questions: quiz.questions,
+    aiDisagreements: Array.isArray(quiz.rawModelJson?.aiDisagreements) ? quiz.rawModelJson.aiDisagreements : [],
     siteType: quiz.siteType,
     siteTypeLabel: formatSiteType(quiz.siteType),
     clientTgUsername: quiz.clientTgUsername,

@@ -378,16 +378,16 @@ function renderAiCodeGate(payload) {
 
   const adminContact = String(payload.adminContactTg || '').trim();
   const adminContactHtml = adminContact
-    ? `<p class="admin-contact">Admin contact: <strong>${escapeHtml(adminContact)}</strong></p>`
+    ? `<p class="admin-contact">Контакт: <strong>${escapeHtml(adminContact)}</strong></p>`
     : '';
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
     ${adminContactHtml}
     <div class="activation-box">
-      <p class="activation-text">AI will not start until the access code is confirmed.</p>
+      <p class="activation-text">Код:</p>
       <div style="margin-top:12px; display:grid; gap:10px;">
-        <input id="aiAccessCodeInput" type="text" placeholder="Access code" autocomplete="off" />
+        <input id="aiAccessCodeInput" type="text" placeholder="Код" autocomplete="off" />
         <button id="aiCheckCodeBtn" class="secondary-btn" type="button">Check code</button>
         <p id="aiCodeMessage" style="margin:0; line-height:1.5;"></p>
         <button id="aiFinalizeBtn" class="primary-btn hidden" type="button">Send</button>
@@ -465,9 +465,19 @@ async function finalizeCurrentDraft(accessCode = '') {
 
 function renderFinalResult(payload) {
   resultBox.classList.remove('hidden');
+  const disagreements = Array.isArray(payload.aiDisagreements) ? payload.aiDisagreements : [];
+  const disagreementHtml = disagreements.length
+    ? `
+      <div class="notes-box">
+        <p><strong>Просьба перепроверить вот такие вопросы:</strong></p>
+        <p>${escapeHtml(disagreements.map((item) => String(item.questionNumber || '?')).join(', '))}</p>
+      </div>
+    `
+    : '';
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
+    ${disagreementHtml}
     <p>?????? ????????: <strong>${escapeHtml(String(payload.parsedCount || 0))}</strong></p>
     <div id="quizLinkBox">
       <p><a href="${escapeAttr(String(payload.quizUrl || ''))}" target="_blank" rel="noreferrer">${escapeHtml(String(payload.quizUrl || ''))}</a></p>

@@ -96,16 +96,6 @@ export async function solveQuizAnswersWithAI({
     }
   }
 
-  if (disagreements.length) {
-    const preview = disagreements
-      .slice(0, 12)
-      .map((item) => `${item.questionNumber}:${item.primary ?? '?'}!=${item.checker ?? '?'}`)
-      .join(', ');
-    const error = new Error(`AI answer check mismatch: ${preview}${disagreements.length > 12 ? '...' : ''}`);
-    error.statusCode = 422;
-    throw error;
-  }
-
   const resolvedQuestions = questions.map((question, index) => {
     const questionNumber = index + 1;
     const answerIndex = Number(primaryAnswers[questionNumber]);
@@ -126,6 +116,7 @@ export async function solveQuizAnswersWithAI({
     answerKeyText: formatAnswerKeyText(primaryAnswers, questions.length),
     primaryModel,
     checkModel,
+    disagreements,
     primaryRaw: primaryTexts.join('\n'),
     checkRaw: checkTexts.join('\n'),
   };

@@ -39,13 +39,14 @@ export function startTelegramBot() {
 
   const helpText = [
     'Admin commands:',
-    '/code <type> <questions> [price] <tg_user> [label]',
+    '/code <questions> <tg_user>',
     '/reusecode <type> <questions> [price] <tg_user> [label]',
     '/codes <count> <type> <questions> [price] <tg_user> [label]',
     '/delcode <CODE>',
     '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
     '/search <text>',
     '/site <id>',
+    '/sitejson <id>',
     '/reports [limit]',
     '/report <id|q-12|u-7>',
     '/reportfile <id|q-12|u-7> <source|answer>',
@@ -67,6 +68,7 @@ export function startTelegramBot() {
     { command: 'sites', description: 'List quiz sites' },
     { command: 'search', description: 'Search quiz sites' },
     { command: 'site', description: 'Show site details' },
+    { command: 'sitejson', description: 'Send parsed quiz JSON' },
     { command: 'reports', description: 'Latest file reports' },
     { command: 'report', description: 'Show report details' },
     { command: 'reportfile', description: 'Send reported file' },
@@ -250,6 +252,41 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, formatSiteDetails(quiz), { disable_web_page_preview: true });
+  });
+
+  bot.onText(/^\/sitejson(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const numericId = Number(String(match?.[1] || '').trim());
+    if (!Number.isInteger(numericId) || numericId < 1) {
+      await bot.sendMessage(msg.chat.id, 'Format: /sitejson <id>');
+      return;
+    }
+
+    const quiz = getQuizById(numericId);
+    if (!quiz) {
+      await bot.sendMessage(msg.chat.id, `Site with id ${numericId} not found.`);
+      return;
+    }
+
+    const exportPayload = {
+      title: quiz.title,
+      slug: quiz.slug,
+      questions: quiz.questions,
+      reviewBlocks: quiz.reviewBlocks || [],
+      rawModelJson: quiz.rawModelJson || {},
+      exportedAt: new Date().toISOString(),
+    };
+
+    const fileBuffer = Buffer.from(JSON.stringify(exportPayload, null, 2), 'utf8');
+    await bot.sendDocument(msg.chat.id, fileBuffer, {
+      caption: `Parsed JSON for site ${quiz.id}`,
+    }, {
+      filename: `quiz-${quiz.id}.json`,
+      contentType: 'application/json',
+    });
   });
 
   bot.onText(/^\/reports(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -567,6 +604,35 @@ function isPrivateChat(msg) {
 
 function parseSingleCodeArgs(rawValue, commandName = 'code') {
   const parts = tokenizeArgs(rawValue);
+  if (commandName === 'code') {
+    if (parts.length < 2) {
+      return {
+        ok: false,
+        error: 'Format: /code <questions> <tg_user>',
+      };
+    }
+
+    const questionCount = normalizeQuestionCount(parts[0]);
+    const clientUsername = normalizeClientUsername(parts[1]);
+
+    if (!questionCount) {
+      return { ok: false, error: 'Question count must be an integer greater than 0.' };
+    }
+    if (!clientUsername) {
+      return { ok: false, error: 'Telegram user is required, for example @ivan.' };
+    }
+
+    return {
+      ok: true,
+      count: 1,
+      siteType: null,
+      questionCount,
+      price: 0,
+      clientUsername,
+      label: null,
+    };
+  }
+
   if (parts.length < 3) {
     return {
       ok: false,
@@ -882,6 +948,7 @@ function formatCreatedCodesMessage(codes, parsed) {
     parsed.isReusable ? 'Mode: reusable code' : null,
     parsed.label ? `Label: ${parsed.label}` : null,
     `Question count: ${parsed.questionCount}`,
+    parsed.clientUsername ? `For: ${parsed.clientUsername}` : null,
   ].filter(Boolean);
 
   if (codes.length === 1) {

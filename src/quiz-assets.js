@@ -73,6 +73,18 @@ h1{
   padding:24px;
   box-shadow:0 18px 48px rgba(31,41,55,.07);
 }
+.warning-panel{
+  margin-top:16px;
+  padding:14px 16px;
+  border-radius:18px;
+  border:1px solid #f2c28b;
+  background:#fff5e8;
+  color:#9a3412;
+}
+.warning-panel strong{
+  display:block;
+  margin-bottom:6px;
+}
 .hidden{display:none}
 .meta{
   display:grid;
@@ -311,6 +323,9 @@ const bootstrapData = typeof window !== 'undefined' && window.QUIZ_BOOTSTRAP
 const bootstrapQuestions = Array.isArray(bootstrapData.questions)
   ? bootstrapData.questions
   : (typeof QUESTIONS !== 'undefined' ? QUESTIONS : []);
+const aiDisagreements = Array.isArray(bootstrapData.aiDisagreements)
+  ? bootstrapData.aiDisagreements
+  : [];
 const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
 
@@ -337,6 +352,7 @@ const i18n = {
   reportSuccess: 'The original file was sent to the admin for review.',
   reportError: 'Could not send the report. Please try again later.',
   reportUnavailable: 'This quiz cannot send a report right now.',
+  warningTitle: 'Please double-check these questions:',
 };
 
 const state = {
@@ -374,6 +390,7 @@ const els = {
   countLabel: document.getElementById('countLabel'),
   reportBtn: document.getElementById('reportBtn'),
   reportToast: document.getElementById('reportToast'),
+  warningBox: document.getElementById('warningBox'),
 };
 
 function t(key, params = {}) {
@@ -417,6 +434,16 @@ function applyLanguage() {
   }
   if (els.reportBtn) {
     els.reportBtn.textContent = t('report');
+  }
+  if (els.warningBox) {
+    if (aiDisagreements.length) {
+      els.warningBox.innerHTML =
+        '<strong>' + t('warningTitle') + '</strong>' +
+        aiDisagreements.map((item) => String(item.questionNumber || '?')).join(', ');
+      els.warningBox.classList.remove('hidden');
+    } else {
+      els.warningBox.classList.add('hidden');
+    }
   }
 
   if (els.questionCounter && !els.quiz.classList.contains('hidden')) {
@@ -675,6 +702,7 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     reportUrl,
     title: quiz.title,
     questions: quiz.questions,
+    aiDisagreements: Array.isArray(quiz.rawModelJson?.aiDisagreements) ? quiz.rawModelJson.aiDisagreements : [],
   });
 
   return `<!doctype html>
@@ -697,6 +725,7 @@ export function renderHostedQuizHtml(quiz, options = {}) {
         <div class="meta-chip"><span id="linkLabel">Link</span>${displayUrl}</div>
         <div class="meta-chip"><span id="countLabel">Questions</span><strong id="quizLength">${quiz.questions.length}</strong></div>
       </div>
+      <div id="warningBox" class="warning-panel hidden"></div>
     </section>
 
     <section id="start" class="card">

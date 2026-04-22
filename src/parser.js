@@ -9,7 +9,7 @@ const WordExtractor = require('word-extractor');
 
 const extractor = new WordExtractor();
 
-export const SUPPORTED_UPLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx'];
+export const SUPPORTED_UPLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx', '.json'];
 export const SUPPORTED_ANSWER_EXTENSIONS = ['.txt', '.pdf', '.doc', '.docx'];
 
 const LATIN_MARKERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
@@ -27,6 +27,17 @@ export async function parseQuizFromFile({
 }) {
   const effectiveLimit = normalizeQuestionLimit(limit);
   const extension = path.extname(filename || '').toLowerCase();
+
+  if (extension === '.json') {
+    return parseQuizFromJsonFile({
+      buffer,
+      filename,
+      answerIndex,
+      limit,
+      optionCount,
+    });
+  }
+
   const extractedText = await extractTextFromFile(buffer, extension);
   const normalizedText = normalizeExtractedText(extractedText);
 
@@ -79,6 +90,62 @@ export async function parseQuizFromFile({
     },
     notes,
     reviewBlocks,
+  };
+}
+
+function parseQuizFromJsonFile({
+  buffer,
+  filename,
+  answerIndex,
+  limit,
+  optionCount,
+}) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(buffer).toString('utf8'));
+  } catch {
+    throw new Error('Could not read the JSON file.');
+  }
+
+  const effectiveLimit = normalizeQuestionLimit(limit);
+  const rawQuestions = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.questions)
+      ? parsed.questions
+      : [];
+
+  if (!rawQuestions.length) {
+    throw new Error('JSON file does not contain questions.');
+  }
+
+  const normalizedQuestions = rawQuestions
+    .map((item, index) => normalizeJsonQuestion(item, index + 1, answerIndex, optionCount))
+    .filter(Boolean)
+    .slice(0, effectiveLimit);
+
+  if (!normalizedQuestions.length) {
+    throw new Error('JSON file does not contain valid questions.');
+  }
+
+  const title = sanitizeText(parsed?.title || buildTitleFromFilename(filename));
+  const importedOptionCount = normalizedQuestions[0]?.options?.length || optionCount || 0;
+
+  return {
+    title: title || buildTitleFromFilename(filename),
+    questions: normalizedQuestions,
+    extractedText: '',
+    rawModelJson: {
+      parser: 'json-import',
+      optionCount: importedOptionCount,
+      extractedCharacters: 0,
+      acceptedQuestions: normalizedQuestions.length,
+      droppedBlocks: 0,
+      reviewBlockCount: Array.isArray(parsed?.reviewBlocks) ? parsed.reviewBlocks.length : 0,
+      answerMode: 'json',
+      importedFromJson: true,
+    },
+    notes: [],
+    reviewBlocks: Array.isArray(parsed?.reviewBlocks) ? parsed.reviewBlocks : [],
   };
 }
 
@@ -161,6 +228,44 @@ async function extractTextFromFile(buffer, extension) {
   }
 
   throw new Error(`Неподдерживаемый формат файла: ${extension}`);
+}
+
+function normalizeJsonQuestion(question, index, fallbackAnswerIndex, fallbackOptionCount) {
+  if (!question || typeof question !== 'object') {
+    return null;
+  }
+
+  const prompt = sanitizeText(question.q || question.question || question.text || '');
+  const options = Array.isArray(question.options)
+    ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+    : [];
+
+  if (!prompt || options.length < 2) {
+    return null;
+  }
+
+  let correctIndex = Number(question.correctIndex);
+  if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= options.length) {
+    const oneBased = Number(question.correctAnswerIndex);
+    if (Number.isInteger(oneBased) && oneBased >= 1 && oneBased <= options.length) {
+      correctIndex = oneBased - 1;
+    } else {
+      const fallbackOneBased = Number.isInteger(fallbackAnswerIndex) ? fallbackAnswerIndex : 1;
+      correctIndex = Math.max(0, Math.min(options.length - 1, fallbackOneBased - 1));
+    }
+  }
+
+  const expectedOptionCount = Number(fallbackOptionCount || 0);
+  if (expectedOptionCount >= 2 && options.length !== expectedOptionCount) {
+    return null;
+  }
+
+  return {
+    q: prompt,
+    options,
+    correctIndex,
+    sourceQuestionNumber: Number(question.sourceQuestionNumber || index),
+  };
 }
 
 function normalizeExtractedText(text) {
