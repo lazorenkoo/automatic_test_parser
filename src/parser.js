@@ -608,20 +608,37 @@ function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, 
   const blocks = [];
   let current = null;
 
-  for (const line of lines) {
-    const standaloneMatch = line.match(/^(\d{1,3})\s*[.)\-–—:]?$/);
-    const inlineMatch = line.match(/^(\d{1,3})\s*[.)\-–—:]\s*(.+)$/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const inlineMatch = matchStrictInlineQuestionStart(line);
+    const standaloneMatch = inlineMatch ? null : matchStandaloneQuestionStart(line);
+    const nextLine = findNextMeaningfulRawLine(lines, index + 1);
+
+    if (inlineMatch && looksLikeNumericOptionInlineStart(inlineMatch)) {
+      if (current) {
+        current.lines.push(line);
+      }
+      continue;
+    }
+
+    if (standaloneMatch && looksLikeRawNumericOptionLine(line, current, nextLine)) {
+      if (current) {
+        current.lines.push(line);
+      }
+      continue;
+    }
+
     if (standaloneMatch || inlineMatch) {
       if (current) {
         blocks.push(current);
       }
 
       current = {
-        number: Number((standaloneMatch || inlineMatch)[1]),
+        number: (standaloneMatch || inlineMatch).number,
         lines: [],
       };
 
-      const rest = sanitizeText(inlineMatch ? inlineMatch[2] : '');
+      const rest = sanitizeText(inlineMatch ? inlineMatch.text : '');
       if (rest) {
         current.lines.push(rest);
       }
@@ -662,7 +679,7 @@ function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, 
 
   const notes = [];
   if (droppedBlocks > 0) {
-    notes.push(`ÐŸÑ€Ð¾Ð¿ÑƒÑ‰ÐµÐ½Ð¾ Ð±Ð»Ð¾ÐºÐ¾Ð² Ð¸Ð·-Ð·Ð° Ð½ÐµÐ¿Ð¾Ð»Ð½Ð¾Ð¹ ÑÑ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ñ‹: ${droppedBlocks}.`);
+    notes.push(`Skipped malformed numbered blocks: ${droppedBlocks}.`);
   }
   notes.push(...buildLimitNote(questions.length, limit));
 
@@ -2242,7 +2259,7 @@ function normalizeBlockLines(lines) {
   return lines
     .map((line) => sanitizeText(line))
     .filter(Boolean)
-    .filter((line) => !shouldIgnoreLine(line))
+    .filter((line) => !shouldIgnoreLine(line, { allowNumeric: true }))
     .filter((line) => !/^+$/u.test(line))
     .filter((line) => !/^[\s]+[A-ZА-ЯІЇЄҐ._-]{10,}/u.test(line))
     .filter((line) => !/^[A-ZА-ЯІЇЄҐ._-]{10,}$/.test(line))
@@ -2264,7 +2281,7 @@ function normalizeOptionLines(lines, optionCount) {
       continue;
     }
 
-    if (shouldIgnoreLine(line)) {
+    if (shouldIgnoreLine(line, { allowNumeric: true })) {
       continue;
     }
 
@@ -2456,7 +2473,7 @@ function cleanupLine(line) {
     .trim();
 }
 
-function shouldIgnoreLine(line) {
+function shouldIgnoreLine(line, { allowNumeric = false } = {}) {
   if (!line) {
     return true;
   }
@@ -2469,7 +2486,7 @@ function shouldIgnoreLine(line) {
     return true;
   }
 
-  if (/^\d+$/.test(line)) {
+  if (!allowNumeric && /^\d+$/.test(line)) {
     return true;
   }
 
@@ -2610,24 +2627,27 @@ function matchQuestionStart(line) {
 }
 
 function matchExplicitQuestionNumber(line) {
-  const match = line.match(/^(\d{1,3})\s*[.\)\-–—:]?\s*(.*)$/);
-  if (!match) {
-    return null;
+  const standaloneMatch = matchStandaloneQuestionStart(line);
+  if (standaloneMatch) {
+    return {
+      number: standaloneMatch.number,
+      text: '',
+    };
   }
 
-  const number = Number(match[1]);
-  if (!Number.isInteger(number) || number < 1 || number > 999) {
+  const inlineMatch = matchStrictInlineQuestionStart(line);
+  if (!inlineMatch) {
     return null;
   }
 
   return {
-    number,
-    text: sanitizeText(match[2]),
+    number: inlineMatch.number,
+    text: inlineMatch.text,
   };
 }
 
 function matchStandaloneQuestionStart(line) {
-  const match = line.match(/^(\d{1,3})\s*[\.\)\-–—:]?$/);
+  const match = line.match(/^(\d{1,3})\s*[\.\):]?$/);
   if (!match) {
     return null;
   }
@@ -2635,6 +2655,61 @@ function matchStandaloneQuestionStart(line) {
   return {
     number: Number(match[1]),
   };
+}
+
+function matchStrictInlineQuestionStart(line) {
+  const match = line.match(/^(\d{1,3})\s*([.):])\s*(.+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const number = Number(match[1]);
+  const text = sanitizeText(match[3]);
+  if (!Number.isInteger(number) || number < 1 || number > 999 || !text || /^\d/.test(text)) {
+    return null;
+  }
+
+  return {
+    number,
+    text,
+  };
+}
+
+function findNextMeaningfulRawLine(lines, startIndex) {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = cleanupLine(lines[index]);
+    if (!line || shouldIgnoreLine(line)) {
+      continue;
+    }
+    return line;
+  }
+
+  return '';
+}
+
+function looksLikeRawNumericOptionLine(line, current, nextLine) {
+  const value = sanitizeText(line);
+  if (!value || !current) {
+    return false;
+  }
+
+  if (!/^\d{1,3}$/.test(value)) {
+    return false;
+  }
+
+  if ((current.lines?.length || 0) < 2) {
+    return false;
+  }
+
+  if (!nextLine) {
+    return true;
+  }
+
+  return /^\d/.test(nextLine);
+}
+
+function looksLikeNumericOptionInlineStart(match) {
+  return Boolean(match?.text) && /^\d/.test(match.text);
 }
 
 function matchOptionStart(line, optionCount) {
