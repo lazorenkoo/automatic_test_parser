@@ -431,7 +431,7 @@ function splitEmbeddedQuestionStarts(line) {
 
   const parts = [];
   let cursor = 0;
-  const regex = /(?<=\S)(\d{1,3}[.)]\s+)/gu;
+  const regex = /(?<=[^\s\d])(\d{1,3}[.)]\s+)/gu;
   let match;
 
   while ((match = regex.exec(input))) {
@@ -1376,32 +1376,23 @@ function chooseBestParsedResult(candidates, optionCount) {
       return current;
     }
 
-    if ((current.validation?.numberingQuestionCount || 0) > (best.validation?.numberingQuestionCount || 0)) {
-      return current;
-    }
-
-    if (
-      (current.validation?.numberingQuestionCount || 0) === (best.validation?.numberingQuestionCount || 0)
-      && (current.validation?.adjustedQuestionCount || 0) > (best.validation?.adjustedQuestionCount || 0)
-    ) {
-      return current;
-    }
-
     if ((current.validation?.adjustedQuestionCount || 0) > (best.validation?.adjustedQuestionCount || 0)) {
       return current;
     }
 
-    if ((current.validation?.adjustedQuestionCount || 0) === (best.validation?.adjustedQuestionCount || 0)) {
-      if ((current.validation?.selectionScore || 0) > (best.validation?.selectionScore || 0)) {
-        return current;
-      }
+    if (
+      (current.validation?.adjustedQuestionCount || 0) === (best.validation?.adjustedQuestionCount || 0)
+      && (current.validation?.selectionScore || 0) > (best.validation?.selectionScore || 0)
+    ) {
+      return current;
+    }
 
-      if (
-        (current.validation?.selectionScore || 0) === (best.validation?.selectionScore || 0)
-        && current.questions.length > best.questions.length
-      ) {
-        return current;
-      }
+    if (
+      (current.validation?.adjustedQuestionCount || 0) === (best.validation?.adjustedQuestionCount || 0)
+      && (current.validation?.selectionScore || 0) === (best.validation?.selectionScore || 0)
+      && current.questions.length > best.questions.length
+    ) {
+      return current;
     }
 
     return best;
