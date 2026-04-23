@@ -12,6 +12,7 @@ import {
   deleteQuizById,
   finalizeQuizFromDraftReservation,
   getAiDeviceBan,
+  getAiPrepareCooldownState,
   getAiRuntimeSettings,
   getAiUsageStats,
   getDbMeta,
@@ -51,6 +52,7 @@ import {
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_MB || 20) * 1024 * 1024;
+const aiPrepareCooldownMs = Math.max(0, Number(process.env.AI_PREPARE_COOLDOWN_MS || 60 * 1000) || 60 * 1000);
 const uploadsDir = path.join(getDbMeta().dataDir, 'reported-source-files');
 const aiPrepareJobs = new Map();
 
@@ -261,6 +263,26 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       return res.status(403).json({ error: 'This device is banned from AI.' });
     }
 
+    const prepareCooldown = getAiPrepareCooldownState(creatorSnapshot.browserId, aiPrepareCooldownMs);
+    if (prepareCooldown.active) {
+      const remainingSeconds = Math.max(1, Math.ceil(prepareCooldown.remainingMs / 1000));
+      recordAiRequestUsage({
+        requestKind: 'prepare-cooldown',
+        status: 'blocked',
+        title: clientTitle,
+        sourceFilename: originalFilename,
+        browserId: creatorSnapshot.browserId || null,
+        fingerprint: creatorSnapshot.fingerprint || null,
+        requestIp: creatorSnapshot.request?.ip || null,
+        requestUserAgent: creatorSnapshot.request?.userAgent || null,
+      });
+      return res.status(429).json({
+        error: `Please wait ${remainingSeconds}s before sending another AI request.`,
+        cooldownRemainingMs: prepareCooldown.remainingMs,
+        cooldownRetryAt: prepareCooldown.retryAt,
+      });
+    }
+
     let code = null;
     if (aiSettings.requireCode) {
       if (!accessCode) {
@@ -280,6 +302,17 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
     if (aiUsage.dailyLimit > 0 && aiUsage.usedToday >= aiUsage.dailyLimit) {
       return res.status(429).json({ error: `AI daily limit reached: ${aiUsage.usedToday}/${aiUsage.dailyLimit}.` });
     }
+
+    recordAiRequestUsage({
+      requestKind: 'prepare-started',
+      status: 'accepted',
+      title: clientTitle,
+      sourceFilename: originalFilename,
+      browserId: creatorSnapshot.browserId || null,
+      fingerprint: creatorSnapshot.fingerprint || null,
+      requestIp: creatorSnapshot.request?.ip || null,
+      requestUserAgent: creatorSnapshot.request?.userAgent || null,
+    });
 
     const job = createAiPrepareJob({
       id: randomToken(24),

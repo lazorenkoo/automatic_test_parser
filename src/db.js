@@ -353,6 +353,19 @@ const listAiRequestLogsStmt = db.prepare(`
   LIMIT ?
 `);
 
+const getLastAiPrepareAcceptedByBrowserStmt = db.prepare(`
+  SELECT
+    created_at AS createdAt,
+    title,
+    source_filename AS sourceFilename
+  FROM ai_request_logs
+  WHERE browser_id = ?
+    AND request_kind = 'prepare-started'
+    AND status = 'accepted'
+  ORDER BY created_at DESC
+  LIMIT 1
+`);
+
 const upsertAiDeviceBanStmt = db.prepare(`
   INSERT INTO ai_device_bans (
     browser_id,
@@ -848,6 +861,49 @@ export function listAiRequestLogs(limit = 20) {
     requestIp: row.requestIp || null,
     requestUserAgent: row.requestUserAgent || null,
   }));
+}
+
+export function getAiPrepareCooldownState(browserId, cooldownMs = 60 * 1000, now = nowMs()) {
+  const normalizedBrowserId = sanitizeNullableValue(browserId);
+  const safeCooldownMs = Math.max(0, Number(cooldownMs) || 0);
+  if (!normalizedBrowserId || safeCooldownMs < 1) {
+    return {
+      active: false,
+      cooldownMs: safeCooldownMs,
+      remainingMs: 0,
+      retryAt: null,
+      lastAcceptedAt: null,
+      title: null,
+      sourceFilename: null,
+    };
+  }
+
+  const row = getLastAiPrepareAcceptedByBrowserStmt.get(normalizedBrowserId);
+  const lastAcceptedAt = Number(row?.createdAt || 0);
+  if (!lastAcceptedAt) {
+    return {
+      active: false,
+      cooldownMs: safeCooldownMs,
+      remainingMs: 0,
+      retryAt: null,
+      lastAcceptedAt: null,
+      title: row?.title || null,
+      sourceFilename: row?.sourceFilename || null,
+    };
+  }
+
+  const retryAt = lastAcceptedAt + safeCooldownMs;
+  const remainingMs = Math.max(0, retryAt - Number(now || nowMs()));
+
+  return {
+    active: remainingMs > 0,
+    cooldownMs: safeCooldownMs,
+    remainingMs,
+    retryAt,
+    lastAcceptedAt,
+    title: row?.title || null,
+    sourceFilename: row?.sourceFilename || null,
+  };
 }
 
 export function banAiDevice(browserId, reason = null) {
