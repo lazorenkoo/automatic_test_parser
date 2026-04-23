@@ -56,7 +56,7 @@ export function startTelegramBot() {
     '/ai',
     '/aicode <on|off>',
     '/ailimit <N|off>',
-    '/ailogs [limit]',
+    '/ailogs <count>',
     '/ainovisit [limit]',
     '/aiban <browserId> [reason]',
     '/aiunban <browserId>',
@@ -87,7 +87,7 @@ export function startTelegramBot() {
     { command: 'ai', description: 'Show AI status' },
     { command: 'aicode', description: 'Require code for AI on/off' },
     { command: 'ailimit', description: 'Set AI daily limit' },
-    { command: 'ailogs', description: 'Show AI request logs' },
+    { command: 'ailogs', description: 'Export AI request logs' },
     { command: 'ainovisit', description: 'AI sites with no visits' },
     { command: 'aiban', description: 'Ban AI device by browserId' },
     { command: 'aiunban', description: 'Unban AI device' },
@@ -302,8 +302,20 @@ export function startTelegramBot() {
       return;
     }
 
-    const limit = normalizeOptionalLimit(match?.[1], 20, 100);
-    await bot.sendMessage(msg.chat.id, formatAiLogs(limit));
+    const parsed = parseRequiredLimit(match?.[1], '/ailogs <count>', 100);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const content = formatAiLogsText(parsed.limit);
+    const filename = `ai-logs-last-${parsed.limit}.txt`;
+    await bot.sendDocument(
+      msg.chat.id,
+      Buffer.from(content, 'utf8'),
+      {},
+      { filename, contentType: 'text/plain' },
+    );
   });
 
   bot.onText(/^\/ainovisit(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -1021,6 +1033,23 @@ function normalizeOptionalLimit(rawValue, fallbackValue = 20, maxValue = 100) {
   return Math.min(maxValue, numericValue);
 }
 
+function parseRequiredLimit(rawValue, formatHint, maxValue = 100) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return { ok: false, error: `Format: ${formatHint}` };
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isInteger(numericValue) || numericValue < 1) {
+    return { ok: false, error: `Format: ${formatHint}` };
+  }
+
+  return {
+    ok: true,
+    limit: Math.min(maxValue, numericValue),
+  };
+}
+
 function parseReportFileArgs(rawValue) {
   const parts = tokenizeArgs(rawValue);
   if (parts.length < 2) {
@@ -1369,10 +1398,10 @@ function formatAiRuntimeStatus() {
   ].join('\n');
 }
 
-function formatAiLogs(limit) {
+function formatAiLogsText(limit) {
   const logs = listAiRequestLogs(limit);
   if (!logs.length) {
-    return 'No AI logs yet.';
+    return 'No AI logs yet.\n';
   }
 
   return [
@@ -1381,7 +1410,6 @@ function formatAiLogs(limit) {
     ...logs.map((log) => [
       `${log.id}. ${log.status} | ${formatDateTime(log.createdAt)}`,
       `Browser ID: ${log.browserId || '-'}`,
-      `IP: ${log.requestIp || '-'}`,
       `Title: ${truncate(log.title || log.sourceFilename || '-', 80)}`,
       `Model: ${log.model || '-'}`,
     ].join('\n')),

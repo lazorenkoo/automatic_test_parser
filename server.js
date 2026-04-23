@@ -37,7 +37,7 @@ import {
   SUPPORTED_UPLOAD_EXTENSIONS,
 } from './src/parser.js';
 import { solveQuizAnswersWithAI } from './src/openai-answering.js';
-import { sendAdminTelegramLog, startTelegramBot } from './src/telegram-bot.js';
+import { startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
 import {
   buildAbsoluteUrl,
@@ -258,12 +258,6 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
         requestIp: creatorSnapshot.request?.ip || null,
         requestUserAgent: creatorSnapshot.request?.userAgent || null,
       });
-      await sendAdminTelegramLog(buildAiBlockedLogMessage({
-        title: clientTitle,
-        originalFilename,
-        creatorSnapshot,
-        reason: bannedDevice.reason || 'device banned',
-      }));
       return res.status(403).json({ error: 'This device is banned from AI.' });
     }
 
@@ -301,7 +295,6 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
     });
     aiPrepareJobs.set(job.id, job);
-    await sendAdminTelegramLog(buildAiStartLogMessage(job));
     runAiPrepareJob(job).catch((error) => {
       markAiPrepareJobFailed(job, error);
     });
@@ -532,30 +525,6 @@ function buildAiProgressMessage(progress) {
   }
 
   return 'AI обробляє питання.';
-}
-
-function buildAiStartLogMessage(job) {
-  const browserId = job.creatorSnapshot?.browserId || '-';
-  const ip = job.creatorSnapshot?.request?.ip || '-';
-  return [
-    'AI request started',
-    `Title: ${job.clientTitle}`,
-    `File: ${job.originalFilename}`,
-    `Browser ID: ${browserId}`,
-    `IP: ${ip}`,
-    `Code required: ${job.aiRequireCode ? 'yes' : 'no'}`,
-  ].join('\n');
-}
-
-function buildAiBlockedLogMessage({ title, originalFilename, creatorSnapshot, reason }) {
-  return [
-    'AI request blocked',
-    `Title: ${title || '-'}`,
-    `File: ${originalFilename || '-'}`,
-    `Browser ID: ${creatorSnapshot?.browserId || '-'}`,
-    `IP: ${creatorSnapshot?.request?.ip || '-'}`,
-    `Reason: ${reason || 'blocked'}`,
-  ].join('\n');
 }
 
 app.post('/api/ai-quizzes/inspect', upload.fields([
