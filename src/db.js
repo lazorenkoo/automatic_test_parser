@@ -22,6 +22,8 @@ const db = new DatabaseSync(dbPath);
 db.exec('PRAGMA journal_mode = WAL');
 
 const unlimitedAccessCode = normalizeCode(process.env.UNLIMITED_EVA_ACCESS_CODE || '');
+const internalAiFreeCode = '__AI_FREE_INTERNAL__';
+const internalAiFreeLabel = 'AI-NO-CODE';
 const unlimitedAccessLabel = 'ЕВА';
 
 db.exec(`
@@ -116,6 +118,20 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ai_request_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    request_kind TEXT NOT NULL,
+    model TEXT,
+    status TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quizzes_slug ON quizzes(slug);
   CREATE INDEX IF NOT EXISTS idx_access_codes_reservation_token ON access_codes(reservation_token);
   CREATE INDEX IF NOT EXISTS idx_quiz_drafts_token ON quiz_drafts(draft_token);
@@ -124,6 +140,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_quiz_reports_quiz_id ON quiz_reports(quiz_id);
   CREATE INDEX IF NOT EXISTS idx_quiz_reports_created_at ON quiz_reports(created_at);
   CREATE INDEX IF NOT EXISTS idx_upload_reports_created_at ON upload_reports(created_at);
+  CREATE INDEX IF NOT EXISTS idx_ai_request_logs_created_at ON ai_request_logs(created_at);
 `);
 
 ensureColumn('access_codes', 'site_type', 'TEXT');
@@ -264,6 +281,39 @@ const findAccessCodeByHashStmt = db.prepare(`
     used_by_quiz_id AS usedByQuizId
   FROM access_codes
   WHERE code_hash = ?
+`);
+
+const upsertAppSettingStmt = db.prepare(`
+  INSERT INTO app_settings (
+    key,
+    value,
+    updated_at
+  ) VALUES (?, ?, ?)
+  ON CONFLICT(key) DO UPDATE SET
+    value = excluded.value,
+    updated_at = excluded.updated_at
+`);
+
+const getAppSettingStmt = db.prepare(`
+  SELECT value
+  FROM app_settings
+  WHERE key = ?
+`);
+
+const insertAiRequestLogStmt = db.prepare(`
+  INSERT INTO ai_request_logs (
+    created_at,
+    request_kind,
+    model,
+    status
+  ) VALUES (?, ?, ?, ?)
+`);
+
+const countAiRequestsBetweenStmt = db.prepare(`
+  SELECT COUNT(*) AS total
+  FROM ai_request_logs
+  WHERE created_at >= ?
+    AND created_at < ?
 `);
 
 const insertQuizStmt = db.prepare(`
@@ -576,6 +626,8 @@ const deleteUploadReportByIdStmt = db.prepare(`
 `);
 
 syncUnlimitedEvaAccessCode();
+syncInternalAiFreeCode();
+ensureDefaultAiSettings();
 
 export function getDbMeta() {
   return {
@@ -583,6 +635,97 @@ export function getDbMeta() {
     dbPath,
     quizPublicTtlMs,
   };
+}
+
+export function getAiRuntimeSettings() {
+  return {
+    enabled: readBooleanSetting('ai.enabled', true),
+    requireCode: readBooleanSetting('ai.require_code', false),
+    dailyLimit: readIntegerSetting('ai.daily_limit', 0),
+  };
+}
+
+export function updateAiRuntimeSettings(patch = {}) {
+  const current = getAiRuntimeSettings();
+  const next = {
+    enabled: patch.enabled == null ? current.enabled : Boolean(patch.enabled),
+    requireCode: patch.requireCode == null ? current.requireCode : Boolean(patch.requireCode),
+    dailyLimit: patch.dailyLimit == null ? current.dailyLimit : normalizeAiDailyLimit(patch.dailyLimit),
+  };
+  const updatedAt = nowMs();
+
+  upsertAppSettingStmt.run('ai.enabled', next.enabled ? '1' : '0', updatedAt);
+  upsertAppSettingStmt.run('ai.require_code', next.requireCode ? '1' : '0', updatedAt);
+  upsertAppSettingStmt.run('ai.daily_limit', String(next.dailyLimit), updatedAt);
+
+  return next;
+}
+
+export function getAiUsageStats(now = nowMs()) {
+  const range = getLocalDayRange(now);
+  const row = countAiRequestsBetweenStmt.get(range.start, range.end) || {};
+  const usedToday = Number(row.total || 0);
+  const settings = getAiRuntimeSettings();
+  const remainingToday = settings.dailyLimit > 0
+    ? Math.max(0, settings.dailyLimit - usedToday)
+    : null;
+
+  return {
+    dayStartAt: range.start,
+    nextResetAt: range.end,
+    usedToday,
+    dailyLimit: settings.dailyLimit,
+    remainingToday,
+    enabled: settings.enabled,
+    requireCode: settings.requireCode,
+  };
+}
+
+export function recordAiRequestUsage({ requestKind = 'answers', model = null, status = 'sent', now = nowMs() } = {}) {
+  insertAiRequestLogStmt.run(
+    now,
+    sanitizeNullableValue(requestKind) || 'answers',
+    sanitizeNullableValue(model),
+    sanitizeNullableValue(status) || 'sent',
+  );
+
+  return getAiUsageStats(now);
+}
+
+export function reserveAiRequestSlot({ requestKind = 'answers', model = null, now = nowMs() } = {}) {
+  const tx = createTransaction(() => {
+    const settings = getAiRuntimeSettings();
+    if (!settings.enabled) {
+      const error = new Error('AI is disabled by admin.');
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const range = getLocalDayRange(now);
+    const row = countAiRequestsBetweenStmt.get(range.start, range.end) || {};
+    const usedToday = Number(row.total || 0);
+    if (settings.dailyLimit > 0 && usedToday >= settings.dailyLimit) {
+      const error = new Error(`AI daily limit reached: ${usedToday}/${settings.dailyLimit}.`);
+      error.statusCode = 429;
+      throw error;
+    }
+
+    insertAiRequestLogStmt.run(
+      now,
+      sanitizeNullableValue(requestKind) || 'answers',
+      sanitizeNullableValue(model),
+      'sent',
+    );
+
+    return {
+      usedToday: usedToday + 1,
+      dailyLimit: settings.dailyLimit,
+      remainingToday: settings.dailyLimit > 0 ? Math.max(0, settings.dailyLimit - usedToday - 1) : null,
+      nextResetAt: range.end,
+    };
+  });
+
+  return tx();
 }
 
 export function createAccessCodes(count = 1, label = null, metadata = {}) {
@@ -760,6 +903,10 @@ export function reserveAccessCode(plainCode) {
   });
 
   return tx();
+}
+
+export function reserveInternalAiAccessCode() {
+  return reserveAccessCode(internalAiFreeCode);
 }
 
 export function releaseReservation(reservationToken) {
@@ -1274,6 +1421,34 @@ function persistQuizContent(quiz, questions, reviewBlocks) {
   );
 }
 
+function ensureDefaultAiSettings() {
+  const settings = [
+    ['ai.enabled', '1'],
+    ['ai.require_code', '0'],
+    ['ai.daily_limit', '0'],
+  ];
+  const updatedAt = nowMs();
+
+  for (const [key, value] of settings) {
+    if (getAppSettingStmt.get(key)) {
+      continue;
+    }
+    upsertAppSettingStmt.run(key, value, updatedAt);
+  }
+}
+
+function syncInternalAiFreeCode() {
+  upsertReusableCodeStmt.run(
+    hashCode(internalAiFreeCode),
+    internalAiFreeLabel,
+    null,
+    null,
+    null,
+    0,
+    nowMs(),
+  );
+}
+
 function syncUnlimitedEvaAccessCode() {
   if (!unlimitedAccessCode) {
     return;
@@ -1356,6 +1531,46 @@ function normalizePrice(value) {
   }
 
   return Math.round(numericValue * 100) / 100;
+}
+
+function normalizeAiDailyLimit(value) {
+  if (value == null || value === '') {
+    return 0;
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isInteger(numericValue) || numericValue < 0) {
+    return 0;
+  }
+
+  return numericValue;
+}
+
+function readBooleanSetting(key, fallbackValue) {
+  const row = getAppSettingStmt.get(key);
+  if (!row) {
+    return fallbackValue;
+  }
+
+  return String(row.value || '') === '1';
+}
+
+function readIntegerSetting(key, fallbackValue) {
+  const row = getAppSettingStmt.get(key);
+  if (!row) {
+    return fallbackValue;
+  }
+
+  const numericValue = Number(row.value);
+  return Number.isInteger(numericValue) && numericValue >= 0 ? numericValue : fallbackValue;
+}
+
+function getLocalDayRange(now) {
+  const date = new Date(Number(now || nowMs()));
+  date.setHours(0, 0, 0, 0);
+  const start = date.getTime();
+  const end = start + 24 * 60 * 60 * 1000;
+  return { start, end };
 }
 
 function resolveQuizPublicTtlMs() {

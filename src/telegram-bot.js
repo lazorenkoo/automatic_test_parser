@@ -5,6 +5,8 @@ import {
   deleteQuizById,
   deleteQuizReportById,
   deleteUploadReportById,
+  getAiRuntimeSettings,
+  getAiUsageStats,
   getAccountingSummary,
   getDbMeta,
   getQuizById,
@@ -16,6 +18,7 @@ import {
   listQuizzesForAdmin,
   revokeAccessCode,
   setQuizBanStatusById,
+  updateAiRuntimeSettings,
 } from './db.js';
 
 let botInstance = null;
@@ -45,6 +48,9 @@ export function startTelegramBot() {
     '/codes <count> <type> <questions> [price] <tg_user> [label]',
     '/delcode <CODE>',
     '/checkcode <CODE>',
+    '/ai',
+    '/aicode <on|off>',
+    '/ailimit <N|off>',
     '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
     '/search <text>',
     '/site <id>',
@@ -68,6 +74,9 @@ export function startTelegramBot() {
     { command: 'codes', description: 'Create many codes' },
     { command: 'delcode', description: 'Disable a code' },
     { command: 'checkcode', description: 'Check code status' },
+    { command: 'ai', description: 'Show AI status' },
+    { command: 'aicode', description: 'Require code for AI on/off' },
+    { command: 'ailimit', description: 'Set AI daily limit' },
     { command: 'sites', description: 'List quiz sites' },
     { command: 'search', description: 'Search quiz sites' },
     { command: 'site', description: 'Show site details' },
@@ -227,6 +236,50 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, formatAccessCodeStatus(code, result));
+  });
+
+  bot.onText(/^\/ai(?:@[\w_]+)?$/i, async (msg) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, formatAiRuntimeStatus());
+  });
+
+  bot.onText(/^\/aicode(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseToggleCommand(match?.[1], '/aicode <on|off>');
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const settings = updateAiRuntimeSettings({ requireCode: parsed.value });
+    await bot.sendMessage(msg.chat.id, [
+      `AI code requirement: ${settings.requireCode ? 'ON' : 'OFF'}`,
+      formatAiRuntimeStatus(),
+    ].join('\n\n'));
+  });
+
+  bot.onText(/^\/ailimit(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseAiLimitCommand(match?.[1]);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const settings = updateAiRuntimeSettings({ dailyLimit: parsed.value });
+    await bot.sendMessage(msg.chat.id, [
+      `AI daily limit: ${settings.dailyLimit > 0 ? settings.dailyLimit : 'OFF'}`,
+      formatAiRuntimeStatus(),
+    ].join('\n\n'));
   });
 
   bot.onText(/^\/sites(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -812,6 +865,36 @@ function parseSearchArgs(rawValue) {
   };
 }
 
+function parseToggleCommand(rawValue, formatHint) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  if (value === 'on' || value === '1' || value === 'true') {
+    return { ok: true, value: true };
+  }
+  if (value === 'off' || value === '0' || value === 'false') {
+    return { ok: true, value: false };
+  }
+
+  return { ok: false, error: `Format: ${formatHint}` };
+}
+
+function parseAiLimitCommand(rawValue) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  if (!value) {
+    return { ok: false, error: 'Format: /ailimit <N|off>' };
+  }
+
+  if (value === 'off' || value === 'none' || value === 'unlimited') {
+    return { ok: true, value: 0 };
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isInteger(numericValue) || numericValue < 0) {
+    return { ok: false, error: 'Format: /ailimit <N|off>' };
+  }
+
+  return { ok: true, value: numericValue };
+}
+
 function parseReportFileArgs(rawValue) {
   const parts = tokenizeArgs(rawValue);
   if (parts.length < 2) {
@@ -1122,6 +1205,21 @@ function formatAccessCodeStatus(code, result) {
     `Price: ${formatPrice(result.price)}`,
     `Used at: ${formatDateTime(result.usedAt)}`,
     `Site: ${linkedQuiz ? `${linkedQuiz.id} (${linkedQuiz.slug})` : (result.usedByQuizId || '-')}`,
+  ].join('\n');
+}
+
+function formatAiRuntimeStatus() {
+  const settings = getAiRuntimeSettings();
+  const usage = getAiUsageStats();
+
+  return [
+    'AI status:',
+    `Enabled: ${settings.enabled ? 'yes' : 'no'}`,
+    `Require code: ${settings.requireCode ? 'yes' : 'no'}`,
+    `Today requests: ${usage.usedToday}`,
+    `Daily limit: ${settings.dailyLimit > 0 ? settings.dailyLimit : 'off'}`,
+    `Remaining today: ${usage.remainingToday == null ? 'unlimited' : usage.remainingToday}`,
+    `Reset: ${formatDateTime(usage.nextResetAt)}`,
   ].join('\n');
 }
 

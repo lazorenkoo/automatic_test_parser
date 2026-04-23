@@ -241,7 +241,8 @@ async function validateAiAccessCode() {
 }
 
 async function finalizeAiDraft() {
-  if (!validatedAccessCode) {
+  const requiresCode = Boolean(currentDraftPayload?.aiRequireCode);
+  if (requiresCode && !validatedAccessCode) {
     setStatus('error', 'Спочатку підтвердьте код.');
     return;
   }
@@ -283,7 +284,9 @@ async function finalizeAiDraft() {
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', String(optionCountInput.value || 5));
     formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
-    formData.append('accessCode', validatedAccessCode);
+    if (requiresCode && validatedAccessCode) {
+      formData.append('accessCode', validatedAccessCode);
+    }
     if (!useAllQuestionsInput.checked) {
       formData.append('questionLimit', String(questionLimitInput.value || ''));
     }
@@ -306,7 +309,7 @@ async function finalizeAiDraft() {
     const completedPayload = await waitForAiPrepareJob(currentAiJobId);
     currentDraftToken = completedPayload.draftToken;
     currentDraftPayload = completedPayload;
-    await finalizeCurrentDraft(validatedAccessCode);
+    await finalizeCurrentDraft(requiresCode ? validatedAccessCode : '');
   } catch (error) {
     setStatus('error', error.message || 'Не вдалося створити AI-тест.');
     if (sendBtn) {
@@ -467,24 +470,29 @@ function renderAiCodeGate(payload) {
 
   const adminContact = String(payload.adminContactTg || '').trim();
   const adminContactHtml = adminContact
-    ? `<p class="admin-contact">Контакт: <strong>${escapeHtml(adminContact)}</strong></p>`
+    ? `<p class="admin-contact">Contact: <strong>${escapeHtml(adminContact)}</strong></p>`
     : '';
   const parsedCount = Number(payload.parsedCount || 0);
   const parsedCountHtml = parsedCount > 0
-    ? `<p>Парсер знайшов: <strong>${escapeHtml(String(parsedCount))}</strong></p>`
+    ? `<p>Parser found: <strong>${escapeHtml(String(parsedCount))}</strong></p>`
     : '';
+  const requiresCode = Boolean(payload.aiRequireCode);
+  const limitHtml = payload.aiDailyLimit > 0
+    ? `<p>AI today: <strong>${escapeHtml(String(payload.aiUsedToday || 0))}/${escapeHtml(String(payload.aiDailyLimit))}</strong></p>`
+    : `<p>AI today: <strong>${escapeHtml(String(payload.aiUsedToday || 0))}</strong></p>`;
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
     ${parsedCountHtml}
+    ${limitHtml}
     ${adminContactHtml}
     <div class="activation-box">
-      <p class="activation-text">Код:</p>
+      <p class="activation-text">${requiresCode ? 'Access code:' : 'AI is ready to start.'}</p>
       <div style="margin-top:12px; display:grid; gap:10px;">
-        <input id="aiAccessCodeInput" type="text" placeholder="Код" autocomplete="off" />
-        <button id="aiCheckCodeBtn" class="secondary-btn" type="button">Перевірити код</button>
+        ${requiresCode ? '<input id="aiAccessCodeInput" type="text" placeholder="Access code" autocomplete="off" />' : ''}
+        ${requiresCode ? '<button id="aiCheckCodeBtn" class="secondary-btn" type="button">Check code</button>' : ''}
         <p id="aiCodeMessage" style="margin:0; line-height:1.5;"></p>
-        <button id="aiFinalizeBtn" class="primary-btn hidden" type="button">Відправити</button>
+        <button id="aiFinalizeBtn" class="primary-btn ${requiresCode ? 'hidden' : ''}" type="button">Send</button>
       </div>
     </div>
   `;
@@ -511,6 +519,10 @@ function renderAiCodeGate(payload) {
       validateAiAccessCode();
     }
   });
+  const messageBox = document.getElementById('aiCodeMessage');
+  if (messageBox && !requiresCode) {
+    messageBox.textContent = 'Access code is not required. You can start AI immediately.';
+  }
   checkBtn?.addEventListener('click', validateAiAccessCode);
   sendBtn?.addEventListener('click', finalizeAiDraft);
 }

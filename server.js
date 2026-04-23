@@ -11,6 +11,8 @@ import {
   createQuizDraft,
   deleteQuizById,
   finalizeQuizFromDraftReservation,
+  getAiRuntimeSettings,
+  getAiUsageStats,
   getDbMeta,
   inspectAccessCode,
   inspectQuizDraft,
@@ -23,6 +25,7 @@ import {
   recordQuizVisit,
   releaseReservation,
   reserveAccessCode,
+  reserveInternalAiAccessCode,
   setQuizBanStatus,
 } from './src/db.js';
 import {
@@ -220,10 +223,6 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
     return res.status(400).json({ error: 'Please enter a test title.' });
   }
 
-  if (!accessCode) {
-    return res.status(400).json({ error: 'Enter an access code.' });
-  }
-
   if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
     return res.status(400).json({
       error: `Supported file types: ${SUPPORTED_UPLOAD_EXTENSIONS.join(', ')}.`,
@@ -239,13 +238,30 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
   }
 
   try {
-    const code = inspectAccessCode(accessCode);
-    if (!code) {
-      return res.status(404).json({ error: 'Code not found or already revoked.' });
+    const aiSettings = getAiRuntimeSettings();
+    const aiUsage = getAiUsageStats();
+    if (!aiSettings.enabled) {
+      return res.status(403).json({ error: 'AI is disabled by admin.' });
     }
 
-    if (!code.isReusable && code.usedAt) {
-      return res.status(409).json({ error: 'This code has already been used.' });
+    let code = null;
+    if (aiSettings.requireCode) {
+      if (!accessCode) {
+        return res.status(400).json({ error: 'Enter an access code.' });
+      }
+
+      code = inspectAccessCode(accessCode);
+      if (!code) {
+        return res.status(404).json({ error: 'Code not found or already revoked.' });
+      }
+
+      if (!code.isReusable && code.usedAt) {
+        return res.status(409).json({ error: 'This code has already been used.' });
+      }
+    }
+
+    if (aiUsage.dailyLimit > 0 && aiUsage.usedToday >= aiUsage.dailyLimit) {
+      return res.status(429).json({ error: `AI daily limit reached: ${aiUsage.usedToday}/${aiUsage.dailyLimit}.` });
     }
 
     const job = createAiPrepareJob({
@@ -257,6 +273,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       questionLimit,
       optionCount,
       code,
+      aiRequireCode: aiSettings.requireCode,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
     });
     aiPrepareJobs.set(job.id, job);
@@ -269,6 +286,9 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       status: job.status,
       progressPercent: job.progressPercent,
       message: job.message,
+      aiRequireCode: aiSettings.requireCode,
+      aiDailyLimit: aiUsage.dailyLimit,
+      aiUsedToday: aiUsage.usedToday,
     });
   } catch (error) {
     return next(error);
@@ -319,6 +339,7 @@ function createAiPrepareJob({
   questionLimit,
   optionCount,
   code,
+  aiRequireCode,
   adminContactTg,
 }) {
   return {
@@ -337,6 +358,7 @@ function createAiPrepareJob({
     questionLimit,
     optionCount,
     code,
+    aiRequireCode: Boolean(aiRequireCode),
     adminContactTg,
     result: null,
     errorMessage: '',
@@ -361,7 +383,7 @@ async function runAiPrepareJob(job) {
     answerKey: null,
   });
 
-  if (job.code.expectedQuestionCount && parsedQuiz.questions.length > job.code.expectedQuestionCount) {
+  if (job.code?.expectedQuestionCount && parsedQuiz.questions.length > job.code.expectedQuestionCount) {
     const error = new Error(`This code supports up to ${job.code.expectedQuestionCount} questions, but ${parsedQuiz.questions.length} were found.`);
     error.statusCode = 422;
     throw error;
@@ -408,6 +430,7 @@ async function runAiPrepareJob(job) {
     rawModelJson: {
       ...parsedQuiz.rawModelJson,
       answerMode: 'openai-double-check',
+      aiRequireCode: job.aiRequireCode,
       aiPrimaryModel: solved.primaryModel,
       aiCheckModel: solved.checkModel,
       aiAnswerKeyText: solved.answerKeyText,
@@ -511,6 +534,11 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
   }
 
   try {
+    const aiSettings = getAiRuntimeSettings();
+    const aiUsage = getAiUsageStats();
+    if (!aiSettings.enabled) {
+      return res.status(403).json({ error: 'AI is disabled by admin.' });
+    }
     const parsedQuiz = await parseQuizFromFile({
       buffer: sourceFile.buffer,
       filename: originalFilename,
@@ -526,6 +554,11 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
       requestedCount: questionMode === 'all' ? parsedQuiz.questions.length : questionLimit,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
       notes: parsedQuiz.notes,
+      aiRequireCode: aiSettings.requireCode,
+      aiEnabled: aiSettings.enabled,
+      aiDailyLimit: aiUsage.dailyLimit,
+      aiUsedToday: aiUsage.usedToday,
+      aiRemainingToday: aiUsage.remainingToday,
     });
   } catch (error) {
     return next(error);
@@ -583,16 +616,19 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
   }
 
   const draft = inspectQuizDraft(draftToken);
-  const requiresExplicitCode = String(draft?.rawModel?.answerMode || '') === 'openai-double-check';
-  const accessCode = requiresExplicitCode
-    ? providedAccessCode
+  const isAiDraft = String(draft?.rawModel?.answerMode || '') === 'openai-double-check';
+  const requiresExplicitCode = isAiDraft && Boolean(draft?.rawModel?.aiRequireCode);
+  const accessCode = isAiDraft
+    ? (requiresExplicitCode ? providedAccessCode : '')
     : resolveFinalizeAccessCode(providedAccessCode);
 
   if (requiresExplicitCode && !accessCode) {
     return res.status(400).json({ error: 'Enter an access code.' });
   }
 
-  const reservation = reserveAccessCode(accessCode);
+  const reservation = requiresExplicitCode
+    ? reserveAccessCode(accessCode)
+    : reserveFinalizeAccess(accessCode);
   if (!reservation) {
     return res.status(403).json({ error: 'Код недійсний, уже використаний або зараз обробляється.' });
   }
@@ -999,6 +1035,14 @@ function resolveFinalizeAccessCode(rawAccessCode) {
     || process.env.UNLIMITED_EVA_ACCESS_CODE
     || '',
   ).trim();
+}
+
+function reserveFinalizeAccess(accessCode) {
+  if (accessCode) {
+    return reserveAccessCode(accessCode);
+  }
+
+  return reserveInternalAiAccessCode();
 }
 
 function formatSiteType(siteType) {

@@ -1,3 +1,5 @@
+import { reserveAiRequestSlot } from './db.js';
+
 const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
 
 export async function solveQuizAnswersWithAI({
@@ -74,6 +76,7 @@ export async function solveQuizAnswersWithAI({
     const primaryResult = await createOpenAIAnswersResponse({
       apiKey,
       model: primaryModel,
+      passType: 'primary',
       reasoningEffort: resolveReasoningEffort('primary'),
       prompt: primaryPrompt,
       expectedQuestionNumbers: questionNumbers,
@@ -94,6 +97,7 @@ export async function solveQuizAnswersWithAI({
     const checkResult = await createOpenAIAnswersResponse({
       apiKey,
       model: checkModel,
+      passType: 'check',
       reasoningEffort: resolveReasoningEffort('check'),
       prompt: checkPrompt,
       expectedQuestionNumbers: questionNumbers,
@@ -192,6 +196,7 @@ function buildMockAiResult(questions) {
 async function createOpenAIAnswersResponse({
   apiKey,
   model,
+  passType,
   reasoningEffort,
   prompt,
   expectedQuestionNumbers,
@@ -207,6 +212,11 @@ async function createOpenAIAnswersResponse({
 
   let currentMaxOutputTokens = Math.max(2000, Number(maxOutputTokens) || 0);
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    reserveAiRequestSlot({
+      requestKind: passType || 'answers',
+      model,
+    });
+
     const response = await fetch(OPENAI_API_URL, {
       method: 'POST',
       headers: {
