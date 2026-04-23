@@ -408,6 +408,7 @@ const listQuizzesForAdminStmt = db.prepare(`
     q.slug,
     q.title,
     q.source_filename AS sourceFilename,
+    q.raw_model_json AS rawModelJson,
     q.parsed_count AS parsedCount,
     q.requested_count AS requestedCount,
     q.created_at AS createdAt,
@@ -988,6 +989,7 @@ export function recordQuizVisit({ quizId, deviceId, ip, userAgent }) {
 export function listQuizzesForAdmin() {
   return listQuizzesForAdminStmt.all().map((row) => ({
     ...row,
+    rawModelJson: parseJsonField(row.rawModelJson, {}),
     createdAt: Number(row.createdAt || 0),
     expiresAt: row.expiresAt ? Number(row.expiresAt) : null,
     bannedAt: row.bannedAt ? Number(row.bannedAt) : null,

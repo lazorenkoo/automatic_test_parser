@@ -1056,7 +1056,7 @@ function formatSearchResults(parsed) {
 
 function formatSiteListItem(quiz) {
   const title = String(quiz.title || '').trim() || quiz.codeLabel || `Site ${quiz.id}`;
-  return `${quiz.id}. ${title} | devices ${quiz.deviceCount || 0}${formatQuizPublicStatus(quiz)}`;
+  return `${quiz.id}. ${title} | devices ${quiz.deviceCount || 0}${formatQuizPublicStatus(quiz)}${isAiGeneratedQuiz(quiz) ? ' | AI' : ''}`;
 }
 
 function formatSiteDetails(quiz) {
@@ -1350,6 +1350,10 @@ function describeQuizPublicStatus(quiz) {
     return 'expired';
   }
   return 'active';
+}
+
+function isAiGeneratedQuiz(quiz) {
+  return String(quiz?.rawModelJson?.answerMode || '') === 'openai-double-check';
 }
 
 function isExpiredQuiz(quiz) {
