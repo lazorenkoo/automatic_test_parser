@@ -467,6 +467,16 @@ const getQuizByIdStmt = db.prepare(`
   WHERE q.id = ?
 `);
 
+const getQuizQuestionStatsByRangeStmt = db.prepare(`
+  SELECT
+    COUNT(*) AS quizCount,
+    COALESCE(SUM(q.parsed_count), 0) AS totalQuestions,
+    MIN(q.id) AS firstQuizId,
+    MAX(q.id) AS lastQuizId
+  FROM quizzes q
+  WHERE q.id BETWEEN ? AND ?
+`);
+
 const clearExpiredDraftsStmt = db.prepare(`
   DELETE FROM quiz_drafts
   WHERE created_at < ?
@@ -1340,6 +1350,30 @@ export function getQuizById(quizId) {
     deviceCount: devices.length,
     lastSeenAt: devices[0]?.lastSeenAt || null,
     devices,
+  };
+}
+
+export function getQuizQuestionStatsByRange(startQuizId, endQuizId) {
+  const numericStartQuizId = Number(startQuizId);
+  const numericEndQuizId = Number(endQuizId);
+  if (!Number.isInteger(numericStartQuizId) || !Number.isInteger(numericEndQuizId)) {
+    return null;
+  }
+
+  const normalizedStartQuizId = Math.min(numericStartQuizId, numericEndQuizId);
+  const normalizedEndQuizId = Math.max(numericStartQuizId, numericEndQuizId);
+  if (normalizedStartQuizId < 1 || normalizedEndQuizId < 1) {
+    return null;
+  }
+
+  const row = getQuizQuestionStatsByRangeStmt.get(normalizedStartQuizId, normalizedEndQuizId) || {};
+  return {
+    startQuizId: normalizedStartQuizId,
+    endQuizId: normalizedEndQuizId,
+    quizCount: Number(row.quizCount || 0),
+    totalQuestions: Number(row.totalQuestions || 0),
+    firstQuizId: row.firstQuizId ? Number(row.firstQuizId) : null,
+    lastQuizId: row.lastQuizId ? Number(row.lastQuizId) : null,
   };
 }
 

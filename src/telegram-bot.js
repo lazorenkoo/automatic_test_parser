@@ -12,6 +12,7 @@ import {
   getAccountingSummary,
   getDbMeta,
   getQuizById,
+  getQuizQuestionStatsByRange,
   getQuizReportById,
   getUploadReportById,
   inspectAccessCode,
@@ -64,6 +65,7 @@ export function startTelegramBot() {
     '/sites [page] [type=1] [tg=@user] [q=text] [ai=yes|no] [visited=yes|no] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
     '/search <text>',
     '/site <id>',
+    '/sitecount <fromId> <toId>',
     '/sitejson <id>',
     '/reports [limit]',
     '/report <id|q-12|u-7>',
@@ -95,6 +97,7 @@ export function startTelegramBot() {
     { command: 'sites', description: 'List quiz sites' },
     { command: 'search', description: 'Search quiz sites' },
     { command: 'site', description: 'Show site details' },
+    { command: 'sitecount', description: 'Sum questions for site id range' },
     { command: 'sitejson', description: 'Send parsed quiz JSON' },
     { command: 'reports', description: 'Latest file reports' },
     { command: 'report', description: 'Show report details' },
@@ -412,6 +415,26 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, formatSiteDetails(quiz), { disable_web_page_preview: true });
+  });
+
+  bot.onText(/^\/sitecount(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseSiteCountArgs(match?.[1]);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const stats = getQuizQuestionStatsByRange(parsed.startQuizId, parsed.endQuizId);
+    if (!stats) {
+      await bot.sendMessage(msg.chat.id, 'Format: /sitecount <fromId> <toId>');
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, formatSiteCountStats(stats));
   });
 
   bot.onText(/^\/sitejson(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -970,6 +993,29 @@ function parseSearchArgs(rawValue) {
   };
 }
 
+function parseSiteCountArgs(rawValue) {
+  const parts = String(rawValue || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (parts.length !== 2) {
+    return { ok: false, error: 'Format: /sitecount <fromId> <toId>' };
+  }
+
+  const startQuizId = Number(parts[0]);
+  const endQuizId = Number(parts[1]);
+  if (!Number.isInteger(startQuizId) || !Number.isInteger(endQuizId) || startQuizId < 1 || endQuizId < 1) {
+    return { ok: false, error: 'Format: /sitecount <fromId> <toId>' };
+  }
+
+  return {
+    ok: true,
+    startQuizId,
+    endQuizId,
+  };
+}
+
 function parseToggleCommand(rawValue, formatHint) {
   const value = String(rawValue || '').trim().toLowerCase();
   if (value === 'on' || value === '1' || value === 'true') {
@@ -1364,6 +1410,24 @@ function formatSiteDetails(quiz) {
     devices.length
       ? devices.slice(0, 10).map((device, index) => `${index + 1}. ${maskDeviceId(device.deviceId)} | ${formatDateTime(device.lastSeenAt)} | ${device.lastIp || 'IP ?'}`).join('\n')
       : 'No visits yet.',
+  ].join('\n');
+}
+
+function formatSiteCountStats(stats) {
+  if (!stats || Number(stats.quizCount || 0) === 0) {
+    return [
+      `Range: ${stats?.startQuizId || '-'}-${stats?.endQuizId || '-'}`,
+      'Sites found: 0',
+      'Total questions: 0',
+    ].join('\n');
+  }
+
+  return [
+    `Range: ${stats.startQuizId}-${stats.endQuizId}`,
+    `Sites found: ${stats.quizCount}`,
+    `Total questions: ${stats.totalQuestions}`,
+    `Actual ids: ${stats.firstQuizId}-${stats.lastQuizId}`,
+    `Average per site: ${Math.round(stats.totalQuestions / stats.quizCount)}`,
   ].join('\n');
 }
 
