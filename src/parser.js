@@ -47,9 +47,69 @@ export async function parseQuizFromFile({
 
   const lines = splitIntoLines(normalizedText);
   const paragraphs = splitIntoParagraphs(normalizedText);
+  const rawLines = String(normalizedText || '').split('\n').map((line) => cleanupLine(line));
   const safeAnswerIndex = Number.isInteger(answerIndex) && answerIndex >= 1 ? answerIndex : 1;
+  const paragraphMarkersCandidate = parseQuestionsFromParagraphMarkers(paragraphs, {
+    answerIndex: safeAnswerIndex,
+    limit: effectiveLimit,
+    optionCount,
+  });
+  const exactParagraphCandidate = parseQuestionsFromExactParagraphBlocks(paragraphs, {
+    answerIndex: safeAnswerIndex,
+    limit: effectiveLimit,
+    optionCount,
+  });
+
+  if (shouldPreferExactParagraphBlocks(extension, paragraphs, exactParagraphCandidate, optionCount)) {
+    let questions = exactParagraphCandidate.questions;
+    const notes = [...exactParagraphCandidate.notes];
+    const reviewBlocks = Array.isArray(exactParagraphCandidate.reviewBlocks) ? exactParagraphCandidate.reviewBlocks : [];
+
+    if (answerKey) {
+      const resolved = applyAnswerKeyToQuestions(questions, answerKey);
+      questions = resolved.questions;
+      notes.push(...resolved.notes);
+    }
+
+    return buildParsedQuizResult({
+      parsed: exactParagraphCandidate,
+      filename,
+      questions,
+      normalizedText,
+      optionCount,
+      answerKey,
+      notes,
+      reviewBlocks,
+    });
+  }
+
+  if (shouldPreferParagraphMarkers(extension, paragraphs, paragraphMarkersCandidate, optionCount)) {
+    let questions = paragraphMarkersCandidate.questions;
+    const notes = [...paragraphMarkersCandidate.notes];
+    const reviewBlocks = Array.isArray(paragraphMarkersCandidate.reviewBlocks) ? paragraphMarkersCandidate.reviewBlocks : [];
+
+    if (answerKey) {
+      const resolved = applyAnswerKeyToQuestions(questions, answerKey);
+      questions = resolved.questions;
+      notes.push(...resolved.notes);
+    }
+
+    return buildParsedQuizResult({
+      parsed: paragraphMarkersCandidate,
+      filename,
+      questions,
+      normalizedText,
+      optionCount,
+      answerKey,
+      notes,
+      reviewBlocks,
+    });
+  }
 
   const candidates = [
+    paragraphMarkersCandidate,
+    exactParagraphCandidate,
+    parseQuestionsFromRawExplicitNumbers(rawLines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
     parseQuestionsFromExplicitNumbers(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
     parseQuestionsByDynamicScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
     parseQuestionsByForwardScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
@@ -60,7 +120,7 @@ export async function parseQuizFromFile({
     parseQuestionsByStride(paragraphs, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
   ];
 
-  const parsed = chooseBestParsedResult(candidates);
+  const parsed = chooseBestParsedResult(candidates, optionCount);
   if (!parsed.questions.length) {
     throw new Error(`Не удалось распарсить вопросы. Попробуйте другое количество вариантов ответа: сейчас выбрано ${optionCount}.`);
   }
@@ -69,28 +129,33 @@ export async function parseQuizFromFile({
   const notes = [...parsed.notes];
   const reviewBlocks = Array.isArray(parsed.reviewBlocks) ? parsed.reviewBlocks : [];
 
+  if (parsed.validation?.suspiciousQuestionCount > 0) {
+    notes.push(
+      `Ð›Ð¾ÐºÐ°Ð»ÑŒÐ½Ð°Ñ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ° Ð¾Ñ‚Ð¼ÐµÑ‚Ð¸Ð»Ð° Ð¿Ð¾Ð´Ð¾Ð·Ñ€Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ñ… Ð²Ð¾Ð¿Ñ€Ð¾ÑÐ¾Ð²: ${parsed.validation.suspiciousQuestionCount}. `
+      + `Ð’Ñ‹Ð±Ñ€Ð°Ð½ ÑÐ°Ð¼Ñ‹Ð¹ ÑÑ‚Ð°Ð±Ð¸Ð»ÑŒÐ½Ñ‹Ð¹ Ð²Ð°Ñ€Ð¸Ð°Ð½Ñ‚ Ð¿Ð°Ñ€ÑÐ¸Ð½Ð³Ð° Ð¸Ð· ${parsed.validation.candidateCount || candidates.length} ÐºÐ°Ð½Ð´Ð¸Ð´Ð°Ñ‚Ð¾Ð².`,
+    );
+  }
+
+  const repaired = repairEmbeddedQuestionLeaks(questions, optionCount);
+  questions = repaired.questions;
+  notes.push(...repaired.notes);
+
   if (answerKey) {
     const resolved = applyAnswerKeyToQuestions(questions, answerKey);
     questions = resolved.questions;
     notes.push(...resolved.notes);
   }
 
-  return {
-    title: buildTitleFromFilename(filename),
+  return buildParsedQuizResult({
+    parsed,
+    filename,
     questions,
-    extractedText: normalizedText,
-    rawModelJson: {
-      parser: parsed.parser,
-      optionCount,
-      extractedCharacters: normalizedText.length,
-      acceptedQuestions: questions.length,
-      droppedBlocks: parsed.droppedBlocks,
-      reviewBlockCount: reviewBlocks.length,
-      answerMode: answerKey ? 'file' : 'single',
-    },
+    normalizedText,
+    optionCount,
+    answerKey,
     notes,
     reviewBlocks,
-  };
+  });
 }
 
 function parseQuizFromJsonFile({
@@ -146,6 +211,70 @@ function parseQuizFromJsonFile({
     },
     notes: [],
     reviewBlocks: Array.isArray(parsed?.reviewBlocks) ? parsed.reviewBlocks : [],
+  };
+}
+
+function shouldPreferExactParagraphBlocks(extension, paragraphs, candidate, optionCount) {
+  const blockSize = Number(optionCount || 0) + 1;
+  if (extension !== '.docx' || blockSize < 3) {
+    return false;
+  }
+
+  if (!Array.isArray(paragraphs) || paragraphs.length < blockSize || paragraphs.length % blockSize !== 0) {
+    return false;
+  }
+
+  const expectedQuestions = Math.floor(paragraphs.length / blockSize);
+  return Array.isArray(candidate?.questions) && candidate.questions.length >= Math.max(1, expectedQuestions - 1);
+}
+
+function shouldPreferParagraphMarkers(extension, paragraphs, candidate, optionCount) {
+  if (extension !== '.docx') {
+    return false;
+  }
+
+  if (!Array.isArray(candidate?.questions) || candidate.questions.length < 10) {
+    return false;
+  }
+
+  const markerParagraphs = Array.isArray(paragraphs)
+    ? paragraphs.filter((item) => /^(\d{1,3}[.)]|[A-E][.)])/.test(sanitizeText(item))).length
+    : 0;
+  const blockSize = Number(optionCount || 0) + 1;
+  const estimatedQuestions = blockSize >= 3 && Array.isArray(paragraphs)
+    ? Math.floor(paragraphs.length / blockSize)
+    : 0;
+
+  return markerParagraphs >= candidate.questions.length * 3
+    && candidate.questions.length >= Math.max(estimatedQuestions - 3, 10);
+}
+
+function buildParsedQuizResult({
+  parsed,
+  filename,
+  questions,
+  normalizedText,
+  optionCount,
+  answerKey,
+  notes,
+  reviewBlocks,
+}) {
+  return {
+    title: buildTitleFromFilename(filename),
+    questions,
+    extractedText: normalizedText,
+    rawModelJson: {
+      parser: parsed.parser,
+      optionCount,
+      extractedCharacters: normalizedText.length,
+      acceptedQuestions: questions.length,
+      droppedBlocks: parsed.droppedBlocks,
+      reviewBlockCount: reviewBlocks.length,
+      answerMode: answerKey ? 'file' : 'single',
+      validation: parsed.validation || null,
+    },
+    notes,
+    reviewBlocks,
   };
 }
 
@@ -474,6 +603,79 @@ function parseQuestionsFromExplicitNumbers(linesInput, { answerIndex, limit, opt
   };
 }
 
+function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, optionCount }) {
+  const lines = Array.isArray(linesInput) ? linesInput : String(linesInput || '').split('\n').map((line) => cleanupLine(line));
+  const blocks = [];
+  let current = null;
+
+  for (const line of lines) {
+    const standaloneMatch = line.match(/^(\d{1,3})\s*[.)\-–—:]?$/);
+    const inlineMatch = line.match(/^(\d{1,3})\s*[.)\-–—:]\s*(.+)$/);
+    if (standaloneMatch || inlineMatch) {
+      if (current) {
+        blocks.push(current);
+      }
+
+      current = {
+        number: Number((standaloneMatch || inlineMatch)[1]),
+        lines: [],
+      };
+
+      const rest = sanitizeText(inlineMatch ? inlineMatch[2] : '');
+      if (rest) {
+        current.lines.push(rest);
+      }
+      continue;
+    }
+
+    if (current) {
+      current.lines.push(line);
+    }
+  }
+
+  if (current) {
+    blocks.push(current);
+  }
+
+  const questions = [];
+  const reviewBlocks = [];
+  let droppedBlocks = 0;
+
+  for (const block of blocks) {
+    const parsedBlock = parseExplicitNumberBlock(block.lines, optionCount);
+    if (!parsedBlock) {
+      droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock(block.lines, 'raw-explicit-number-block'));
+      continue;
+    }
+
+    questions.push({
+      q: `${block.number}. ${parsedBlock.q}`,
+      options: parsedBlock.options,
+      correctIndex: answerIndex - 1,
+    });
+
+    if (questions.length >= limit) {
+      break;
+    }
+  }
+
+  const notes = [];
+  if (droppedBlocks > 0) {
+    notes.push(`ÐŸÑ€Ð¾Ð¿ÑƒÑ‰ÐµÐ½Ð¾ Ð±Ð»Ð¾ÐºÐ¾Ð² Ð¸Ð·-Ð·Ð° Ð½ÐµÐ¿Ð¾Ð»Ð½Ð¾Ð¹ ÑÑ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ñ‹: ${droppedBlocks}.`);
+  }
+  notes.push(...buildLimitNote(questions.length, limit));
+
+  return {
+    parser: 'raw-explicit-numbers',
+    questions,
+    notes,
+    reviewBlocks,
+    droppedBlocks,
+    qualityScore: questions.length * 30 - droppedBlocks,
+  };
+}
+
 function parseQuestionsByForwardScan(linesInput, { answerIndex, limit, optionCount }) {
   const lines = Array.isArray(linesInput) ? linesInput : splitIntoLines(linesInput);
   const questions = [];
@@ -749,6 +951,172 @@ function parseQuestionsFromParagraphs(textInput, { answerIndex, limit, optionCou
   };
 }
 
+function parseQuestionsFromExactParagraphBlocks(textInput, { answerIndex, limit, optionCount }) {
+  const paragraphs = Array.isArray(textInput) ? textInput : splitIntoParagraphs(textInput);
+  const blockSize = optionCount + 1;
+
+  if (paragraphs.length < blockSize) {
+    return emptyParsedResult('exact-paragraph-blocks', limit);
+  }
+
+  let best = {
+    questions: [],
+    score: Number.NEGATIVE_INFINITY,
+    offset: 0,
+    suspiciousBlocks: 0,
+  };
+
+  for (let offset = 0; offset < Math.min(blockSize, paragraphs.length); offset += 1) {
+    const questions = [];
+    let score = 0;
+    let suspiciousBlocks = 0;
+
+    for (let index = offset; index + blockSize - 1 < paragraphs.length; index += blockSize) {
+      const chunk = paragraphs.slice(index, index + blockSize).map((item) => sanitizeText(item)).filter(Boolean);
+      if (chunk.length !== blockSize) {
+        suspiciousBlocks += 1;
+        continue;
+      }
+
+      const question = chunk[0];
+      const options = chunk.slice(1);
+      if (!question || options.length !== optionCount) {
+        suspiciousBlocks += 1;
+        continue;
+      }
+
+      const chunkScore = scoreExactParagraphChunk(question, options, optionCount);
+
+      questions.push({
+        q: question,
+        options,
+        correctIndex: answerIndex - 1,
+      });
+      score += chunkScore;
+
+      if (questions.length >= limit) {
+        break;
+      }
+    }
+
+    const totalScore = questions.length * 100 + score - suspiciousBlocks * 25;
+    if (
+      questions.length > best.questions.length
+      || (questions.length === best.questions.length && totalScore > best.score)
+    ) {
+      best = { questions, score: totalScore, offset, suspiciousBlocks };
+    }
+  }
+
+  const notes = [];
+  if (best.offset > 0) {
+    notes.push(`ÐŸÑ€Ð¾Ð¿ÑƒÑ‰ÐµÐ½Ð¾ ÑÐ»ÑƒÐ¶ÐµÐ±Ð½Ñ‹Ñ… Ð°Ð±Ð·Ð°Ñ†ÐµÐ² Ð² Ð½Ð°Ñ‡Ð°Ð»Ðµ: ${best.offset}.`);
+  }
+  if (best.suspiciousBlocks > 0) {
+    notes.push(`ÐŸÑ€Ð¾Ð¿ÑƒÑ‰ÐµÐ½Ð¾ Ð±Ð»Ð¾ÐºÐ¾Ð² Ñ Ð½ÐµÑÑÐ½Ð¾Ð¹ ÑÑ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ð¾Ð¹: ${best.suspiciousBlocks}.`);
+  }
+  notes.push(...buildLimitNote(best.questions.length, limit));
+
+  return {
+    parser: 'exact-paragraph-blocks',
+    questions: best.questions,
+    notes,
+    droppedBlocks: best.suspiciousBlocks,
+    qualityScore: best.score,
+  };
+}
+
+function parseQuestionsFromParagraphMarkers(textInput, { answerIndex, limit, optionCount }) {
+  const paragraphs = Array.isArray(textInput) ? textInput : splitIntoParagraphs(textInput);
+  const entries = paragraphs
+    .flatMap((paragraph) => splitEmbeddedQuestionStarts(cleanupLine(paragraph)))
+    .map((item) => cleanupLine(item))
+    .filter(Boolean)
+    .filter((item) => !shouldIgnoreLine(item));
+
+  const questions = [];
+  const reviewBlocks = [];
+  let droppedBlocks = 0;
+  let current = null;
+
+  for (const entry of entries) {
+    const questionMatch = matchQuestionStart(entry) || matchStandaloneQuestionStart(entry);
+    const optionMatch = matchOptionStart(entry, optionCount);
+
+    if (questionMatch) {
+      if (current) {
+        if (pushCompletedQuestion(questions, current, answerIndex, optionCount)) {
+          if (questions.length >= limit) {
+            break;
+          }
+        } else {
+          droppedBlocks += 1;
+          reviewBlocks.push(createReviewBlock([current.q, ...current.options], 'paragraph-markers-incomplete'));
+        }
+      }
+
+      current = createQuestionState(questionMatch.text || '');
+      continue;
+    }
+
+    if (!current) {
+      continue;
+    }
+
+    if (optionMatch) {
+      const embeddedQuestion = extractTrailingQuestionStart(optionMatch.text);
+      if (embeddedQuestion) {
+        current.options.push(embeddedQuestion.leadingText);
+        if (pushCompletedQuestion(questions, current, answerIndex, optionCount)) {
+          if (questions.length >= limit) {
+            break;
+          }
+        } else {
+          droppedBlocks += 1;
+          reviewBlocks.push(createReviewBlock([current.q, ...current.options], 'paragraph-markers-trailing-question'));
+        }
+
+        current = createQuestionState(embeddedQuestion.questionText);
+        continue;
+      }
+
+      if (current.options.length < optionCount) {
+        current.options.push(optionMatch.text);
+        continue;
+      }
+    }
+
+    if (!current.options.length) {
+      current.q = joinFragments(current.q, entry);
+    } else {
+      const lastIndex = current.options.length - 1;
+      current.options[lastIndex] = joinFragments(current.options[lastIndex], entry);
+    }
+  }
+
+  if (current && questions.length < limit) {
+    if (!pushCompletedQuestion(questions, current, answerIndex, optionCount)) {
+      droppedBlocks += 1;
+      reviewBlocks.push(createReviewBlock([current.q, ...current.options], 'paragraph-markers-tail'));
+    }
+  }
+
+  const notes = [];
+  if (droppedBlocks > 0) {
+    notes.push(`ÐŸÑ€Ð¾Ð¿ÑƒÑ‰ÐµÐ½Ð¾ Ð±Ð»Ð¾ÐºÐ¾Ð² Ð¸Ð·-Ð·Ð° Ð½ÐµÐ¿Ð¾Ð»Ð½Ð¾Ð¹ ÑÑ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ñ‹: ${droppedBlocks}.`);
+  }
+  notes.push(...buildLimitNote(questions.length, limit));
+
+  return {
+    parser: 'paragraph-markers',
+    questions: questions.slice(0, limit),
+    notes,
+    reviewBlocks,
+    droppedBlocks,
+    qualityScore: questions.length * 26 - droppedBlocks,
+  };
+}
+
 function parseQuestionsFromQuestionTails(linesInput, { answerIndex, limit, optionCount }) {
   const lines = Array.isArray(linesInput) ? linesInput : splitIntoLines(linesInput);
   const questions = [];
@@ -946,25 +1314,493 @@ function parseQuestionsByStride(paragraphsInput, { answerIndex, limit, optionCou
   };
 }
 
-function chooseBestParsedResult(candidates) {
-  return candidates.reduce((best, current) => {
+function scoreExactParagraphChunk(question, options, optionCount) {
+  if (!question || !Array.isArray(options) || options.length !== optionCount) {
+    return 0;
+  }
+
+  let score = 0;
+  if (question.length >= 30) {
+    score += 10;
+  }
+
+  if (looksLikeQuestionTail(question) || looksLikePromptSentence(question)) {
+    score += 8;
+  }
+
+  if (looksLikeRealQuestion(question, options)) {
+    score += 10;
+  }
+
+  if (options.every((option) => looksLikeStandaloneOptionLine(option))) {
+    score += 8;
+  }
+
+  if (options.some((option) => looksLikeQuestionTail(option) && looksLikePromptSentence(option))) {
+    score -= 20;
+  }
+
+  const averageOptionLength = options.reduce((sum, option) => sum + option.length, 0) / Math.max(1, options.length);
+  if (question.length > averageOptionLength) {
+    score += 6;
+  }
+
+  return score;
+}
+
+function chooseBestParsedResult(candidates, optionCount) {
+  const evaluated = candidates.map((candidate) => evaluateParsedCandidate(candidate, optionCount));
+  for (const candidate of evaluated) {
+    candidate.validation.candidateCount = evaluated.length;
+  }
+
+  return evaluated.reduce((best, current) => {
     if (!best) {
       return current;
     }
 
-    if (current.questions.length > best.questions.length) {
+    if ((current.validation?.numberingQuestionCount || 0) > (best.validation?.numberingQuestionCount || 0)) {
       return current;
     }
 
     if (
-      current.questions.length === best.questions.length &&
-      (current.qualityScore || 0) > (best.qualityScore || 0)
+      (current.validation?.numberingQuestionCount || 0) === (best.validation?.numberingQuestionCount || 0)
+      && (current.validation?.adjustedQuestionCount || 0) > (best.validation?.adjustedQuestionCount || 0)
     ) {
       return current;
     }
 
+    if ((current.validation?.adjustedQuestionCount || 0) > (best.validation?.adjustedQuestionCount || 0)) {
+      return current;
+    }
+
+    if ((current.validation?.adjustedQuestionCount || 0) === (best.validation?.adjustedQuestionCount || 0)) {
+      if ((current.validation?.selectionScore || 0) > (best.validation?.selectionScore || 0)) {
+        return current;
+      }
+
+      if (
+        (current.validation?.selectionScore || 0) === (best.validation?.selectionScore || 0)
+        && current.questions.length > best.questions.length
+      ) {
+        return current;
+      }
+    }
+
     return best;
   }, null);
+}
+
+function evaluateParsedCandidate(candidate, optionCount) {
+  const validation = assessParsedQuestions(candidate?.questions, optionCount);
+  const adjustedQuestionCount = Math.max(
+    0,
+    (candidate?.questions?.length || 0) - validation.suspiciousQuestionCount * 2 - validation.duplicateQuestionCount,
+  );
+  const selectionScore = adjustedQuestionCount * 100000
+    + validation.numberingQuestionCount * 2000
+    + (candidate?.qualityScore || 0)
+    + validation.scoreAdjustment;
+
+  return {
+    ...candidate,
+    validation: {
+      ...validation,
+      adjustedQuestionCount,
+      selectionScore,
+    },
+  };
+}
+
+function assessParsedQuestions(questions, optionCount) {
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
+  const seenQuestions = new Set();
+  const extractedNumbers = [];
+  let suspiciousQuestionCount = 0;
+  let duplicateQuestionCount = 0;
+  let scoreAdjustment = 0;
+
+  for (const question of Array.isArray(questions) ? questions : []) {
+    const prompt = sanitizeText(question?.q);
+    const options = Array.isArray(question?.options)
+      ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    let questionIsSuspicious = false;
+
+    if (!prompt) {
+      questionIsSuspicious = true;
+      scoreAdjustment -= 80;
+      suspiciousQuestionCount += 1;
+      continue;
+    }
+
+    const normalizedPrompt = prompt.toLocaleLowerCase('uk-UA');
+    if (seenQuestions.has(normalizedPrompt)) {
+      duplicateQuestionCount += 1;
+      scoreAdjustment -= 40;
+    } else {
+      seenQuestions.add(normalizedPrompt);
+    }
+
+    const explicitNumber = extractLeadingQuestionNumber(prompt);
+    if (explicitNumber != null) {
+      extractedNumbers.push(explicitNumber);
+    }
+
+    const contamination = detectLeadingOptionLeak(prompt, optionCount);
+    if (contamination) {
+      questionIsSuspicious = true;
+      scoreAdjustment -= 140 - contamination.leakedOptionCount * 10;
+    }
+
+    if (!looksLikeRealQuestion(prompt, options)) {
+      questionIsSuspicious = true;
+      scoreAdjustment -= 40;
+    }
+
+    if (!isAcceptableOptionCount(options.length, optionCount)) {
+      questionIsSuspicious = true;
+      scoreAdjustment -= 80;
+    }
+
+    const questionLikeOptions = options.filter((option) => looksLikeQuestionTail(option) && looksLikePromptSentence(option));
+    if (questionLikeOptions.length) {
+      questionIsSuspicious = true;
+      scoreAdjustment -= 50 * questionLikeOptions.length;
+    }
+
+    if (options.length >= minOptionCount && options.every((option) => option.length <= 3)) {
+      scoreAdjustment -= 35;
+    }
+
+    if (questionIsSuspicious) {
+      suspiciousQuestionCount += 1;
+    }
+  }
+
+  const numberingQuestionCount = countLeadingSequentialNumbers(extractedNumbers);
+  if (numberingQuestionCount >= Math.max(5, Math.floor((Array.isArray(questions) ? questions.length : 0) * 0.7))) {
+    scoreAdjustment += numberingQuestionCount * 6;
+  }
+
+  return {
+    suspiciousQuestionCount,
+    duplicateQuestionCount,
+    numberingQuestionCount,
+    scoreAdjustment,
+  };
+}
+
+function extractLeadingQuestionNumber(questionText) {
+  const match = sanitizeText(questionText).match(/^(\d{1,3})[.)]?\s+/);
+  if (!match) {
+    return null;
+  }
+
+  const value = Number(match[1]);
+  return Number.isInteger(value) && value >= 1 && value <= 999 ? value : null;
+}
+
+function countLeadingSequentialNumbers(numbers) {
+  if (!Array.isArray(numbers) || !numbers.length) {
+    return 0;
+  }
+
+  let expected = 1;
+  let count = 0;
+
+  for (const value of numbers) {
+    if (value !== expected) {
+      break;
+    }
+    count += 1;
+    expected += 1;
+  }
+
+  return count;
+}
+
+function extractTrailingQuestionStart(text) {
+  const value = sanitizeText(text);
+  const match = value.match(/^(.*?)(\d{1,3}[.)]\s+.+)$/u);
+  if (!match) {
+    return null;
+  }
+
+  const leadingText = sanitizeText(match[1]);
+  const questionText = sanitizeText(match[2]);
+  if (!leadingText || !questionText) {
+    return null;
+  }
+
+  if (!matchQuestionStart(questionText)) {
+    return null;
+  }
+
+  return {
+    leadingText,
+    questionText: matchQuestionStart(questionText)?.text ? questionText.replace(/^\d{1,3}\s*[.)\-–—:]\s*/u, '') : questionText,
+  };
+}
+
+function repairEmbeddedQuestionLeaks(questions, optionCount) {
+  const repairedQuestions = [];
+  let repairedCount = 0;
+
+  for (const question of Array.isArray(questions) ? questions : []) {
+    const embedded = extractEmbeddedQuestion(question?.q, optionCount);
+    if (!embedded) {
+      repairedQuestions.push(question);
+      continue;
+    }
+
+    repairedQuestions.push({
+      ...question,
+      q: embedded.questionText,
+      options: embedded.options,
+      correctIndex: Math.max(0, Math.min(embedded.options.length - 1, Number(question?.correctIndex) || 0)),
+    });
+    repairedCount += 1;
+  }
+
+  const notes = [];
+  if (repairedCount > 0) {
+    notes.push(`Ð›Ð¾ÐºÐ°Ð»ÑŒÐ½Ð¾ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð¾ Ð²Ð¾Ð¿Ñ€Ð¾ÑÐ¾Ð² ÑÐ¾ ÑÐºÐ»ÐµÐµÐ½Ð½Ñ‹Ð¼Ð¸ Ð²Ð°Ñ€Ð¸Ð°Ð½Ñ‚Ð°Ð¼Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð²: ${repairedCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function extractEmbeddedQuestion(questionText, optionCount) {
+  const text = sanitizeText(questionText);
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
+  if (!text || minOptionCount < 3) {
+    return null;
+  }
+
+  const recoveredByBoundary = extractEmbeddedQuestionByTitleBoundary(text, optionCount);
+  if (recoveredByBoundary) {
+    return recoveredByBoundary;
+  }
+
+  const promptEndIndex = findFirstPromptBoundary(text);
+  if (promptEndIndex < 0) {
+    return null;
+  }
+
+  const questionPart = sanitizeText(text.slice(0, promptEndIndex + 1));
+  const trailing = sanitizeText(text.slice(promptEndIndex + 1));
+  if (!questionPart || !trailing) {
+    return null;
+  }
+
+  const phrases = splitLeadingTitlePhrases(trailing, optionCount + 2);
+  if (phrases.length <= minOptionCount) {
+    return null;
+  }
+
+  for (let takeCount = Math.min(optionCount, phrases.length - 1); takeCount >= minOptionCount; takeCount -= 1) {
+    const options = phrases.slice(0, takeCount);
+    const remainder = sanitizeText(phrases.slice(takeCount).join(' '));
+
+    if (!remainder || (!looksLikePromptSentence(remainder) && !looksLikeQuestionTail(remainder))) {
+      continue;
+    }
+
+    if (!options.every((option) => looksLikeStandaloneOptionLine(option))) {
+      continue;
+    }
+
+    if (!looksLikeRealQuestion(questionPart, options)) {
+      continue;
+    }
+
+    return {
+      questionText: questionPart,
+      options,
+      leakedPrompt: remainder,
+    };
+  }
+
+  return null;
+}
+
+function extractEmbeddedQuestionByTitleBoundary(text, optionCount) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
+
+  for (let startIndex = 4; startIndex <= words.length - (minOptionCount + 2); startIndex += 1) {
+    if (!startsWithUppercase(words[startIndex])) {
+      continue;
+    }
+
+    const questionPart = sanitizeText(words.slice(0, startIndex).join(' '));
+    if (!questionPart || questionPart.length < 40 || !looksLikePromptSentence(questionPart)) {
+      continue;
+    }
+
+    const trailing = sanitizeText(words.slice(startIndex).join(' '));
+    const phrases = splitLeadingTitlePhrases(trailing, optionCount + 2);
+    if (phrases.length <= minOptionCount) {
+      continue;
+    }
+
+    for (let takeCount = Math.min(optionCount, phrases.length - 1); takeCount >= minOptionCount; takeCount -= 1) {
+      const options = phrases.slice(0, takeCount);
+      const remainder = sanitizeText(phrases.slice(takeCount).join(' '));
+
+      if (!remainder || (!looksLikePromptSentence(remainder) && !looksLikeQuestionTail(remainder))) {
+        continue;
+      }
+
+      if (!options.every((option) => looksLikeStandaloneOptionLine(option))) {
+        continue;
+      }
+
+      if (!looksLikeRealQuestion(questionPart, options)) {
+        continue;
+      }
+
+      return {
+        questionText: questionPart,
+        options,
+        leakedPrompt: remainder,
+      };
+    }
+  }
+
+  return null;
+}
+
+function findFirstPromptBoundary(text) {
+  const value = String(text || '');
+  const questionMarkIndex = value.indexOf('?');
+  if (questionMarkIndex >= 0) {
+    return questionMarkIndex;
+  }
+
+  const colonIndex = value.indexOf(':');
+  if (colonIndex >= 0 && looksLikePromptSentence(value.slice(0, colonIndex + 1))) {
+    return colonIndex;
+  }
+
+  return -1;
+}
+
+function detectLeadingOptionLeak(questionText, optionCount) {
+  const text = sanitizeText(questionText);
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
+  if (!text || minOptionCount < 3) {
+    return null;
+  }
+
+  const phrases = splitLeadingTitlePhrases(text, optionCount + 2);
+  if (phrases.length <= minOptionCount) {
+    return null;
+  }
+
+  for (let leakCount = Math.min(optionCount, phrases.length - 1); leakCount >= minOptionCount; leakCount -= 1) {
+    const leakedOptions = phrases.slice(0, leakCount);
+    const rest = sanitizeText(phrases.slice(leakCount).join(' '));
+
+    if (!rest || (!looksLikePromptSentence(rest) && !looksLikeQuestionTail(rest))) {
+      continue;
+    }
+
+    if (!leakedOptions.every((option) => looksLikeStandaloneOptionLine(option))) {
+      continue;
+    }
+
+    return {
+      leakedOptionCount: leakCount,
+      leakedOptions,
+      promptRemainder: rest,
+    };
+  }
+
+  return null;
+}
+
+function splitLeadingTitlePhrases(text, maxPhrases) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  const phrases = [];
+  let current = [];
+
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    current.push(word);
+
+    const next = words[index + 1];
+    const afterNext = words[index + 2];
+    if (!next) {
+      break;
+    }
+
+    if (!isLikelyTitlePhraseBoundary(current, next, afterNext)) {
+      continue;
+    }
+
+    phrases.push(current.join(' '));
+    current = [];
+
+    if (phrases.length >= maxPhrases) {
+      break;
+    }
+  }
+
+  if (current.length && phrases.length < maxPhrases + 1) {
+    phrases.push(current.join(' '));
+  }
+
+  return phrases;
+}
+
+function isLikelyTitlePhraseBoundary(currentWords, nextWord, afterNextWord) {
+  if (!Array.isArray(currentWords) || !currentWords.length) {
+    return false;
+  }
+
+  if (!startsWithUppercase(nextWord)) {
+    return false;
+  }
+
+  const currentLast = currentWords.at(-1) || '';
+  if (/[?.!:;]$/.test(currentLast)) {
+    return false;
+  }
+
+  if (currentWords.length >= 6) {
+    return true;
+  }
+
+  if (currentWords.length >= 2 && /^\p{Ll}/u.test(currentLast)) {
+    return true;
+  }
+
+  if (currentWords.length === 1 && /^\p{Lu}{2,4}$/u.test(String(nextWord || ''))) {
+    return false;
+  }
+
+  if (looksLikeStandaloneOptionLine(currentWords.join(' '))) {
+    return true;
+  }
+
+  if (currentWords.length === 1 && !/^\p{Lu}{2,}$/u.test(currentLast)) {
+    return false;
+  }
+
+  if (!afterNextWord) {
+    return true;
+  }
+
+  return /^\p{Ll}/u.test(afterNextWord) || /^\p{Lu}{2,}$/u.test(nextWord);
+}
+
+function startsWithUppercase(word) {
+  return /^\p{Lu}/u.test(String(word || ''));
 }
 
 function parseLineBlock(lines, optionCount) {
@@ -1001,7 +1837,7 @@ function parseExplicitNumberBlock(lines, optionCount) {
     return null;
   }
 
-  const splitIndex = findQuestionOptionBoundary(cleanLines, optionCount);
+  const splitIndex = findExplicitQuestionOptionBoundary(cleanLines, optionCount);
   if (splitIndex < 0) {
     return null;
   }
@@ -1017,6 +1853,90 @@ function parseExplicitNumberBlock(lines, optionCount) {
     q: questionText,
     options: optionLines,
   };
+}
+
+function findExplicitQuestionOptionBoundary(lines, optionCount) {
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
+  const directBoundary = findQuestionOptionBoundary(lines, optionCount);
+  if (directBoundary >= 0 && looksLikeQuestionTail(lines[directBoundary])) {
+    return directBoundary;
+  }
+
+  let best = null;
+
+  for (let splitIndex = 0; splitIndex <= lines.length - minOptionCount - 1; splitIndex += 1) {
+    const questionLines = lines.slice(0, splitIndex + 1);
+    const rawOptionLines = lines.slice(splitIndex + 1);
+    const optionLines = normalizeOptionLines(rawOptionLines, optionCount);
+    const questionText = sanitizeText(questionLines.join(' '));
+
+    if (!questionText || !isAcceptableOptionCount(optionLines.length, optionCount)) {
+      continue;
+    }
+
+    const score = scoreExplicitQuestionBoundary(questionLines, optionLines, questionText, rawOptionLines, optionCount);
+    if (!best || score > best.score) {
+      best = { splitIndex, score };
+    }
+  }
+
+  if (best) {
+    return best.splitIndex;
+  }
+
+  return findQuestionOptionBoundary(lines, optionCount);
+}
+
+function scoreExplicitQuestionBoundary(questionLines, optionLines, questionText, rawOptionLines, optionCount) {
+  let score = 0;
+
+  if (looksLikeQuestionTail(questionLines.at(-1))) {
+    score += 20;
+  }
+
+  if (looksLikePromptSentence(questionText)) {
+    score += 15;
+  }
+
+  if (looksLikeRealQuestion(questionText, optionLines)) {
+    score += 10;
+  }
+
+  if (isAcceptableOptionCount(optionLines.length, optionCount)) {
+    score += 8;
+  }
+
+  if (rawOptionLines.length > optionLines.length) {
+    score += Math.min(6, rawOptionLines.length - optionLines.length);
+  }
+
+  if (optionLines.every((option) => looksLikeStandaloneOptionLine(option))) {
+    score += 8;
+  }
+
+  if (rawOptionLines[0] && /^\p{Ll}/u.test(rawOptionLines[0])) {
+    score -= 25;
+  }
+
+  if (optionLines.length === optionCount) {
+    score += 40;
+  } else if (optionLines.length === minimumAllowedOptionCount(optionCount)) {
+    score -= 10;
+  }
+
+  if (optionLines.some((option) => looksLikeQuestionTail(option) && looksLikePromptSentence(option))) {
+    score -= 20;
+  }
+
+  if (questionLines.length === 1) {
+    score += 4;
+  }
+
+  if (questionLines.length > 8) {
+    score -= questionLines.length - 8;
+  }
+
+  return score;
 }
 
 function collectSequentialOptions(lines, startIndex, optionCount) {
@@ -1324,8 +2244,8 @@ function normalizeBlockLines(lines) {
     .filter(Boolean)
     .filter((line) => !shouldIgnoreLine(line))
     .filter((line) => !/^+$/u.test(line))
-    .filter((line) => !/^[\s]+[A-ZА-ЯІЇЄҐ._-]{3,}/u.test(line))
-    .filter((line) => !/^[A-ZА-ЯІЇЄҐ._-]{3,}$/.test(line))
+    .filter((line) => !/^[\s]+[A-ZА-ЯІЇЄҐ._-]{10,}/u.test(line))
+    .filter((line) => !/^[A-ZА-ЯІЇЄҐ._-]{10,}$/.test(line))
     .reduce((acc, line) => {
       if (acc.at(-1) === line) {
         return acc;
@@ -1541,6 +2461,10 @@ function shouldIgnoreLine(line) {
     return true;
   }
 
+  if (/^Всього питань:\s*\d+\s*$/i.test(line)) {
+    return true;
+  }
+
   if (/[\uE000-\uF8FF]/u.test(line) || PRIVATE_USE_SYMBOLS.test(line)) {
     return true;
   }
@@ -1558,6 +2482,10 @@ function shouldIgnoreLine(line) {
   }
 
   if (/^[-–—\s]*\d+\s+of\s+\d+[-–—\s]*$/i.test(line)) {
+    return true;
+  }
+
+  if (/^[\uE000-\uF8FF\s]+\S+/u.test(line)) {
     return true;
   }
 
@@ -1631,7 +2559,7 @@ function isLikelyHeadingContinuation(line) {
 }
 
 function looksLikePromptSentence(text) {
-  return /(який|яка|яке|які|що|хто|де|коли|чому|скільки|виберіть|вкажіть|укажіть|назвіть|визначити|визначте|оберіть|обрати|до якої|для якого|з якими|про збудника якої|яке можливе|який метод|яку інфекцію)/i.test(String(text || ''));
+  return /(який|яка|яке|які|що|хто|де|коли|чому|скільки|виберіть|вкажіть|укажіть|назвіть|опишіть|визначити|визначте|оберіть|обрати|до якої|для якого|з якими|про збудника якої|яке можливе|який метод|яку інфекцію)/i.test(String(text || ''));
 }
 
 function looksLikeQuestionParagraph(line) {

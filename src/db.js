@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import {
   generateAccessCode,
   generateSlug,
@@ -18,8 +18,8 @@ const quizPublicTtlMs = resolveQuizPublicTtlMs();
 
 fs.mkdirSync(dataDir, { recursive: true });
 
-const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
+const db = new DatabaseSync(dbPath);
+db.exec('PRAGMA journal_mode = WAL');
 
 const unlimitedAccessCode = normalizeCode(process.env.UNLIMITED_EVA_ACCESS_CODE || '');
 const unlimitedAccessLabel = 'ЕВА';
@@ -593,7 +593,7 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
   const expectedQuestionCount = normalizeExpectedQuestionCount(metadata.expectedQuestionCount);
   const price = normalizePrice(metadata.price);
 
-  const tx = db.transaction(() => {
+  const tx = createTransaction(() => {
     while (codes.length < total) {
       const code = generateAccessCode();
       const codeHash = hashCode(code);
@@ -734,7 +734,7 @@ export function reserveAccessCode(plainCode) {
   const reservedAt = nowMs();
   const staleBefore = reservedAt - reservationWindowMs;
 
-  const tx = db.transaction(() => {
+  const tx = createTransaction(() => {
     clearExpiredReservationsStmt.run(staleBefore);
     const update = reserveCodeStmt.run(reservedAt, reservationToken, hashCode(normalized));
     if (update.changes !== 1) {
@@ -860,7 +860,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
   const staleBefore = createdAt - draftTtlMs;
   const normalizedCreatorSnapshot = normalizeCreatorSnapshot(creatorSnapshot, createdAt);
 
-  const tx = db.transaction(() => {
+  const tx = createTransaction(() => {
     clearExpiredDraftsStmt.run(staleBefore);
 
     const codeRow = findCodeByTokenStmt.get(reservationToken);
@@ -1148,7 +1148,7 @@ export function deleteQuizById(quizId) {
     return null;
   }
 
-  const tx = db.transaction(() => {
+  const tx = createTransaction(() => {
     deleteQuizReportsByQuizIdStmt.run(numericQuizId);
     deleteQuizDevicesByQuizIdStmt.run(numericQuizId);
     unlinkCodeFromQuizStmt.run(numericQuizId);
@@ -1294,6 +1294,24 @@ function ensureColumn(tableName, columnName, columnType) {
   if (!names.has(columnName)) {
     db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
   }
+}
+
+function createTransaction(handler) {
+  return (...args) => {
+    db.exec('BEGIN');
+    try {
+      const result = handler(...args);
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Ignore rollback failures and rethrow the original error.
+      }
+      throw error;
+    }
+  };
 }
 
 function sanitizeNullableValue(value) {
