@@ -7,6 +7,7 @@ const sourceFileInput = document.getElementById('sourceFile');
 const answerFileInput = document.getElementById('answerFile');
 const answerIndexSelect = document.getElementById('answerIndex');
 const optionCountInput = document.getElementById('optionCount');
+const optionCountAutoInput = document.getElementById('optionCountAuto');
 const useAllQuestionsInput = document.getElementById('useAllQuestions');
 const questionLimitField = document.getElementById('questionLimitField');
 const questionLimitInput = document.getElementById('questionLimit');
@@ -23,12 +24,14 @@ let validatedAccessCode = '';
 let validatedCodePayload = null;
 let currentAiJobId = '';
 
+syncOptionCountMode();
 syncAnswerIndexOptions();
 syncQuestionLimitMode();
 syncAnswerMode();
 syncReportButtonVisibility();
 
 optionCountInput.addEventListener('input', syncAnswerIndexOptions);
+optionCountAutoInput?.addEventListener('change', syncOptionCountMode);
 useAllQuestionsInput.addEventListener('change', syncQuestionLimitMode);
 answerModeSingleInput.addEventListener('change', syncAnswerMode);
 answerModeFileInput.addEventListener('change', syncAnswerMode);
@@ -60,7 +63,7 @@ quizForm.addEventListener('submit', async (event) => {
     const formData = new FormData();
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
-    formData.append('optionCount', String(optionCountInput.value || 5));
+    formData.append('optionCount', getOptionCountRequestValue());
     formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
     formData.append('answerMode', answerMode);
 
@@ -149,7 +152,7 @@ async function prepareAiQuiz() {
     const formData = new FormData();
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
-    formData.append('optionCount', String(optionCountInput.value || 5));
+    formData.append('optionCount', getOptionCountRequestValue());
     formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
     formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
     if (!useAllQuestionsInput.checked) {
@@ -283,7 +286,7 @@ async function finalizeAiDraft() {
     const formData = new FormData();
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
-    formData.append('optionCount', String(optionCountInput.value || 5));
+    formData.append('optionCount', getOptionCountRequestValue());
     formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
     formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
     if (requiresCode && validatedAccessCode) {
@@ -727,8 +730,33 @@ function detectDeviceClass({ mobile, maxTouchPoints, viewportWidth, userAgent })
   return 'desktop';
 }
 
+function isAutoOptionCountEnabled() {
+  return Boolean(optionCountAutoInput?.checked);
+}
+
+function getOptionCountRequestValue() {
+  if (isAutoOptionCountEnabled()) {
+    return 'auto';
+  }
+
+  return String(optionCountInput.value || 5);
+}
+
+function syncOptionCountMode() {
+  if (!optionCountInput) {
+    return;
+  }
+
+  const useAuto = isAutoOptionCountEnabled();
+  optionCountInput.disabled = useAuto;
+  optionCountInput.required = !useAuto;
+  syncAnswerIndexOptions();
+}
+
 function syncAnswerIndexOptions() {
-  const optionCount = Math.max(2, Math.min(10, Number(optionCountInput.value || 5)));
+  const optionCount = isAutoOptionCountEnabled()
+    ? 6
+    : Math.max(2, Math.min(6, Number(optionCountInput.value || 5)));
   const previousValue = Math.max(1, Number(answerIndexSelect.value || 1));
   const selectedValue = Math.min(previousValue, optionCount);
 

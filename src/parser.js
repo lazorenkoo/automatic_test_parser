@@ -16,6 +16,9 @@ const LATIN_MARKERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
 const CYRILLIC_MARKERS = ['А', 'Б', 'В', 'Г', 'Д', 'Е', 'Ж', 'З', 'И', 'К'];
 const PRIVATE_USE_SYMBOLS = /^[\uE000-\uF8FF•·▪●◆■□◦○]+$/u;
 const DASH_CHARS = '-–—';
+const AUTO_OPTION_COUNT = 'auto';
+const AUTO_OPTION_MIN = 2;
+const AUTO_OPTION_MAX = 6;
 
 export async function parseQuizFromFile({
   buffer,
@@ -27,6 +30,7 @@ export async function parseQuizFromFile({
 }) {
   const effectiveLimit = normalizeQuestionLimit(limit);
   const extension = path.extname(filename || '').toLowerCase();
+  const normalizedOptionCount = normalizeOptionCountSetting(optionCount);
 
   if (extension === '.json') {
     return parseQuizFromJsonFile({
@@ -34,7 +38,7 @@ export async function parseQuizFromFile({
       filename,
       answerIndex,
       limit,
-      optionCount,
+      optionCount: normalizedOptionCount,
     });
   }
 
@@ -52,15 +56,15 @@ export async function parseQuizFromFile({
   const paragraphMarkersCandidate = parseQuestionsFromParagraphMarkers(paragraphs, {
     answerIndex: safeAnswerIndex,
     limit: effectiveLimit,
-    optionCount,
+    optionCount: normalizedOptionCount,
   });
   const exactParagraphCandidate = parseQuestionsFromExactParagraphBlocks(paragraphs, {
     answerIndex: safeAnswerIndex,
     limit: effectiveLimit,
-    optionCount,
+    optionCount: normalizedOptionCount,
   });
 
-  if (shouldPreferExactParagraphBlocks(extension, paragraphs, exactParagraphCandidate, optionCount)) {
+  if (shouldPreferExactParagraphBlocks(extension, paragraphs, exactParagraphCandidate, normalizedOptionCount)) {
     let questions = exactParagraphCandidate.questions;
     const notes = [...exactParagraphCandidate.notes];
     const reviewBlocks = Array.isArray(exactParagraphCandidate.reviewBlocks) ? exactParagraphCandidate.reviewBlocks : [];
@@ -76,14 +80,14 @@ export async function parseQuizFromFile({
       filename,
       questions,
       normalizedText,
-      optionCount,
+      optionCount: normalizedOptionCount,
       answerKey,
       notes,
       reviewBlocks,
     });
   }
 
-  if (shouldPreferParagraphMarkers(extension, paragraphs, paragraphMarkersCandidate, optionCount)) {
+  if (shouldPreferParagraphMarkers(extension, paragraphs, paragraphMarkersCandidate, normalizedOptionCount)) {
     let questions = paragraphMarkersCandidate.questions;
     const notes = [...paragraphMarkersCandidate.notes];
     const reviewBlocks = Array.isArray(paragraphMarkersCandidate.reviewBlocks) ? paragraphMarkersCandidate.reviewBlocks : [];
@@ -99,7 +103,7 @@ export async function parseQuizFromFile({
       filename,
       questions,
       normalizedText,
-      optionCount,
+      optionCount: normalizedOptionCount,
       answerKey,
       notes,
       reviewBlocks,
@@ -109,20 +113,24 @@ export async function parseQuizFromFile({
   const candidates = [
     paragraphMarkersCandidate,
     exactParagraphCandidate,
-    parseQuestionsFromRawExplicitNumbers(rawLines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
-    parseQuestionsFromExplicitNumbers(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
-    parseQuestionsByDynamicScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
-    parseQuestionsByForwardScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
-    parseQuestionsFromText(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
-    parseQuestionsFromLineBlocks(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
-    parseQuestionsFromQuestionTails(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
-    parseQuestionsFromParagraphs(paragraphs, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
-    parseQuestionsByStride(paragraphs, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount }),
+    parseQuestionsFromRawExplicitNumbers(rawLines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsFromExplicitNumbers(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsByDynamicScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsByForwardScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsFromText(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsFromLineBlocks(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsFromQuestionTails(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsFromParagraphs(paragraphs, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsByStride(paragraphs, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
   ];
 
-  const parsed = chooseBestParsedResult(candidates, optionCount);
+  const parsed = chooseBestParsedResult(candidates, normalizedOptionCount);
   if (!parsed.questions.length) {
-    throw new Error(`Не удалось распарсить вопросы. Попробуйте другое количество вариантов ответа: сейчас выбрано ${optionCount}.`);
+    throw new Error(
+      normalizedOptionCount === AUTO_OPTION_COUNT
+        ? 'Не удалось автоматически определить количество вариантов ответа.'
+        : `Не удалось распарсить вопросы. Попробуйте другое количество вариантов ответа: сейчас выбрано ${normalizedOptionCount}.`,
+    );
   }
 
   let questions = parsed.questions;
@@ -136,7 +144,7 @@ export async function parseQuizFromFile({
     );
   }
 
-  const repaired = repairEmbeddedQuestionLeaks(questions, optionCount);
+  const repaired = repairEmbeddedQuestionLeaks(questions, normalizedOptionCount);
   questions = repaired.questions;
   notes.push(...repaired.notes);
 
@@ -151,7 +159,7 @@ export async function parseQuizFromFile({
     filename,
     questions,
     normalizedText,
-    optionCount,
+    optionCount: normalizedOptionCount,
     answerKey,
     notes,
     reviewBlocks,
@@ -214,9 +222,53 @@ function parseQuizFromJsonFile({
   };
 }
 
+function normalizeOptionCountSetting(optionCount) {
+  if (String(optionCount || '').trim().toLowerCase() === AUTO_OPTION_COUNT) {
+    return AUTO_OPTION_COUNT;
+  }
+
+  const numericValue = Number(optionCount);
+  return Number.isInteger(numericValue) ? numericValue : 5;
+}
+
+function isAutoOptionCount(optionCount) {
+  return optionCount === AUTO_OPTION_COUNT;
+}
+
+function minimumAllowedOptionCount(expectedCount) {
+  if (isAutoOptionCount(expectedCount)) {
+    return AUTO_OPTION_MIN;
+  }
+
+  return expectedCount === 5 ? 4 : expectedCount;
+}
+
+function maximumAllowedOptionCount(expectedCount) {
+  if (isAutoOptionCount(expectedCount)) {
+    return AUTO_OPTION_MAX;
+  }
+
+  const numericValue = Number(expectedCount || 0);
+  return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : AUTO_OPTION_MAX;
+}
+
+function isAcceptableOptionCount(actualCount, expectedCount) {
+  if (isAutoOptionCount(expectedCount)) {
+    return actualCount >= AUTO_OPTION_MIN && actualCount <= AUTO_OPTION_MAX;
+  }
+
+  return actualCount === expectedCount || (expectedCount === 5 && actualCount === 4);
+}
+
+function resolveQuestionCorrectIndex(answerIndex, optionsLength) {
+  const safeOptionsLength = Math.max(1, Number(optionsLength || 0));
+  const requested = Number.isInteger(Number(answerIndex)) ? Number(answerIndex) : 1;
+  return Math.max(0, Math.min(safeOptionsLength - 1, requested - 1));
+}
+
 function shouldPreferExactParagraphBlocks(extension, paragraphs, candidate, optionCount) {
   const blockSize = Number(optionCount || 0) + 1;
-  if (extension !== '.docx' || blockSize < 3) {
+  if (isAutoOptionCount(optionCount) || extension !== '.docx' || blockSize < 3) {
     return false;
   }
 
@@ -229,7 +281,7 @@ function shouldPreferExactParagraphBlocks(extension, paragraphs, candidate, opti
 }
 
 function shouldPreferParagraphMarkers(extension, paragraphs, candidate, optionCount) {
-  if (extension !== '.docx') {
+  if (isAutoOptionCount(optionCount) || extension !== '.docx') {
     return false;
   }
 
@@ -456,6 +508,7 @@ function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount })
   const questions = [];
   const notes = [];
   const reviewBlocks = [];
+  const maxOptionCount = maximumAllowedOptionCount(optionCount);
   let droppedBlocks = 0;
   let current = null;
 
@@ -470,7 +523,7 @@ function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount })
       continue;
     }
 
-    if (questionMatch && current.options.length >= optionCount) {
+    if (questionMatch && isAcceptableOptionCount(current.options.length, optionCount)) {
       if (pushCompletedQuestion(questions, current, answerIndex, optionCount)) {
         if (questions.length >= limit) {
           break;
@@ -485,7 +538,7 @@ function parseQuestionsFromText(linesInput, { answerIndex, limit, optionCount })
     }
 
     if (optionMatch) {
-      if (current.options.length < optionCount) {
+      if (current.options.length < maxOptionCount) {
         current.options.push(optionMatch.text);
         continue;
       }
@@ -579,7 +632,7 @@ function parseQuestionsFromExplicitNumbers(linesInput, { answerIndex, limit, opt
     questions.push({
       q: parsedBlock.q,
       options: parsedBlock.options,
-      correctIndex: answerIndex - 1,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, parsedBlock.options.length),
     });
 
     if (questions.length >= limit) {
@@ -669,7 +722,7 @@ function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, 
     questions.push({
       q: `${block.number}. ${parsedBlock.q}`,
       options: parsedBlock.options,
-      correctIndex: answerIndex - 1,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, parsedBlock.options.length),
     });
 
     if (questions.length >= limit) {
@@ -744,7 +797,7 @@ function parseQuestionsByForwardScan(linesInput, { answerIndex, limit, optionCou
     questions.push({
       q: matchedQuestion.questionText,
       options: matchedQuestion.options,
-      correctIndex: answerIndex - 1,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, matchedQuestion.options.length),
     });
 
     index = matchedQuestion.nextIndex - 1;
@@ -821,7 +874,7 @@ function parseQuestionsByDynamicScan(linesInput, { answerIndex, limit, optionCou
     questions.push({
       q: current.pick.questionText,
       options: current.pick.options,
-      correctIndex: answerIndex - 1,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, current.pick.options.length),
     });
 
     index = current.nextIndex;
@@ -887,7 +940,7 @@ function parseQuestionsFromLineBlocks(linesInput, { answerIndex, limit, optionCo
     questions.push({
       q: parsedBlock.q,
       options: parsedBlock.options,
-      correctIndex: answerIndex - 1,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, parsedBlock.options.length),
     });
 
     if (questions.length >= limit) {
@@ -913,6 +966,10 @@ function parseQuestionsFromLineBlocks(linesInput, { answerIndex, limit, optionCo
 }
 
 function parseQuestionsFromParagraphs(textInput, { answerIndex, limit, optionCount }) {
+  if (isAutoOptionCount(optionCount)) {
+    return emptyParsedResult('paragraphs', limit);
+  }
+
   const paragraphs = Array.isArray(textInput) ? textInput : splitIntoParagraphs(textInput);
   const questions = [];
   const notes = [];
@@ -943,7 +1000,7 @@ function parseQuestionsFromParagraphs(textInput, { answerIndex, limit, optionCou
     questions.push({
       q: sanitizeText(current),
       options: cleanOptions,
-      correctIndex: answerIndex - 1,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, cleanOptions.length),
     });
 
     index += optionCount;
@@ -969,6 +1026,10 @@ function parseQuestionsFromParagraphs(textInput, { answerIndex, limit, optionCou
 }
 
 function parseQuestionsFromExactParagraphBlocks(textInput, { answerIndex, limit, optionCount }) {
+  if (isAutoOptionCount(optionCount)) {
+    return emptyParsedResult('exact-paragraph-blocks', limit);
+  }
+
   const paragraphs = Array.isArray(textInput) ? textInput : splitIntoParagraphs(textInput);
   const blockSize = optionCount + 1;
 
@@ -1007,7 +1068,7 @@ function parseQuestionsFromExactParagraphBlocks(textInput, { answerIndex, limit,
       questions.push({
         q: question,
         options,
-        correctIndex: answerIndex - 1,
+        correctIndex: resolveQuestionCorrectIndex(answerIndex, options.length),
       });
       score += chunkScore;
 
@@ -1053,6 +1114,7 @@ function parseQuestionsFromParagraphMarkers(textInput, { answerIndex, limit, opt
 
   const questions = [];
   const reviewBlocks = [];
+  const maxOptionCount = maximumAllowedOptionCount(optionCount);
   let droppedBlocks = 0;
   let current = null;
 
@@ -1097,7 +1159,7 @@ function parseQuestionsFromParagraphMarkers(textInput, { answerIndex, limit, opt
         continue;
       }
 
-      if (current.options.length < optionCount) {
+      if (current.options.length < maxOptionCount) {
         current.options.push(optionMatch.text);
         continue;
       }
@@ -1172,7 +1234,7 @@ function parseQuestionsFromQuestionTails(linesInput, { answerIndex, limit, optio
         questions.push({
           q: wrappedQuestion.questionText,
           options: wrappedQuestion.options,
-          correctIndex: answerIndex - 1,
+          correctIndex: resolveQuestionCorrectIndex(answerIndex, wrappedQuestion.options.length),
         });
 
         currentQuestionLines = [];
@@ -1206,7 +1268,7 @@ function parseQuestionsFromQuestionTails(linesInput, { answerIndex, limit, optio
     questions.push({
       q: questionText,
       options: optionBlock.options,
-      correctIndex: answerIndex - 1,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, optionBlock.options.length),
     });
 
     currentQuestionLines = [];
@@ -1268,6 +1330,10 @@ function tryBuildWrappedQuestion({ lines, currentQuestionLines, currentIndex, op
 }
 
 function parseQuestionsByStride(paragraphsInput, { answerIndex, limit, optionCount }) {
+  if (isAutoOptionCount(optionCount)) {
+    return emptyParsedResult('stride', limit);
+  }
+
   const paragraphs = Array.isArray(paragraphsInput) ? paragraphsInput : splitIntoParagraphs(paragraphsInput);
   const blockSize = optionCount + 1;
 
@@ -1298,7 +1364,7 @@ function parseQuestionsByStride(paragraphsInput, { answerIndex, limit, optionCou
       questions.push({
         q: question,
         options,
-        correctIndex: answerIndex - 1,
+        correctIndex: resolveQuestionCorrectIndex(answerIndex, options.length),
       });
       score += chunkScore;
 
@@ -1585,6 +1651,7 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
 function extractEmbeddedQuestion(questionText, optionCount) {
   const text = sanitizeText(questionText);
   const minOptionCount = minimumAllowedOptionCount(optionCount);
+  const maxOptionCount = maximumAllowedOptionCount(optionCount);
   if (!text || minOptionCount < 3) {
     return null;
   }
@@ -1605,12 +1672,12 @@ function extractEmbeddedQuestion(questionText, optionCount) {
     return null;
   }
 
-  const phrases = splitLeadingTitlePhrases(trailing, optionCount + 2);
+  const phrases = splitLeadingTitlePhrases(trailing, maxOptionCount + 2);
   if (phrases.length <= minOptionCount) {
     return null;
   }
 
-  for (let takeCount = Math.min(optionCount, phrases.length - 1); takeCount >= minOptionCount; takeCount -= 1) {
+  for (let takeCount = Math.min(maxOptionCount, phrases.length - 1); takeCount >= minOptionCount; takeCount -= 1) {
     const options = phrases.slice(0, takeCount);
     const remainder = sanitizeText(phrases.slice(takeCount).join(' '));
 
@@ -1639,6 +1706,7 @@ function extractEmbeddedQuestion(questionText, optionCount) {
 function extractEmbeddedQuestionByTitleBoundary(text, optionCount) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
   const minOptionCount = minimumAllowedOptionCount(optionCount);
+  const maxOptionCount = maximumAllowedOptionCount(optionCount);
 
   for (let startIndex = 4; startIndex <= words.length - (minOptionCount + 2); startIndex += 1) {
     if (!startsWithUppercase(words[startIndex])) {
@@ -1651,12 +1719,12 @@ function extractEmbeddedQuestionByTitleBoundary(text, optionCount) {
     }
 
     const trailing = sanitizeText(words.slice(startIndex).join(' '));
-    const phrases = splitLeadingTitlePhrases(trailing, optionCount + 2);
+    const phrases = splitLeadingTitlePhrases(trailing, maxOptionCount + 2);
     if (phrases.length <= minOptionCount) {
       continue;
     }
 
-    for (let takeCount = Math.min(optionCount, phrases.length - 1); takeCount >= minOptionCount; takeCount -= 1) {
+    for (let takeCount = Math.min(maxOptionCount, phrases.length - 1); takeCount >= minOptionCount; takeCount -= 1) {
       const options = phrases.slice(0, takeCount);
       const remainder = sanitizeText(phrases.slice(takeCount).join(' '));
 
@@ -1701,16 +1769,17 @@ function findFirstPromptBoundary(text) {
 function detectLeadingOptionLeak(questionText, optionCount) {
   const text = sanitizeText(questionText);
   const minOptionCount = minimumAllowedOptionCount(optionCount);
+  const maxOptionCount = maximumAllowedOptionCount(optionCount);
   if (!text || minOptionCount < 3) {
     return null;
   }
 
-  const phrases = splitLeadingTitlePhrases(text, optionCount + 2);
+  const phrases = splitLeadingTitlePhrases(text, maxOptionCount + 2);
   if (phrases.length <= minOptionCount) {
     return null;
   }
 
-  for (let leakCount = Math.min(optionCount, phrases.length - 1); leakCount >= minOptionCount; leakCount -= 1) {
+  for (let leakCount = Math.min(maxOptionCount, phrases.length - 1); leakCount >= minOptionCount; leakCount -= 1) {
     const leakedOptions = phrases.slice(0, leakCount);
     const rest = sanitizeText(phrases.slice(leakCount).join(' '));
 
@@ -1811,6 +1880,170 @@ function startsWithUppercase(word) {
   return /^\p{Lu}/u.test(String(word || ''));
 }
 
+function parseAutoQuestionBlock(lines) {
+  const cleanLines = dedupeAdjacentLines(
+    (Array.isArray(lines) ? lines : [lines])
+      .map((line) => sanitizeText(line))
+      .filter(Boolean),
+  );
+
+  if (cleanLines.length < AUTO_OPTION_MIN + 1) {
+    return null;
+  }
+
+  let best = null;
+
+  for (let splitIndex = 0; splitIndex <= cleanLines.length - AUTO_OPTION_MIN - 1; splitIndex += 1) {
+    const questionLines = cleanLines.slice(0, splitIndex + 1);
+    const rawOptionLines = cleanLines.slice(splitIndex + 1);
+    const questionText = sanitizeText(questionLines.join(' '));
+    const optionLines = normalizeAutoOptionLines(rawOptionLines);
+
+    if (!questionText || !isAcceptableOptionCount(optionLines.length, AUTO_OPTION_COUNT)) {
+      continue;
+    }
+
+    const score = scoreExplicitQuestionBoundary(
+      questionLines,
+      optionLines,
+      questionText,
+      rawOptionLines,
+      Math.max(optionLines.length, AUTO_OPTION_MIN),
+    ) + optionLines.length * 4 - Math.abs(optionLines.length - 5) * 3;
+
+    if (!best || score > best.score) {
+      best = {
+        q: questionText,
+        options: optionLines,
+        score,
+      };
+    }
+  }
+
+  return best ? { q: best.q, options: best.options } : null;
+}
+
+function normalizeAutoOptionLines(lines) {
+  const cleanLines = dedupeAdjacentLines(
+    (Array.isArray(lines) ? lines : [lines])
+      .map((line) => sanitizeText(line))
+      .filter(Boolean)
+      .filter((line) => !shouldIgnoreLine(line, { allowNumeric: true })),
+  );
+
+  if (cleanLines.length < AUTO_OPTION_MIN) {
+    return [];
+  }
+
+  const groupedByMarkers = groupOptionLinesByMarkers(cleanLines);
+  if (isAcceptableOptionCount(groupedByMarkers.length, AUTO_OPTION_COUNT)) {
+    return groupedByMarkers;
+  }
+
+  const groupedByStandalone = groupOptionLinesByStandalone(cleanLines);
+  if (isAcceptableOptionCount(groupedByStandalone.length, AUTO_OPTION_COUNT)) {
+    return groupedByStandalone;
+  }
+
+  const entries = cleanLines.map((line, index) => ({ index, line }));
+  const recovered = partitionRecoveredOptionsAuto(entries);
+  if (isAcceptableOptionCount(recovered.length, AUTO_OPTION_COUNT)) {
+    return recovered;
+  }
+
+  return [];
+}
+
+function groupOptionLinesByMarkers(lines) {
+  const grouped = [];
+  let current = '';
+  let sawMarker = false;
+
+  for (const rawLine of lines) {
+    const optionMatch = matchOptionStart(rawLine, AUTO_OPTION_COUNT);
+    const optionText = sanitizeText(optionMatch ? optionMatch.text : rawLine);
+    if (!optionText) {
+      continue;
+    }
+
+    if (optionMatch) {
+      if (current) {
+        grouped.push(current);
+      }
+      current = optionText;
+      sawMarker = true;
+      continue;
+    }
+
+    if (!current) {
+      current = optionText;
+      continue;
+    }
+
+    if (shouldContinueOptionText(current, optionText) || !looksLikeStandaloneOptionLine(optionText)) {
+      current = joinFragments(current, optionText);
+      continue;
+    }
+
+    grouped.push(current);
+    current = optionText;
+  }
+
+  if (current) {
+    grouped.push(current);
+  }
+
+  return sawMarker ? grouped.slice(0, AUTO_OPTION_MAX) : [];
+}
+
+function groupOptionLinesByStandalone(lines) {
+  const grouped = [];
+  let current = '';
+
+  for (const rawLine of lines) {
+    const optionText = sanitizeText(rawLine);
+    if (!optionText) {
+      continue;
+    }
+
+    if (!current) {
+      current = optionText;
+      continue;
+    }
+
+    if (shouldContinueOptionText(current, optionText) || !looksLikeStandaloneOptionLine(optionText)) {
+      current = joinFragments(current, optionText);
+      continue;
+    }
+
+    grouped.push(current);
+    current = optionText;
+  }
+
+  if (current) {
+    grouped.push(current);
+  }
+
+  return grouped.slice(0, AUTO_OPTION_MAX);
+}
+
+function partitionRecoveredOptionsAuto(entries) {
+  let best = [];
+
+  for (let optionCount = AUTO_OPTION_MIN; optionCount <= Math.min(entries.length, AUTO_OPTION_MAX); optionCount += 1) {
+    const resolved = partitionRecoveredOptions(entries, optionCount);
+    if (!resolved) {
+      continue;
+    }
+
+    if (!best.length || resolved.length > best.length || Math.abs(resolved.length - 5) < Math.abs(best.length - 5)) {
+      best = resolved;
+    }
+  }
+
+  return best;
+}
+
 function parseLineBlock(lines, optionCount) {
   const cleanLines = dedupeAdjacentLines(
     lines.map((line) => sanitizeText(line)).filter(Boolean),
@@ -1818,6 +2051,10 @@ function parseLineBlock(lines, optionCount) {
 
   if (cleanLines.length < minimumAllowedOptionCount(optionCount) + 1) {
     return null;
+  }
+
+  if (isAutoOptionCount(optionCount)) {
+    return parseAutoQuestionBlock(cleanLines);
   }
 
   const splitIndex = findQuestionOptionBoundary(cleanLines, optionCount);
@@ -1843,6 +2080,10 @@ function parseExplicitNumberBlock(lines, optionCount) {
   const cleanLines = normalizeBlockLines(lines);
   if (cleanLines.length < minimumAllowedOptionCount(optionCount) + 1) {
     return null;
+  }
+
+  if (isAutoOptionCount(optionCount)) {
+    return parseAutoQuestionBlock(cleanLines);
   }
 
   const splitIndex = findExplicitQuestionOptionBoundary(cleanLines, optionCount);
@@ -1948,9 +2189,66 @@ function scoreExplicitQuestionBoundary(questionLines, optionLines, questionText,
 }
 
 function collectSequentialOptions(lines, startIndex, optionCount) {
+  if (isAutoOptionCount(optionCount)) {
+    return collectSequentialOptionsAuto(lines, startIndex);
+  }
+
   return collectSequentialOptionsStrict(lines, startIndex, optionCount)
     || collectSequentialOptionsFlexible(lines, startIndex, optionCount)
     || recoverSequentialOptionsWindow(lines, startIndex, optionCount);
+}
+
+function collectSequentialOptionsAuto(lines, startIndex) {
+  const optionEntries = [];
+  let nextIndex = startIndex;
+
+  for (let index = startIndex; index < lines.length && optionEntries.length < AUTO_OPTION_MAX * 3 + 6; index += 1) {
+    const line = lines[index];
+    if (!line || shouldIgnoreLine(line) || isLikelyTopicHeading(line)) {
+      nextIndex = index + 1;
+      continue;
+    }
+
+    if (matchQuestionStart(line) || matchStandaloneQuestionStart(line)) {
+      nextIndex = index;
+      break;
+    }
+
+    const optionText = sanitizeText(line);
+    if (!optionText) {
+      nextIndex = index + 1;
+      continue;
+    }
+
+    if (
+      optionEntries.length >= AUTO_OPTION_MIN
+      && looksLikeQuestionTail(optionText)
+      && looksLikePromptSentence(optionText)
+    ) {
+      nextIndex = index;
+      break;
+    }
+
+    optionEntries.push({
+      index,
+      line: optionText,
+    });
+    nextIndex = index + 1;
+  }
+
+  if (optionEntries.length < AUTO_OPTION_MIN) {
+    return null;
+  }
+
+  const options = normalizeAutoOptionLines(optionEntries.map((entry) => entry.line));
+  if (!isAcceptableOptionCount(options.length, AUTO_OPTION_COUNT)) {
+    return null;
+  }
+
+  return {
+    options,
+    nextIndex,
+  };
 }
 
 function collectSequentialOptionsStrict(lines, startIndex, optionCount) {
@@ -2283,7 +2581,7 @@ function normalizeOptionLines(lines, optionCount) {
     normalized.push(line);
   }
 
-  if (normalized.length > optionCount) {
+  if (!isAutoOptionCount(optionCount) && normalized.length > optionCount) {
     return normalized.slice(0, optionCount);
   }
 
@@ -2292,7 +2590,15 @@ function normalizeOptionLines(lines, optionCount) {
 
 function looksLikeRealQuestion(questionText, options) {
   const normalizedQuestion = sanitizeText(questionText);
-  if (!normalizedQuestion || normalizedQuestion.length < 20) {
+  if (!normalizedQuestion) {
+    return false;
+  }
+
+  if (/[?:]$/.test(normalizedQuestion) && normalizedQuestion.length >= 8) {
+    return true;
+  }
+
+  if (normalizedQuestion.length < 20) {
     return false;
   }
 
@@ -2443,18 +2749,10 @@ function pushCompletedQuestion(target, current, answerIndex, optionCount) {
   target.push({
     q: questionText,
     options,
-    correctIndex: answerIndex - 1,
+    correctIndex: resolveQuestionCorrectIndex(answerIndex, options.length),
   });
 
   return true;
-}
-
-function isAcceptableOptionCount(actualCount, expectedCount) {
-  return actualCount === expectedCount || (expectedCount === 5 && actualCount === 4);
-}
-
-function minimumAllowedOptionCount(expectedCount) {
-  return expectedCount === 5 ? 4 : expectedCount;
 }
 
 function cleanupLine(line) {
@@ -2704,12 +3002,13 @@ function looksLikeNumericOptionInlineStart(match) {
 }
 
 function matchOptionStart(line, optionCount) {
+  const markerCount = maximumAllowedOptionCount(optionCount);
   const markers = [
-    ...LATIN_MARKERS.slice(0, optionCount),
-    ...LATIN_MARKERS.slice(0, optionCount).map((item) => item.toLowerCase()),
-    ...CYRILLIC_MARKERS.slice(0, optionCount),
-    ...CYRILLIC_MARKERS.slice(0, optionCount).map((item) => item.toLowerCase()),
-    ...Array.from({ length: optionCount }, (_, index) => String(index + 1)),
+    ...LATIN_MARKERS.slice(0, markerCount),
+    ...LATIN_MARKERS.slice(0, markerCount).map((item) => item.toLowerCase()),
+    ...CYRILLIC_MARKERS.slice(0, markerCount),
+    ...CYRILLIC_MARKERS.slice(0, markerCount).map((item) => item.toLowerCase()),
+    ...Array.from({ length: markerCount }, (_, index) => String(index + 1)),
   ];
 
   const escapedMarkers = markers

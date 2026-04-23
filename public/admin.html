@@ -39,7 +39,13 @@
         <div class="split">
           <label class="field">
             <span>Варіантів відповіді в питанні</span>
-            <input id="optionCount" name="optionCount" type="number" min="2" max="10" value="5" required />
+            <div class="option-count-row">
+              <input id="optionCount" name="optionCount" type="number" min="2" max="6" value="5" required />
+              <label class="choice-row inline-choice">
+                <input id="optionCountAuto" name="optionCountAuto" type="checkbox" />
+                <span>AUTO</span>
+              </label>
+            </div>
           </label>
 
           <div class="field">

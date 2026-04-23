@@ -53,6 +53,10 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_MB || 20) * 1024 * 1024;
 const aiPrepareCooldownMs = Math.max(0, Number(process.env.AI_PREPARE_COOLDOWN_MS || 60 * 1000) || 60 * 1000);
+const autoOptionCountValue = 'auto';
+const minOptionCount = 2;
+const maxOptionCount = 6;
+const maxAutoAnswerIndex = maxOptionCount;
 const uploadsDir = path.join(getDbMeta().dataDir, 'reported-source-files');
 const aiPrepareJobs = new Map();
 
@@ -102,7 +106,7 @@ app.post('/api/parse', upload.fields([
   const clientTitle = sanitizeText(req.body.clientTitle || '');
   const answerMode = String(req.body.answerMode || 'single');
   const answerIndex = Number(req.body.answerIndex);
-  const optionCount = Number(req.body.optionCount);
+  const optionCount = readOptionCountSetting(req.body.optionCount);
   const questionMode = String(req.body.questionMode || 'manual');
   const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
   const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
@@ -122,16 +126,19 @@ app.post('/api/parse', upload.fields([
     });
   }
 
-  if (!Number.isInteger(optionCount) || optionCount < 2 || optionCount > 10) {
-    return res.status(400).json({ error: 'Кількість варіантів відповіді має бути від 2 до 10.' });
+  if (optionCount !== autoOptionCountValue && (!Number.isInteger(optionCount) || optionCount < minOptionCount || optionCount > maxOptionCount)) {
+    return res.status(400).json({ error: `Кількість варіантів відповіді має бути від ${minOptionCount} до ${maxOptionCount}.` });
   }
 
   if (!['single', 'file'].includes(answerMode)) {
     return res.status(400).json({ error: 'Невірний режим відповідей.' });
   }
 
-  if (answerMode === 'single' && (!Number.isInteger(answerIndex) || answerIndex < 1 || answerIndex > optionCount)) {
-    return res.status(400).json({ error: `Правильний варіант має бути від 1 до ${optionCount}.` });
+  if (answerMode === 'single') {
+    const maxAnswerIndex = optionCount === autoOptionCountValue ? maxAutoAnswerIndex : optionCount;
+    if (!Number.isInteger(answerIndex) || answerIndex < 1 || answerIndex > maxAnswerIndex) {
+      return res.status(400).json({ error: `Правильний варіант має бути від 1 до ${maxAnswerIndex}.` });
+    }
   }
 
   if (answerMode === 'file') {
@@ -214,7 +221,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
   const clientTitle = sanitizeText(req.body.clientTitle || '');
   const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
   const accessCode = String(req.body.accessCode || '').trim();
-  const optionCount = Number(req.body.optionCount);
+  const optionCount = readOptionCountSetting(req.body.optionCount);
   const questionMode = String(req.body.questionMode || 'manual');
   const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
   const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
@@ -234,8 +241,8 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
     });
   }
 
-  if (!Number.isInteger(optionCount) || optionCount < 2 || optionCount > 10) {
-    return res.status(400).json({ error: 'Option count must be between 2 and 10.' });
+  if (optionCount !== autoOptionCountValue && (!Number.isInteger(optionCount) || optionCount < minOptionCount || optionCount > maxOptionCount)) {
+    return res.status(400).json({ error: `Option count must be between ${minOptionCount} and ${maxOptionCount} or AUTO.` });
   }
 
   if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
@@ -566,7 +573,7 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
 ]), async (req, res, next) => {
   const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
   const clientTitle = sanitizeText(req.body.clientTitle || '');
-  const optionCount = Number(req.body.optionCount);
+  const optionCount = readOptionCountSetting(req.body.optionCount);
   const questionMode = String(req.body.questionMode || 'manual');
   const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
   const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
@@ -586,8 +593,8 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
     });
   }
 
-  if (!Number.isInteger(optionCount) || optionCount < 2 || optionCount > 10) {
-    return res.status(400).json({ error: 'Option count must be between 2 and 10.' });
+  if (optionCount !== autoOptionCountValue && (!Number.isInteger(optionCount) || optionCount < minOptionCount || optionCount > maxOptionCount)) {
+    return res.status(400).json({ error: `Option count must be between ${minOptionCount} and ${maxOptionCount} or AUTO.` });
   }
 
   if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
@@ -1429,6 +1436,20 @@ function trimString(value, maxLength) {
   }
 
   return normalized.slice(0, maxLength);
+}
+
+function readOptionCountSetting(rawValue) {
+  const normalized = String(rawValue || '').trim().toLowerCase();
+  if (normalized === autoOptionCountValue) {
+    return autoOptionCountValue;
+  }
+
+  const numericValue = Number(rawValue);
+  if (!Number.isInteger(numericValue)) {
+    return null;
+  }
+
+  return numericValue;
 }
 
 function toSafeInteger(value, min = 0, max = Number.MAX_SAFE_INTEGER) {
