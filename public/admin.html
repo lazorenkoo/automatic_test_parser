@@ -14,16 +14,35 @@
           <h2>Створити тест</h2>
         </div>
 
-        <label class="field">
-          <span>Назва тесту</span>
-          <input
-            id="clientTitle"
-            name="clientTitle"
-            type="text"
-            placeholder="Наприклад: Терапія: Кардіологія | НБ"
-            required
-          />
-        </label>
+        <div class="title-course-row">
+          <label class="field">
+            <span>Курс</span>
+            <select id="courseNumber" name="courseNumber" required>
+              <option value="">Оберіть курс</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Назва тесту</span>
+            <input
+              id="clientTitle"
+              name="clientTitle"
+              type="text"
+              placeholder="Наприклад: Терапія: Кардіологія | НБ"
+              required
+            />
+          </label>
+        </div>
 
         <label class="field">
           <span>Файл із тестами</span>

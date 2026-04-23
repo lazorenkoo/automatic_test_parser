@@ -3,6 +3,7 @@ const submitBtn = document.getElementById('submitBtn');
 const statusBox = document.getElementById('statusBox');
 const resultBox = document.getElementById('resultBox');
 const clientTitleInput = document.getElementById('clientTitle');
+const courseNumberInput = document.getElementById('courseNumber');
 const sourceFileInput = document.getElementById('sourceFile');
 const answerFileInput = document.getElementById('answerFile');
 const answerIndexSelect = document.getElementById('answerIndex');
@@ -49,8 +50,13 @@ quizForm.addEventListener('submit', async (event) => {
 
   try {
     const clientTitle = String(clientTitleInput?.value || '').trim();
+    const courseNumber = Number(courseNumberInput?.value || 0);
     const sourceFile = sourceFileInput.files?.[0];
     const answerMode = getAnswerMode();
+
+    if (!Number.isInteger(courseNumber) || courseNumber < 1 || courseNumber > 10) {
+      throw new Error('Спочатку оберіть курс від 1 до 10.');
+    }
 
     if (!clientTitle) {
       throw new Error('Спочатку введіть назву тесту.');
@@ -61,6 +67,7 @@ quizForm.addEventListener('submit', async (event) => {
     }
 
     const formData = new FormData();
+    formData.append('courseNumber', String(courseNumber));
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
@@ -130,7 +137,13 @@ function syncReportButtonVisibility() {
 
 async function prepareAiQuiz() {
   const clientTitle = String(clientTitleInput?.value || '').trim();
+  const courseNumber = Number(courseNumberInput?.value || 0);
   const sourceFile = sourceFileInput.files?.[0] || null;
+
+  if (!Number.isInteger(courseNumber) || courseNumber < 1 || courseNumber > 10) {
+    setStatus('error', 'Спочатку оберіть курс від 1 до 10.');
+    return;
+  }
 
   if (!clientTitle) {
     setStatus('error', 'Спочатку введіть назву тесту.');
@@ -150,6 +163,7 @@ async function prepareAiQuiz() {
 
   try {
     const formData = new FormData();
+    formData.append('courseNumber', String(courseNumber));
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
@@ -255,7 +269,13 @@ async function finalizeAiDraft() {
   const checkBtn = document.getElementById('aiCheckCodeBtn');
   const codeInput = document.getElementById('aiAccessCodeInput');
   const clientTitle = String(clientTitleInput?.value || '').trim();
+  const courseNumber = Number(courseNumberInput?.value || 0);
   const sourceFile = sourceFileInput.files?.[0] || null;
+
+  if (!Number.isInteger(courseNumber) || courseNumber < 1 || courseNumber > 10) {
+    setStatus('error', 'Спочатку оберіть курс від 1 до 10.');
+    return;
+  }
 
   if (!clientTitle) {
     setStatus('error', 'Спочатку введіть назву тесту.');
@@ -284,6 +304,7 @@ async function finalizeAiDraft() {
 
   try {
     const formData = new FormData();
+    formData.append('courseNumber', String(courseNumber));
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());

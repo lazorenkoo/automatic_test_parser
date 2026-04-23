@@ -57,6 +57,8 @@ const autoOptionCountValue = 'auto';
 const minOptionCount = 2;
 const maxOptionCount = 6;
 const maxAutoAnswerIndex = maxOptionCount;
+const minCourseNumber = 1;
+const maxCourseNumber = 10;
 const uploadsDir = path.join(getDbMeta().dataDir, 'reported-source-files');
 const aiPrepareJobs = new Map();
 
@@ -104,6 +106,7 @@ app.post('/api/parse', upload.fields([
   const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
   const answerFile = req.files?.answerFile?.[0] || null;
   const clientTitle = sanitizeText(req.body.clientTitle || '');
+  const courseNumber = readCourseNumber(req.body.courseNumber);
   const answerMode = String(req.body.answerMode || 'single');
   const answerIndex = Number(req.body.answerIndex);
   const optionCount = readOptionCountSetting(req.body.optionCount);
@@ -118,6 +121,10 @@ app.post('/api/parse', upload.fields([
 
   if (!clientTitle) {
     return res.status(400).json({ error: 'Потрібно вказати назву тесту.' });
+  }
+
+  if (!Number.isInteger(courseNumber) || courseNumber < minCourseNumber || courseNumber > maxCourseNumber) {
+    return res.status(400).json({ error: `Потрібно обрати курс від ${minCourseNumber} до ${maxCourseNumber}.` });
   }
 
   if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
@@ -185,6 +192,7 @@ app.post('/api/parse', upload.fields([
     });
 
     const draft = createQuizDraft({
+      courseNumber,
       title: clientTitle,
       sourceFilename: buildStoredFilename(clientTitle),
       answerIndex: answerMode === 'single' ? answerIndex : 0,
@@ -200,6 +208,7 @@ app.post('/api/parse', upload.fields([
 
     return res.status(201).json({
       draftToken: draft.draftToken,
+      courseNumber,
       title: clientTitle,
       parsedCount: parsedQuiz.questions.length,
       requestedCount,
@@ -219,6 +228,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
 ]), async (req, res, next) => {
   const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
   const clientTitle = sanitizeText(req.body.clientTitle || '');
+  const courseNumber = readCourseNumber(req.body.courseNumber);
   const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
   const accessCode = String(req.body.accessCode || '').trim();
   const optionCount = readOptionCountSetting(req.body.optionCount);
@@ -233,6 +243,10 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
 
   if (!clientTitle) {
     return res.status(400).json({ error: 'Please enter a test title.' });
+  }
+
+  if (!Number.isInteger(courseNumber) || courseNumber < minCourseNumber || courseNumber > maxCourseNumber) {
+    return res.status(400).json({ error: `Please select a course from ${minCourseNumber} to ${maxCourseNumber}.` });
   }
 
   if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
@@ -324,6 +338,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
     const job = createAiPrepareJob({
       id: randomToken(24),
       clientTitle,
+      courseNumber,
       sourceFile,
       originalFilename,
       questionMode,
@@ -391,6 +406,7 @@ app.get('/api/ai-quizzes/jobs/:jobId', (req, res) => {
 function createAiPrepareJob({
   id,
   clientTitle,
+  courseNumber,
   sourceFile,
   originalFilename,
   questionMode,
@@ -411,6 +427,7 @@ function createAiPrepareJob({
     completedSteps: 0,
     totalSteps: 0,
     clientTitle,
+    courseNumber,
     sourceFile,
     originalFilename,
     questionMode,
@@ -489,6 +506,7 @@ async function runAiPrepareJob(job) {
     : job.questionLimit;
   const savedUploads = saveUploadedQuizFiles({ sourceFile: job.sourceFile, answerFile: null });
   const draft = createQuizDraft({
+    courseNumber: job.courseNumber,
     title: job.clientTitle,
     sourceFilename: buildStoredFilename(job.clientTitle),
     answerIndex: 0,
@@ -573,6 +591,7 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
 ]), async (req, res, next) => {
   const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
   const clientTitle = sanitizeText(req.body.clientTitle || '');
+  const courseNumber = readCourseNumber(req.body.courseNumber);
   const optionCount = readOptionCountSetting(req.body.optionCount);
   const questionMode = String(req.body.questionMode || 'manual');
   const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
@@ -585,6 +604,10 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
 
   if (!clientTitle) {
     return res.status(400).json({ error: 'Please enter a test title.' });
+  }
+
+  if (!Number.isInteger(courseNumber) || courseNumber < minCourseNumber || courseNumber > maxCourseNumber) {
+    return res.status(400).json({ error: `Please select a course from ${minCourseNumber} to ${maxCourseNumber}.` });
   }
 
   if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(sourceExtension)) {
@@ -618,6 +641,7 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
 
     return res.json({
       title: clientTitle,
+      courseNumber,
       parsedCount: parsedQuiz.questions.length,
       requestedCount: questionMode === 'all' ? parsedQuiz.questions.length : questionLimit,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
@@ -1444,6 +1468,15 @@ function readOptionCountSetting(rawValue) {
     return autoOptionCountValue;
   }
 
+  const numericValue = Number(rawValue);
+  if (!Number.isInteger(numericValue)) {
+    return null;
+  }
+
+  return numericValue;
+}
+
+function readCourseNumber(rawValue) {
   const numericValue = Number(rawValue);
   if (!Number.isInteger(numericValue)) {
     return null;

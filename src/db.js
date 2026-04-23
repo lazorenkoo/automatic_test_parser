@@ -48,6 +48,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slug TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL,
+    course_number INTEGER NOT NULL DEFAULT 0,
     source_filename TEXT NOT NULL,
     answer_index INTEGER NOT NULL,
     requested_count INTEGER NOT NULL,
@@ -71,6 +72,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     draft_token TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL,
+    course_number INTEGER NOT NULL DEFAULT 0,
     source_filename TEXT NOT NULL,
     answer_index INTEGER NOT NULL,
     requested_count INTEGER NOT NULL,
@@ -159,6 +161,8 @@ ensureColumn('quizzes', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quiz_drafts', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quizzes', 'expires_at', 'INTEGER');
 ensureColumn('quizzes', 'banned_at', 'INTEGER');
+ensureColumn('quizzes', 'course_number', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('quiz_drafts', 'course_number', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('quizzes', 'creator_snapshot_json', "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn('quizzes', 'source_upload_path', 'TEXT');
 ensureColumn('quizzes', 'source_upload_name', 'TEXT');
@@ -405,6 +409,7 @@ const insertQuizStmt = db.prepare(`
   INSERT INTO quizzes (
     slug,
     title,
+    course_number,
     source_filename,
     answer_index,
     requested_count,
@@ -420,7 +425,7 @@ const insertQuizStmt = db.prepare(`
     created_at,
     expires_at,
     code_id
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const markCodeUsedStmt = db.prepare(`
@@ -486,6 +491,7 @@ const insertDraftStmt = db.prepare(`
   INSERT INTO quiz_drafts (
     draft_token,
     title,
+    course_number,
     source_filename,
     answer_index,
     requested_count,
@@ -498,7 +504,7 @@ const insertDraftStmt = db.prepare(`
     answer_upload_path,
     answer_upload_name,
     created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const getDraftByTokenStmt = db.prepare(`
@@ -552,6 +558,7 @@ const listQuizzesForAdminStmt = db.prepare(`
     q.id,
     q.slug,
     q.title,
+    q.course_number AS courseNumber,
     q.source_filename AS sourceFilename,
     q.raw_model_json AS rawModelJson,
     q.parsed_count AS parsedCount,
@@ -1155,6 +1162,7 @@ export function releaseReservation(reservationToken) {
 
 export function createQuizDraft({
   title,
+  courseNumber,
   sourceFilename,
   answerIndex,
   requestedCount,
@@ -1174,6 +1182,7 @@ export function createQuizDraft({
   insertDraftStmt.run(
     draftToken,
     title,
+    courseNumber,
     sourceFilename,
     answerIndex,
     requestedCount,
@@ -1190,6 +1199,7 @@ export function createQuizDraft({
 
   return {
     draftToken,
+    courseNumber,
     parsedCount: questions.length,
     requestedCount,
     createdAt,
@@ -1211,6 +1221,7 @@ export function inspectQuizDraft(draftToken) {
     id: Number(row.id),
     draftToken: row.draft_token,
     title: row.title,
+    courseNumber: Number(row.course_number || 0),
     requestedCount: Number(row.requested_count || 0),
     parsedCount: Number(row.parsed_count || 0),
     rawModel: parseJsonField(row.raw_model_json, {}),
@@ -1278,6 +1289,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
     const quizInsert = insertQuizStmt.run(
       slug,
       draftRow.title,
+      Number(draftRow.course_number || 0),
       draftRow.source_filename,
       draftRow.answer_index,
       draftRow.requested_count,
@@ -1305,6 +1317,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
     return {
       id: Number(quizInsert.lastInsertRowid),
       slug,
+      courseNumber: Number(draftRow.course_number || 0),
       siteType: codeRow.siteType || null,
       clientTgUsername: codeRow.clientTgUsername || null,
       expectedQuestionCount,
@@ -1396,6 +1409,7 @@ export function recordQuizVisit({ quizId, deviceId, ip, userAgent }) {
 export function listQuizzesForAdmin() {
   return listQuizzesForAdminStmt.all().map((row) => ({
     ...row,
+    courseNumber: Number(row.courseNumber || 0),
     rawModelJson: parseJsonField(row.rawModelJson, {}),
     createdAt: Number(row.createdAt || 0),
     expiresAt: row.expiresAt ? Number(row.expiresAt) : null,
@@ -1608,6 +1622,7 @@ function mapQuizRow(row) {
     id: row.id,
     slug: row.slug,
     title: row.title,
+    courseNumber: Number(row.course_number || row.courseNumber || 0),
     sourceFilename: row.source_filename,
     answerIndex: row.answer_index,
     requestedCount: row.requested_count,

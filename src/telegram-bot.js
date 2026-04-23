@@ -1383,7 +1383,7 @@ function formatSearchResults(parsed) {
 
 function formatSiteListItem(quiz) {
   const title = String(quiz.title || '').trim() || quiz.codeLabel || `Site ${quiz.id}`;
-  return `${quiz.id}. ${title} | devices ${quiz.deviceCount || 0}${formatQuizPublicStatus(quiz)}${isAiGeneratedQuiz(quiz) ? ' | AI' : ''}`;
+  return `${quiz.id}. ${title} | course ${quiz.courseNumber || '-'} | devices ${quiz.deviceCount || 0}${formatQuizPublicStatus(quiz)}${isAiGeneratedQuiz(quiz) ? ' | AI' : ''}`;
 }
 
 function formatSiteDetails(quiz) {
@@ -1394,6 +1394,7 @@ function formatSiteDetails(quiz) {
   return [
     `Site ${quiz.id}`,
     `Title: ${quiz.title}`,
+    `Course: ${quiz.courseNumber || '-'}`,
     `Slug: ${quiz.slug}`,
     `Question count: ${quiz.expectedQuestionCount || quiz.requestedCount || quiz.parsedCount || 0}`,
     `Parsed questions: ${quiz.parsedCount || 0}`,
