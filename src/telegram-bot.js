@@ -2,9 +2,11 @@ import TelegramBot from 'node-telegram-bot-api';
 import {
   createAccessCodes,
   createReusableAccessCode,
+  banAiDevice,
   deleteQuizById,
   deleteQuizReportById,
   deleteUploadReportById,
+  getAiDeviceBan,
   getAiRuntimeSettings,
   getAiUsageStats,
   getAccountingSummary,
@@ -13,11 +15,14 @@ import {
   getQuizReportById,
   getUploadReportById,
   inspectAccessCode,
+  listAiDeviceBans,
+  listAiRequestLogs,
   listQuizReports,
   listUploadReports,
   listQuizzesForAdmin,
   revokeAccessCode,
   setQuizBanStatusById,
+  unbanAiDevice,
   updateAiRuntimeSettings,
 } from './db.js';
 
@@ -51,7 +56,12 @@ export function startTelegramBot() {
     '/ai',
     '/aicode <on|off>',
     '/ailimit <N|off>',
-    '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
+    '/ailogs [limit]',
+    '/ainovisit [limit]',
+    '/aiban <browserId> [reason]',
+    '/aiunban <browserId>',
+    '/aibans [limit]',
+    '/sites [page] [type=1] [tg=@user] [q=text] [ai=yes|no] [visited=yes|no] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
     '/search <text>',
     '/site <id>',
     '/sitejson <id>',
@@ -77,6 +87,11 @@ export function startTelegramBot() {
     { command: 'ai', description: 'Show AI status' },
     { command: 'aicode', description: 'Require code for AI on/off' },
     { command: 'ailimit', description: 'Set AI daily limit' },
+    { command: 'ailogs', description: 'Show AI request logs' },
+    { command: 'ainovisit', description: 'AI sites with no visits' },
+    { command: 'aiban', description: 'Ban AI device by browserId' },
+    { command: 'aiunban', description: 'Unban AI device' },
+    { command: 'aibans', description: 'List AI device bans' },
     { command: 'sites', description: 'List quiz sites' },
     { command: 'search', description: 'Search quiz sites' },
     { command: 'site', description: 'Show site details' },
@@ -280,6 +295,63 @@ export function startTelegramBot() {
       `AI daily limit: ${settings.dailyLimit > 0 ? settings.dailyLimit : 'OFF'}`,
       formatAiRuntimeStatus(),
     ].join('\n\n'));
+  });
+
+  bot.onText(/^\/ailogs(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const limit = normalizeOptionalLimit(match?.[1], 20, 100);
+    await bot.sendMessage(msg.chat.id, formatAiLogs(limit));
+  });
+
+  bot.onText(/^\/ainovisit(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const limit = normalizeOptionalLimit(match?.[1], 20, 100);
+    await bot.sendMessage(msg.chat.id, formatAiNoVisitSites(limit));
+  });
+
+  bot.onText(/^\/aiban(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseAiBanArgs(match?.[1], '/aiban <browserId> [reason]');
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const result = banAiDevice(parsed.browserId, parsed.reason);
+    await bot.sendMessage(msg.chat.id, formatAiBanEntry(result, 'AI device banned.'));
+  });
+
+  bot.onText(/^\/aiunban(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const browserId = String(match?.[1] || '').trim();
+    if (!browserId) {
+      await bot.sendMessage(msg.chat.id, 'Format: /aiunban <browserId>');
+      return;
+    }
+
+    const removed = unbanAiDevice(browserId);
+    await bot.sendMessage(msg.chat.id, removed ? 'AI device unbanned.' : 'AI device ban not found.');
+  });
+
+  bot.onText(/^\/aibans(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const limit = normalizeOptionalLimit(match?.[1], 20, 100);
+    await bot.sendMessage(msg.chat.id, formatAiBans(limit));
   });
 
   bot.onText(/^\/sites(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -642,6 +714,23 @@ export function startTelegramBot() {
   return bot;
 }
 
+export async function sendAdminTelegramLog(message) {
+  const bot = botInstance || startTelegramBot();
+  const adminUserId = Number(process.env.TELEGRAM_ADMIN_USER_ID || 0);
+  const text = String(message || '').trim();
+
+  if (!bot || !adminUserId || !text) {
+    return false;
+  }
+
+  try {
+    await bot.sendMessage(adminUserId, text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function notifyAdminAboutQuizReport(report) {
   const adminUserId = Number(process.env.TELEGRAM_ADMIN_USER_ID || 0);
   if (!botInstance || !adminUserId || !report) {
@@ -821,6 +910,8 @@ function parseSitesArgs(rawValue) {
     type: null,
     tg: null,
     query: '',
+    ai: null,
+    visited: null,
     minDevices: null,
     maxDevices: null,
     status: 'all',
@@ -856,6 +947,8 @@ function parseSearchArgs(rawValue) {
       type: null,
       tg: null,
       query,
+      ai: null,
+      visited: null,
       minDevices: null,
       maxDevices: null,
       status: 'all',
@@ -893,6 +986,39 @@ function parseAiLimitCommand(rawValue) {
   }
 
   return { ok: true, value: numericValue };
+}
+
+function parseAiBanArgs(rawValue, formatHint) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return { ok: false, error: `Format: ${formatHint}` };
+  }
+
+  const parts = tokenizeArgs(value);
+  const browserId = String(parts[0] || '').trim();
+  if (!browserId) {
+    return { ok: false, error: `Format: ${formatHint}` };
+  }
+
+  return {
+    ok: true,
+    browserId,
+    reason: parts.slice(1).join(' ').trim() || null,
+  };
+}
+
+function normalizeOptionalLimit(rawValue, fallbackValue = 20, maxValue = 100) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return fallbackValue;
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isInteger(numericValue) || numericValue < 1) {
+    return fallbackValue;
+  }
+
+  return Math.min(maxValue, numericValue);
 }
 
 function parseReportFileArgs(rawValue) {
@@ -999,6 +1125,8 @@ function parseDeleteArgs(rawValue) {
     type: null,
     tg: null,
     query: '',
+    ai: null,
+    visited: null,
     minDevices: null,
     maxDevices: null,
     status: 'all',
@@ -1013,7 +1141,7 @@ function parseDeleteArgs(rawValue) {
     }
   }
 
-  if (!filters.before && !filters.after && !filters.type && !filters.tg && filters.minDevices === null && filters.maxDevices === null && filters.status === 'all' && !filters.query) {
+  if (!filters.before && !filters.after && !filters.type && !filters.tg && filters.ai === null && filters.visited === null && filters.minDevices === null && filters.maxDevices === null && filters.status === 'all' && !filters.query) {
     return { ok: false, error: 'Use at least one filter when deleting by query.' };
   }
 
@@ -1048,6 +1176,24 @@ function applyFilterPart(filters, part) {
       return { ok: false, error: 'q must contain search text.' };
     }
     filters.query = normalizedValue;
+    return { ok: true };
+  }
+
+  if (normalizedKey === 'ai') {
+    const normalizedAi = normalizedValue.toLowerCase();
+    if (!['yes', 'no'].includes(normalizedAi)) {
+      return { ok: false, error: 'ai supports yes or no.' };
+    }
+    filters.ai = normalizedAi === 'yes';
+    return { ok: true };
+  }
+
+  if (normalizedKey === 'visited') {
+    const normalizedVisited = normalizedValue.toLowerCase();
+    if (!['yes', 'no'].includes(normalizedVisited)) {
+      return { ok: false, error: 'visited supports yes or no.' };
+    }
+    filters.visited = normalizedVisited === 'yes';
     return { ok: true };
   }
 
@@ -1089,7 +1235,7 @@ function applyFilterPart(filters, part) {
 
   return {
     ok: false,
-    error: 'Unknown filter. Use type, tg, q, min_devices, max_devices, status, before, after.',
+    error: 'Unknown filter. Use type, tg, q, ai, visited, min_devices, max_devices, status, before, after.',
   };
 }
 
@@ -1220,6 +1366,72 @@ function formatAiRuntimeStatus() {
     `Daily limit: ${settings.dailyLimit > 0 ? settings.dailyLimit : 'off'}`,
     `Remaining today: ${usage.remainingToday == null ? 'unlimited' : usage.remainingToday}`,
     `Reset: ${formatDateTime(usage.nextResetAt)}`,
+  ].join('\n');
+}
+
+function formatAiLogs(limit) {
+  const logs = listAiRequestLogs(limit);
+  if (!logs.length) {
+    return 'No AI logs yet.';
+  }
+
+  return [
+    `Latest AI logs: ${logs.length}`,
+    '',
+    ...logs.map((log) => [
+      `${log.id}. ${log.status} | ${formatDateTime(log.createdAt)}`,
+      `Browser ID: ${log.browserId || '-'}`,
+      `IP: ${log.requestIp || '-'}`,
+      `Title: ${truncate(log.title || log.sourceFilename || '-', 80)}`,
+      `Model: ${log.model || '-'}`,
+    ].join('\n')),
+  ].join('\n\n');
+}
+
+function formatAiNoVisitSites(limit) {
+  const items = listQuizzesForAdmin()
+    .filter((quiz) => isAiGeneratedQuiz(quiz) && Number(quiz.deviceCount || 0) === 0)
+    .slice(0, limit);
+
+  if (!items.length) {
+    return 'No AI sites without visits.';
+  }
+
+  return [
+    `AI sites without visits: ${items.length}`,
+    '',
+    ...items.map((quiz) => [
+      `${quiz.id}. ${quiz.title || `Site ${quiz.id}`}`,
+      `Created: ${formatDateTime(quiz.createdAt)}`,
+      `Browser ID: ${quiz.creatorSnapshot?.browserId || '-'}`,
+      `Slug: ${quiz.slug}`,
+    ].join('\n')),
+  ].join('\n\n');
+}
+
+function formatAiBans(limit) {
+  const entries = listAiDeviceBans(limit);
+  if (!entries.length) {
+    return 'No AI device bans.';
+  }
+
+  return [
+    `AI device bans: ${entries.length}`,
+    '',
+    ...entries.map((entry, index) => `${index + 1}. ${entry.browserId} | ${formatDateTime(entry.createdAt)} | ${entry.reason || 'no reason'}`),
+  ].join('\n');
+}
+
+function formatAiBanEntry(entry, header) {
+  if (!entry) {
+    return `${header}\nBrowser ID: -`;
+  }
+
+  return [
+    header,
+    `Browser ID: ${entry.browserId}`,
+    `Created: ${formatDateTime(entry.createdAt)}`,
+    `Reason: ${entry.reason || '-'}`,
   ].join('\n');
 }
 
@@ -1446,7 +1658,17 @@ function matchesQuizFilters(quiz, filters) {
     }
   }
 
+  if (filters.ai !== null && isAiGeneratedQuiz(quiz) !== Boolean(filters.ai)) {
+    return false;
+  }
+
   const deviceCount = Number(quiz.deviceCount || 0);
+  if (filters.visited !== null) {
+    const visited = deviceCount > 0;
+    if (visited !== Boolean(filters.visited)) {
+      return false;
+    }
+  }
   if (filters.minDevices !== null && deviceCount < filters.minDevices) {
     return false;
   }
@@ -1490,7 +1712,11 @@ function describeQuizPublicStatus(quiz) {
 }
 
 function isAiGeneratedQuiz(quiz) {
-  return String(quiz?.rawModelJson?.answerMode || '') === 'openai-double-check';
+  const raw = quiz?.rawModelJson || {};
+  return String(raw.answerMode || '') === 'openai-double-check'
+    || Boolean(raw.aiPrimaryModel)
+    || Boolean(raw.aiCheckModel)
+    || Boolean(raw.aiAnswerKeyText);
 }
 
 function isExpiredQuiz(quiz) {
@@ -1503,6 +1729,8 @@ function summarizeFilters(filters) {
     filters.type ? `type=${filters.type}` : null,
     filters.tg ? `tg=${filters.tg}` : null,
     filters.query ? `q=${filters.query}` : null,
+    filters.ai !== null ? `ai=${filters.ai ? 'yes' : 'no'}` : null,
+    filters.visited !== null ? `visited=${filters.visited ? 'yes' : 'no'}` : null,
     filters.minDevices !== null ? `min_devices=${filters.minDevices}` : null,
     filters.maxDevices !== null ? `max_devices=${filters.maxDevices}` : null,
     filters.status !== 'all' ? `status=${filters.status}` : null,

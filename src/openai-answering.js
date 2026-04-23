@@ -6,6 +6,7 @@ export async function solveQuizAnswersWithAI({
   filename,
   questions,
   optionCount,
+  requestContext = null,
   onProgress = null,
 }) {
   if (String(process.env.USE_MOCK_AI || '0') === '1') {
@@ -77,6 +78,7 @@ export async function solveQuizAnswersWithAI({
       apiKey,
       model: primaryModel,
       passType: 'primary',
+      requestContext,
       reasoningEffort: resolveReasoningEffort('primary'),
       prompt: primaryPrompt,
       expectedQuestionNumbers: questionNumbers,
@@ -98,6 +100,7 @@ export async function solveQuizAnswersWithAI({
       apiKey,
       model: checkModel,
       passType: 'check',
+      requestContext,
       reasoningEffort: resolveReasoningEffort('check'),
       prompt: checkPrompt,
       expectedQuestionNumbers: questionNumbers,
@@ -197,6 +200,7 @@ async function createOpenAIAnswersResponse({
   apiKey,
   model,
   passType,
+  requestContext,
   reasoningEffort,
   prompt,
   expectedQuestionNumbers,
@@ -215,6 +219,12 @@ async function createOpenAIAnswersResponse({
     reserveAiRequestSlot({
       requestKind: passType || 'answers',
       model,
+      title: requestContext?.title || null,
+      sourceFilename: requestContext?.sourceFilename || null,
+      browserId: requestContext?.browserId || null,
+      fingerprint: requestContext?.fingerprint || null,
+      requestIp: requestContext?.requestIp || null,
+      requestUserAgent: requestContext?.requestUserAgent || null,
     });
 
     const response = await fetch(OPENAI_API_URL, {

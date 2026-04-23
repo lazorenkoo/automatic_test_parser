@@ -11,6 +11,7 @@ import {
   createQuizDraft,
   deleteQuizById,
   finalizeQuizFromDraftReservation,
+  getAiDeviceBan,
   getAiRuntimeSettings,
   getAiUsageStats,
   getDbMeta,
@@ -23,6 +24,7 @@ import {
   listQuizReports,
   listUploadReports,
   recordQuizVisit,
+  recordAiRequestUsage,
   releaseReservation,
   reserveAccessCode,
   reserveInternalAiAccessCode,
@@ -35,7 +37,7 @@ import {
   SUPPORTED_UPLOAD_EXTENSIONS,
 } from './src/parser.js';
 import { solveQuizAnswersWithAI } from './src/openai-answering.js';
-import { startTelegramBot } from './src/telegram-bot.js';
+import { sendAdminTelegramLog, startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
 import {
   buildAbsoluteUrl,
@@ -208,6 +210,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
 ]), async (req, res, next) => {
   const sourceFile = req.files?.sourceFile?.[0] || req.files?.pdf?.[0] || null;
   const clientTitle = sanitizeText(req.body.clientTitle || '');
+  const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
   const accessCode = String(req.body.accessCode || '').trim();
   const optionCount = Number(req.body.optionCount);
   const questionMode = String(req.body.questionMode || 'manual');
@@ -243,6 +246,26 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
     if (!aiSettings.enabled) {
       return res.status(403).json({ error: 'AI is disabled by admin.' });
     }
+    const bannedDevice = creatorSnapshot.browserId ? getAiDeviceBan(creatorSnapshot.browserId) : null;
+    if (bannedDevice) {
+      recordAiRequestUsage({
+        requestKind: 'prepare-blocked',
+        status: 'blocked',
+        title: clientTitle,
+        sourceFilename: originalFilename,
+        browserId: creatorSnapshot.browserId || null,
+        fingerprint: creatorSnapshot.fingerprint || null,
+        requestIp: creatorSnapshot.request?.ip || null,
+        requestUserAgent: creatorSnapshot.request?.userAgent || null,
+      });
+      await sendAdminTelegramLog(buildAiBlockedLogMessage({
+        title: clientTitle,
+        originalFilename,
+        creatorSnapshot,
+        reason: bannedDevice.reason || 'device banned',
+      }));
+      return res.status(403).json({ error: 'This device is banned from AI.' });
+    }
 
     let code = null;
     if (aiSettings.requireCode) {
@@ -274,9 +297,11 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       optionCount,
       code,
       aiRequireCode: aiSettings.requireCode,
+      creatorSnapshot,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
     });
     aiPrepareJobs.set(job.id, job);
+    await sendAdminTelegramLog(buildAiStartLogMessage(job));
     runAiPrepareJob(job).catch((error) => {
       markAiPrepareJobFailed(job, error);
     });
@@ -340,6 +365,7 @@ function createAiPrepareJob({
   optionCount,
   code,
   aiRequireCode,
+  creatorSnapshot,
   adminContactTg,
 }) {
   return {
@@ -359,6 +385,7 @@ function createAiPrepareJob({
     optionCount,
     code,
     aiRequireCode: Boolean(aiRequireCode),
+    creatorSnapshot: creatorSnapshot || {},
     adminContactTg,
     result: null,
     errorMessage: '',
@@ -398,6 +425,14 @@ async function runAiPrepareJob(job) {
     filename: job.originalFilename,
     questions: parsedQuiz.questions,
     optionCount: job.optionCount,
+    requestContext: {
+      title: job.clientTitle,
+      sourceFilename: job.originalFilename,
+      browserId: job.creatorSnapshot?.browserId || null,
+      fingerprint: job.creatorSnapshot?.fingerprint || null,
+      requestIp: job.creatorSnapshot?.request?.ip || null,
+      requestUserAgent: job.creatorSnapshot?.request?.userAgent || null,
+    },
     onProgress: (progress) => {
       const aiPercent = 15 + Math.round((Math.max(0, Math.min(100, progress.percent)) / 100) * 80);
       updateAiPrepareJob(job, {
@@ -497,6 +532,30 @@ function buildAiProgressMessage(progress) {
   }
 
   return 'AI обробляє питання.';
+}
+
+function buildAiStartLogMessage(job) {
+  const browserId = job.creatorSnapshot?.browserId || '-';
+  const ip = job.creatorSnapshot?.request?.ip || '-';
+  return [
+    'AI request started',
+    `Title: ${job.clientTitle}`,
+    `File: ${job.originalFilename}`,
+    `Browser ID: ${browserId}`,
+    `IP: ${ip}`,
+    `Code required: ${job.aiRequireCode ? 'yes' : 'no'}`,
+  ].join('\n');
+}
+
+function buildAiBlockedLogMessage({ title, originalFilename, creatorSnapshot, reason }) {
+  return [
+    'AI request blocked',
+    `Title: ${title || '-'}`,
+    `File: ${originalFilename || '-'}`,
+    `Browser ID: ${creatorSnapshot?.browserId || '-'}`,
+    `IP: ${creatorSnapshot?.request?.ip || '-'}`,
+    `Reason: ${reason || 'blocked'}`,
+  ].join('\n');
 }
 
 app.post('/api/ai-quizzes/inspect', upload.fields([
@@ -1226,6 +1285,14 @@ function sanitizeCreatorRequestSnapshot(req) {
 }
 
 function sanitizeCreatorClientProfile(rawProfile) {
+  if (typeof rawProfile === 'string') {
+    try {
+      return sanitizeCreatorClientProfile(JSON.parse(rawProfile));
+    } catch {
+      return {};
+    }
+  }
+
   if (!rawProfile || typeof rawProfile !== 'object' || Array.isArray(rawProfile)) {
     return {};
   }

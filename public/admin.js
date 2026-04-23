@@ -151,6 +151,7 @@ async function prepareAiQuiz() {
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', String(optionCountInput.value || 5));
     formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
+    formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
     if (!useAllQuestionsInput.checked) {
       formData.append('questionLimit', String(questionLimitInput.value || ''));
     }
@@ -284,6 +285,7 @@ async function finalizeAiDraft() {
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', String(optionCountInput.value || 5));
     formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
+    formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
     if (requiresCode && validatedAccessCode) {
       formData.append('accessCode', validatedAccessCode);
     }

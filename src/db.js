@@ -132,6 +132,12 @@ db.exec(`
     status TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS ai_device_bans (
+    browser_id TEXT PRIMARY KEY,
+    reason TEXT,
+    created_at INTEGER NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quizzes_slug ON quizzes(slug);
   CREATE INDEX IF NOT EXISTS idx_access_codes_reservation_token ON access_codes(reservation_token);
   CREATE INDEX IF NOT EXISTS idx_quiz_drafts_token ON quiz_drafts(draft_token);
@@ -162,6 +168,12 @@ ensureColumn('quiz_drafts', 'source_upload_path', 'TEXT');
 ensureColumn('quiz_drafts', 'source_upload_name', 'TEXT');
 ensureColumn('quiz_drafts', 'answer_upload_path', 'TEXT');
 ensureColumn('quiz_drafts', 'answer_upload_name', 'TEXT');
+ensureColumn('ai_request_logs', 'title', 'TEXT');
+ensureColumn('ai_request_logs', 'source_filename', 'TEXT');
+ensureColumn('ai_request_logs', 'browser_id', 'TEXT');
+ensureColumn('ai_request_logs', 'fingerprint', 'TEXT');
+ensureColumn('ai_request_logs', 'request_ip', 'TEXT');
+ensureColumn('ai_request_logs', 'request_user_agent', 'TEXT');
 
 const insertCodeStmt = db.prepare(`
   INSERT INTO access_codes (
@@ -305,8 +317,14 @@ const insertAiRequestLogStmt = db.prepare(`
     created_at,
     request_kind,
     model,
-    status
-  ) VALUES (?, ?, ?, ?)
+    status,
+    title,
+    source_filename,
+    browser_id,
+    fingerprint,
+    request_ip,
+    request_user_agent
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const countAiRequestsBetweenStmt = db.prepare(`
@@ -314,6 +332,60 @@ const countAiRequestsBetweenStmt = db.prepare(`
   FROM ai_request_logs
   WHERE created_at >= ?
     AND created_at < ?
+    AND status = 'sent'
+`);
+
+const listAiRequestLogsStmt = db.prepare(`
+  SELECT
+    id,
+    created_at AS createdAt,
+    request_kind AS requestKind,
+    model,
+    status,
+    title,
+    source_filename AS sourceFilename,
+    browser_id AS browserId,
+    fingerprint,
+    request_ip AS requestIp,
+    request_user_agent AS requestUserAgent
+  FROM ai_request_logs
+  ORDER BY created_at DESC
+  LIMIT ?
+`);
+
+const upsertAiDeviceBanStmt = db.prepare(`
+  INSERT INTO ai_device_bans (
+    browser_id,
+    reason,
+    created_at
+  ) VALUES (?, ?, ?)
+  ON CONFLICT(browser_id) DO UPDATE SET
+    reason = excluded.reason,
+    created_at = excluded.created_at
+`);
+
+const getAiDeviceBanStmt = db.prepare(`
+  SELECT
+    browser_id AS browserId,
+    reason,
+    created_at AS createdAt
+  FROM ai_device_bans
+  WHERE browser_id = ?
+`);
+
+const deleteAiDeviceBanStmt = db.prepare(`
+  DELETE FROM ai_device_bans
+  WHERE browser_id = ?
+`);
+
+const listAiDeviceBansStmt = db.prepare(`
+  SELECT
+    browser_id AS browserId,
+    reason,
+    created_at AS createdAt
+  FROM ai_device_bans
+  ORDER BY created_at DESC
+  LIMIT ?
 `);
 
 const insertQuizStmt = db.prepare(`
@@ -681,18 +753,45 @@ export function getAiUsageStats(now = nowMs()) {
   };
 }
 
-export function recordAiRequestUsage({ requestKind = 'answers', model = null, status = 'sent', now = nowMs() } = {}) {
+export function recordAiRequestUsage({
+  requestKind = 'answers',
+  model = null,
+  status = 'sent',
+  title = null,
+  sourceFilename = null,
+  browserId = null,
+  fingerprint = null,
+  requestIp = null,
+  requestUserAgent = null,
+  now = nowMs(),
+} = {}) {
   insertAiRequestLogStmt.run(
     now,
     sanitizeNullableValue(requestKind) || 'answers',
     sanitizeNullableValue(model),
     sanitizeNullableValue(status) || 'sent',
+    sanitizeNullableValue(title),
+    sanitizeNullableValue(sourceFilename),
+    sanitizeNullableValue(browserId),
+    sanitizeNullableValue(fingerprint),
+    sanitizeNullableValue(requestIp),
+    sanitizeNullableValue(requestUserAgent),
   );
 
   return getAiUsageStats(now);
 }
 
-export function reserveAiRequestSlot({ requestKind = 'answers', model = null, now = nowMs() } = {}) {
+export function reserveAiRequestSlot({
+  requestKind = 'answers',
+  model = null,
+  title = null,
+  sourceFilename = null,
+  browserId = null,
+  fingerprint = null,
+  requestIp = null,
+  requestUserAgent = null,
+  now = nowMs(),
+} = {}) {
   const tx = createTransaction(() => {
     const settings = getAiRuntimeSettings();
     if (!settings.enabled) {
@@ -715,6 +814,12 @@ export function reserveAiRequestSlot({ requestKind = 'answers', model = null, no
       sanitizeNullableValue(requestKind) || 'answers',
       sanitizeNullableValue(model),
       'sent',
+      sanitizeNullableValue(title),
+      sanitizeNullableValue(sourceFilename),
+      sanitizeNullableValue(browserId),
+      sanitizeNullableValue(fingerprint),
+      sanitizeNullableValue(requestIp),
+      sanitizeNullableValue(requestUserAgent),
     );
 
     return {
@@ -726,6 +831,71 @@ export function reserveAiRequestSlot({ requestKind = 'answers', model = null, no
   });
 
   return tx();
+}
+
+export function listAiRequestLogs(limit = 20) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  return listAiRequestLogsStmt.all(safeLimit).map((row) => ({
+    id: Number(row.id),
+    createdAt: Number(row.createdAt || 0),
+    requestKind: row.requestKind || '',
+    model: row.model || null,
+    status: row.status || '',
+    title: row.title || null,
+    sourceFilename: row.sourceFilename || null,
+    browserId: row.browserId || null,
+    fingerprint: row.fingerprint || null,
+    requestIp: row.requestIp || null,
+    requestUserAgent: row.requestUserAgent || null,
+  }));
+}
+
+export function banAiDevice(browserId, reason = null) {
+  const normalized = sanitizeNullableValue(browserId);
+  if (!normalized) {
+    return null;
+  }
+
+  const createdAt = nowMs();
+  upsertAiDeviceBanStmt.run(normalized, sanitizeNullableValue(reason), createdAt);
+  return getAiDeviceBan(normalized);
+}
+
+export function unbanAiDevice(browserId) {
+  const normalized = sanitizeNullableValue(browserId);
+  if (!normalized) {
+    return false;
+  }
+
+  const result = deleteAiDeviceBanStmt.run(normalized);
+  return Number(result.changes || 0) > 0;
+}
+
+export function getAiDeviceBan(browserId) {
+  const normalized = sanitizeNullableValue(browserId);
+  if (!normalized) {
+    return null;
+  }
+
+  const row = getAiDeviceBanStmt.get(normalized);
+  return row ? {
+    browserId: row.browserId,
+    reason: row.reason || null,
+    createdAt: Number(row.createdAt || 0),
+  } : null;
+}
+
+export function isAiDeviceBanned(browserId) {
+  return Boolean(getAiDeviceBan(browserId));
+}
+
+export function listAiDeviceBans(limit = 20) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  return listAiDeviceBansStmt.all(safeLimit).map((row) => ({
+    browserId: row.browserId,
+    reason: row.reason || null,
+    createdAt: Number(row.createdAt || 0),
+  }));
 }
 
 export function createAccessCodes(count = 1, label = null, metadata = {}) {
