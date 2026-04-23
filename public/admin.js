@@ -468,30 +468,15 @@ function renderDraftResult(payload) {
 function renderAiCodeGate(payload) {
   resultBox.classList.remove('hidden');
 
-  const adminContact = String(payload.adminContactTg || '').trim();
-  const adminContactHtml = adminContact
-    ? `<p class="admin-contact">Contact: <strong>${escapeHtml(adminContact)}</strong></p>`
-    : '';
-  const parsedCount = Number(payload.parsedCount || 0);
-  const parsedCountHtml = parsedCount > 0
-    ? `<p>Parser found: <strong>${escapeHtml(String(parsedCount))}</strong></p>`
-    : '';
   const requiresCode = Boolean(payload.aiRequireCode);
-  const limitHtml = payload.aiDailyLimit > 0
-    ? `<p>AI today: <strong>${escapeHtml(String(payload.aiUsedToday || 0))}/${escapeHtml(String(payload.aiDailyLimit))}</strong></p>`
-    : `<p>AI today: <strong>${escapeHtml(String(payload.aiUsedToday || 0))}</strong></p>`;
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
-    ${parsedCountHtml}
-    ${limitHtml}
-    ${adminContactHtml}
     <div class="activation-box">
-      <p class="activation-text">${requiresCode ? 'Access code:' : 'AI is ready to start.'}</p>
       <div style="margin-top:12px; display:grid; gap:10px;">
         ${requiresCode ? '<input id="aiAccessCodeInput" type="text" placeholder="Access code" autocomplete="off" />' : ''}
         ${requiresCode ? '<button id="aiCheckCodeBtn" class="secondary-btn" type="button">Check code</button>' : ''}
-        <p id="aiCodeMessage" style="margin:0; line-height:1.5;"></p>
+        ${requiresCode ? '<p id="aiCodeMessage" style="margin:0; line-height:1.5;"></p>' : ''}
         <button id="aiFinalizeBtn" class="primary-btn ${requiresCode ? 'hidden' : ''}" type="button">Send</button>
       </div>
     </div>
@@ -519,10 +504,6 @@ function renderAiCodeGate(payload) {
       validateAiAccessCode();
     }
   });
-  const messageBox = document.getElementById('aiCodeMessage');
-  if (messageBox && !requiresCode) {
-    messageBox.textContent = 'Access code is not required. You can start AI immediately.';
-  }
   checkBtn?.addEventListener('click', validateAiAccessCode);
   sendBtn?.addEventListener('click', finalizeAiDraft);
 }
