@@ -10,6 +10,7 @@ import {
   getQuizById,
   getQuizReportById,
   getUploadReportById,
+  inspectAccessCode,
   listQuizReports,
   listUploadReports,
   listQuizzesForAdmin,
@@ -43,6 +44,7 @@ export function startTelegramBot() {
     '/reusecode <type> <questions> [price] <tg_user> [label]',
     '/codes <count> <type> <questions> [price] <tg_user> [label]',
     '/delcode <CODE>',
+    '/checkcode <CODE>',
     '/sites [page] [type=1] [tg=@user] [q=text] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
     '/search <text>',
     '/site <id>',
@@ -65,6 +67,7 @@ export function startTelegramBot() {
     { command: 'reusecode', description: 'Create reusable code' },
     { command: 'codes', description: 'Create many codes' },
     { command: 'delcode', description: 'Disable a code' },
+    { command: 'checkcode', description: 'Check code status' },
     { command: 'sites', description: 'List quiz sites' },
     { command: 'search', description: 'Search quiz sites' },
     { command: 'site', description: 'Show site details' },
@@ -204,6 +207,26 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, result.alreadyRevoked ? 'Code was already disabled.' : 'Code disabled.');
+  });
+
+  bot.onText(/^\/checkcode(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const code = String(match?.[1] || '').trim();
+    if (!code) {
+      await bot.sendMessage(msg.chat.id, 'Format: /checkcode <CODE>');
+      return;
+    }
+
+    const result = inspectAccessCode(code);
+    if (!result) {
+      await bot.sendMessage(msg.chat.id, 'Code not found or already revoked.');
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, formatAccessCodeStatus(code, result));
   });
 
   bot.onText(/^\/sites(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -1083,6 +1106,22 @@ function formatSiteDetails(quiz) {
     devices.length
       ? devices.slice(0, 10).map((device, index) => `${index + 1}. ${maskDeviceId(device.deviceId)} | ${formatDateTime(device.lastSeenAt)} | ${device.lastIp || 'IP ?'}`).join('\n')
       : 'No visits yet.',
+  ].join('\n');
+}
+
+function formatAccessCodeStatus(code, result) {
+  const linkedQuiz = result.usedByQuizId ? getQuizById(result.usedByQuizId) : null;
+
+  return [
+    `Code: ${String(code || '').trim()}`,
+    `Status: ${result.usedAt ? 'used' : 'not used'}`,
+    `Reusable: ${result.isReusable ? 'yes' : 'no'}`,
+    `Type: ${result.siteType || '-'}${result.siteType ? ` (${result.siteType === '2' ? 'group' : 'single'})` : ''}`,
+    `Questions: ${result.expectedQuestionCount || '-'}`,
+    `TG: ${result.clientTgUsername || '-'}`,
+    `Price: ${formatPrice(result.price)}`,
+    `Used at: ${formatDateTime(result.usedAt)}`,
+    `Site: ${linkedQuiz ? `${linkedQuiz.id} (${linkedQuiz.slug})` : (result.usedByQuizId || '-')}`,
   ].join('\n');
 }
 
