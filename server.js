@@ -17,6 +17,7 @@ import {
   getAiRuntimeSettings,
   getAiUsageStats,
   getDbMeta,
+  getHomepageNotice,
   inspectAccessCode,
   inspectQuizDraft,
   getQuizById,
@@ -97,6 +98,14 @@ app.get('/health', (_req, res) => {
     quizPublicTtlDays: formatQuizTtlDays(getDbMeta().quizPublicTtlMs),
     supportedFileTypes: SUPPORTED_UPLOAD_EXTENSIONS,
     supportedAnswerFileTypes: SUPPORTED_ANSWER_EXTENSIONS,
+  });
+});
+
+app.get('/api/site-notice', (_req, res) => {
+  const notice = getHomepageNotice();
+  return res.json({
+    message: notice.message,
+    updatedAt: notice.updatedAt,
   });
 });
 

@@ -18,6 +18,9 @@ const singleAnswerField = document.getElementById('singleAnswerField');
 const answerFileField = document.getElementById('answerFileField');
 const aiCreateBtn = document.getElementById('aiCreateBtn');
 const reportIssueBtn = document.getElementById('reportIssueBtn');
+const siteNoticeCard = document.getElementById('siteNoticeCard');
+const siteNoticeText = document.getElementById('siteNoticeText');
+const siteNoticeTime = document.getElementById('siteNoticeTime');
 
 let currentDraftToken = '';
 let currentDraftPayload = null;
@@ -25,6 +28,7 @@ let validatedAccessCode = '';
 let validatedCodePayload = null;
 let currentAiJobId = '';
 
+loadSiteNotice();
 syncOptionCountMode();
 syncAnswerIndexOptions();
 syncQuestionLimitMode();
@@ -123,6 +127,50 @@ function clearResultState() {
   currentAiJobId = '';
   resultBox.classList.add('hidden');
   resultBox.innerHTML = '';
+}
+
+async function loadSiteNotice() {
+  if (!siteNoticeCard || !siteNoticeText || !siteNoticeTime) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/site-notice');
+    const payload = await readJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(payload.error || 'Failed to load site notice.');
+    }
+
+    const message = String(payload.message || '').trim();
+    const updatedAt = Number(payload.updatedAt || 0);
+
+    if (!message) {
+      siteNoticeCard.classList.add('hidden');
+      siteNoticeText.textContent = '';
+      siteNoticeTime.textContent = '';
+      return;
+    }
+
+    siteNoticeText.textContent = message;
+    siteNoticeTime.textContent = updatedAt > 0 ? formatNoticeDateTime(updatedAt) : '';
+    siteNoticeCard.classList.remove('hidden');
+  } catch (_error) {
+    siteNoticeCard.classList.add('hidden');
+  }
+}
+
+function formatNoticeDateTime(timestamp) {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(timestamp));
+  } catch {
+    return new Date(timestamp).toLocaleString();
+  }
 }
 
 function syncReportButtonVisibility() {

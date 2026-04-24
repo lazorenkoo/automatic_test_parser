@@ -822,6 +822,35 @@ export function updateAiRuntimeSettings(patch = {}) {
   return next;
 }
 
+export function getHomepageNotice() {
+  const textRow = getAppSettingStmt.get('site.notice_text');
+  const updatedAtRow = getAppSettingStmt.get('site.notice_updated_at');
+  const message = sanitizeNullableValue(textRow?.value);
+  const updatedAt = updatedAtRow?.value ? Number(updatedAtRow.value) : null;
+
+  return {
+    message,
+    updatedAt: Number.isInteger(updatedAt) && updatedAt > 0 ? updatedAt : null,
+  };
+}
+
+export function updateHomepageNotice(message) {
+  const normalizedMessage = sanitizeNullableValue(message);
+  const updatedAt = nowMs();
+
+  upsertAppSettingStmt.run('site.notice_text', normalizedMessage || '', updatedAt);
+  upsertAppSettingStmt.run('site.notice_updated_at', String(updatedAt), updatedAt);
+
+  return {
+    message: normalizedMessage,
+    updatedAt,
+  };
+}
+
+export function clearHomepageNotice() {
+  return updateHomepageNotice('');
+}
+
 export function getAiUsageStats(now = nowMs()) {
   const range = getLocalDayRange(now);
   const row = countAiRequestsBetweenStmt.get(range.start, range.end) || {};

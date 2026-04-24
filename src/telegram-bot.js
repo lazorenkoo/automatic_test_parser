@@ -11,6 +11,7 @@ import {
   getAiUsageStats,
   getAccountingSummary,
   getDbMeta,
+  getHomepageNotice,
   getQuizById,
   getQuizQuestionStatsByRange,
   getQuizReportById,
@@ -25,6 +26,8 @@ import {
   topUpAccessCode,
   setQuizBanStatusById,
   unbanAiDevice,
+  clearHomepageNotice,
+  updateHomepageNotice,
   updateAiRuntimeSettings,
 } from './db.js';
 
@@ -56,6 +59,8 @@ export function startTelegramBot() {
     '/addcode <CODE> <questions>',
     '/delcode <CODE>',
     '/checkcode <CODE>',
+    '/notice <text>',
+    '/clearnotice',
     '/ai',
     '/aimode <single|double>',
     '/aicode <on|off>',
@@ -90,6 +95,8 @@ export function startTelegramBot() {
     { command: 'addcode', description: 'Top up code balance' },
     { command: 'delcode', description: 'Disable a code' },
     { command: 'checkcode', description: 'Check code status' },
+    { command: 'notice', description: 'Set homepage notice' },
+    { command: 'clearnotice', description: 'Clear homepage notice' },
     { command: 'ai', description: 'Show AI status' },
     { command: 'aimode', description: 'Set AI mode single/double' },
     { command: 'aicode', description: 'Require code for AI on/off' },
@@ -289,6 +296,36 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, formatAccessCodeStatus(code, result));
+  });
+
+  bot.onText(/^\/notice(?:@[\w_]+)?(?:\s+([\s\S]+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const text = String(match?.[1] || '').trim();
+    if (!text) {
+      const current = getHomepageNotice();
+      if (!current.message) {
+        await bot.sendMessage(msg.chat.id, 'Homepage notice is empty.\nFormat: /notice <text>');
+        return;
+      }
+
+      await bot.sendMessage(msg.chat.id, formatHomepageNotice(current, 'Current homepage notice:'));
+      return;
+    }
+
+    const updated = updateHomepageNotice(text);
+    await bot.sendMessage(msg.chat.id, formatHomepageNotice(updated, 'Homepage notice updated:'));
+  });
+
+  bot.onText(/^\/clearnotice(?:@[\w_]+)?$/i, async (msg) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    clearHomepageNotice();
+    await bot.sendMessage(msg.chat.id, 'Homepage notice cleared.');
   });
 
   bot.onText(/^\/ai(?:@[\w_]+)?$/i, async (msg) => {
@@ -1558,6 +1595,15 @@ function formatAccessCodeStatus(code, result) {
     `Price: ${formatPrice(result.price)}`,
     `Used at: ${formatDateTime(result.usedAt)}`,
     `Site: ${linkedQuiz ? `${linkedQuiz.id} (${linkedQuiz.slug})` : (result.usedByQuizId || '-')}`,
+  ].join('\n');
+}
+
+function formatHomepageNotice(notice, header = 'Homepage notice:') {
+  return [
+    header,
+    `Updated: ${formatDateTime(notice?.updatedAt)}`,
+    '',
+    String(notice?.message || '').trim() || '-',
   ].join('\n');
 }
 
