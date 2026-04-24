@@ -8,6 +8,7 @@ import {
   createUploadReport,
   createQuizReport,
   createAccessCodes,
+  consumeAccessCodeQuestions,
   createQuizDraft,
   deleteQuizById,
   finalizeQuizFromDraftReservation,
@@ -26,6 +27,7 @@ import {
   listUploadReports,
   recordQuizVisit,
   recordAiRequestUsage,
+  refundAccessCodeQuestions,
   releaseReservation,
   reserveAccessCode,
   reserveInternalAiAccessCode,
@@ -314,10 +316,10 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       if (!code) {
         return res.status(404).json({ error: 'Code not found or already revoked.' });
       }
-
-      if (!code.isReusable && code.usedAt) {
-        return res.status(409).json({ error: 'This code has already been used.' });
-      }
+      code = {
+        ...code,
+        plainCode: accessCode,
+      };
     }
 
     if (aiUsage.dailyLimit > 0 && aiUsage.usedToday >= aiUsage.dailyLimit) {
@@ -344,6 +346,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       questionMode,
       questionLimit,
       optionCount,
+      aiMode: aiSettings.mode,
       code,
       aiRequireCode: aiSettings.requireCode,
       creatorSnapshot,
@@ -359,6 +362,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       status: job.status,
       progressPercent: job.progressPercent,
       message: job.message,
+      aiMode: aiSettings.mode,
       aiRequireCode: aiSettings.requireCode,
       aiDailyLimit: aiUsage.dailyLimit,
       aiUsedToday: aiUsage.usedToday,
@@ -412,6 +416,7 @@ function createAiPrepareJob({
   questionMode,
   questionLimit,
   optionCount,
+  aiMode,
   code,
   aiRequireCode,
   creatorSnapshot,
@@ -433,10 +438,12 @@ function createAiPrepareJob({
     questionMode,
     questionLimit,
     optionCount,
+    aiMode: String(aiMode || '').trim().toLowerCase() === 'single' ? 'single' : 'double',
     code,
     aiRequireCode: Boolean(aiRequireCode),
     creatorSnapshot: creatorSnapshot || {},
     adminContactTg,
+    codeConsumption: null,
     result: null,
     errorMessage: '',
     errorStatusCode: 500,
@@ -460,10 +467,20 @@ async function runAiPrepareJob(job) {
     answerKey: null,
   });
 
-  if (job.code?.expectedQuestionCount && parsedQuiz.questions.length > job.code.expectedQuestionCount) {
-    const error = new Error(`This code supports up to ${job.code.expectedQuestionCount} questions, but ${parsedQuiz.questions.length} were found.`);
+  if (job.code?.remainingQuestionCount != null && parsedQuiz.questions.length > job.code.remainingQuestionCount) {
+    const error = new Error(`This code has ${job.code.remainingQuestionCount} questions left, but ${parsedQuiz.questions.length} were found.`);
     error.statusCode = 422;
     throw error;
+  }
+
+  if (job.aiRequireCode && job.code?.plainCode) {
+    const consumedCode = consumeAccessCodeQuestions(job.code.plainCode, parsedQuiz.questions.length);
+    if (!consumedCode) {
+      const error = new Error(`This code does not have enough questions left for ${parsedQuiz.questions.length} questions.`);
+      error.statusCode = 422;
+      throw error;
+    }
+    job.codeConsumption = consumedCode;
   }
 
   updateAiPrepareJob(job, {
@@ -475,6 +492,7 @@ async function runAiPrepareJob(job) {
     filename: job.originalFilename,
     questions: parsedQuiz.questions,
     optionCount: job.optionCount,
+    mode: job.aiMode,
     requestContext: {
       title: job.clientTitle,
       sourceFilename: job.originalFilename,
@@ -515,12 +533,14 @@ async function runAiPrepareJob(job) {
     reviewBlocks: parsedQuiz.reviewBlocks,
     rawModelJson: {
       ...parsedQuiz.rawModelJson,
-      answerMode: 'openai-double-check',
+      answerMode: solved.mode === 'single' ? 'openai-single-review' : 'openai-double-check',
+      aiMode: solved.mode,
       aiRequireCode: job.aiRequireCode,
       aiPrimaryModel: solved.primaryModel,
       aiCheckModel: solved.checkModel,
       aiAnswerKeyText: solved.answerKeyText,
       aiDisagreements: solved.disagreements,
+      aiSuspiciousQuestions: solved.suspiciousQuestions,
     },
     sourceUploadPath: savedUploads.sourceUploadPath,
     sourceUploadName: savedUploads.sourceUploadName,
@@ -538,9 +558,11 @@ async function runAiPrepareJob(job) {
       parsedCount: solved.questions.length,
       requestedCount,
       adminContactTg: job.adminContactTg,
+      aiMode: solved.mode,
       aiPrimaryModel: solved.primaryModel,
       aiCheckModel: solved.checkModel,
       aiDisagreements: solved.disagreements,
+      aiSuspiciousQuestions: solved.suspiciousQuestions,
       aiAnswerKeyPreview: solved.answerKeyText.split('\n').slice(0, 10),
     },
   });
@@ -553,6 +575,11 @@ function updateAiPrepareJob(job, patch) {
 }
 
 function markAiPrepareJobFailed(job, error) {
+  if (job.codeConsumption?.codeId && job.codeConsumption?.consumedQuestions) {
+    refundAccessCodeQuestions(job.codeConsumption.codeId, job.codeConsumption.consumedQuestions);
+    job.codeConsumption = null;
+  }
+
   updateAiPrepareJob(job, {
     status: 'failed',
     progressPercent: Math.max(0, Number(job.progressPercent) || 0),
@@ -646,6 +673,7 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
       requestedCount: questionMode === 'all' ? parsedQuiz.questions.length : questionLimit,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
       notes: parsedQuiz.notes,
+      aiMode: aiSettings.mode,
       aiRequireCode: aiSettings.requireCode,
       aiEnabled: aiSettings.enabled,
       aiDailyLimit: aiUsage.dailyLimit,
@@ -675,13 +703,9 @@ app.post('/api/access-codes/check', (req, res) => {
     return res.status(404).json({ error: 'Code not found or already revoked.' });
   }
 
-  if (!code.isReusable && code.usedAt) {
-    return res.status(409).json({ error: 'This code has already been used.' });
-  }
-
-  if (hasParsedCount && code.expectedQuestionCount && parsedCount > code.expectedQuestionCount) {
+  if (hasParsedCount && code.remainingQuestionCount != null && parsedCount > code.remainingQuestionCount) {
     return res.status(422).json({
-      error: `This code supports up to ${code.expectedQuestionCount} questions, but ${parsedCount} were found.`,
+      error: `This code has ${code.remainingQuestionCount} questions left, but ${parsedCount} were found.`,
     });
   }
 
@@ -692,9 +716,11 @@ app.post('/api/access-codes/check', (req, res) => {
     siteTypeLabel: formatSiteType(code.siteType),
     clientTgUsername: code.clientTgUsername,
     expectedQuestionCount: code.expectedQuestionCount,
+    remainingQuestionCount: code.remainingQuestionCount,
+    consumedQuestionCount: code.consumedQuestionCount,
     price: code.price,
     isReusable: code.isReusable,
-    fitsParsedCount: !hasParsedCount || !code.expectedQuestionCount || parsedCount <= code.expectedQuestionCount,
+    fitsParsedCount: !hasParsedCount || code.remainingQuestionCount == null || parsedCount <= code.remainingQuestionCount,
   });
 });
 
@@ -708,18 +734,11 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
   }
 
   const draft = inspectQuizDraft(draftToken);
-  const isAiDraft = String(draft?.rawModel?.answerMode || '') === 'openai-double-check';
-  const requiresExplicitCode = isAiDraft && Boolean(draft?.rawModel?.aiRequireCode);
-  const accessCode = isAiDraft
-    ? (requiresExplicitCode ? providedAccessCode : '')
-    : resolveFinalizeAccessCode(providedAccessCode);
-
-  if (requiresExplicitCode && !accessCode) {
-    return res.status(400).json({ error: 'Enter an access code.' });
-  }
-
-  const reservation = requiresExplicitCode
-    ? reserveAccessCode(accessCode)
+  const isAiDraft = Boolean(draft?.rawModel?.aiPrimaryModel)
+    || String(draft?.rawModel?.answerMode || '').startsWith('openai-');
+  const accessCode = isAiDraft ? '' : resolveFinalizeAccessCode(providedAccessCode);
+  const reservation = isAiDraft
+    ? reserveInternalAiAccessCode()
     : reserveFinalizeAccess(accessCode);
   if (!reservation) {
     return res.status(403).json({ error: 'Код недійсний, уже використаний або зараз обробляється.' });
@@ -739,6 +758,8 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
       title: quiz.title,
       parsedCount: quiz.parsedCount,
       aiDisagreements: Array.isArray(quiz.rawModelJson?.aiDisagreements) ? quiz.rawModelJson.aiDisagreements : [],
+      aiSuspiciousQuestions: Array.isArray(quiz.rawModelJson?.aiSuspiciousQuestions) ? quiz.rawModelJson.aiSuspiciousQuestions : [],
+      aiMode: quiz.rawModelJson?.aiMode || null,
       quizUrl: buildAbsoluteUrl(req, `/quiz/${savedQuiz.slug}`),
       downloadUrl: buildAbsoluteUrl(req, `/api/download/${savedQuiz.slug}`),
       apiUrl: buildAbsoluteUrl(req, `/api/quizzes/${savedQuiz.slug}`),
@@ -783,6 +804,8 @@ app.get('/api/quizzes/:slug', (req, res) => {
     expiresAt: quiz.expiresAt,
     questions: quiz.questions,
     aiDisagreements: Array.isArray(quiz.rawModelJson?.aiDisagreements) ? quiz.rawModelJson.aiDisagreements : [],
+    aiSuspiciousQuestions: Array.isArray(quiz.rawModelJson?.aiSuspiciousQuestions) ? quiz.rawModelJson.aiSuspiciousQuestions : [],
+    aiMode: quiz.rawModelJson?.aiMode || null,
     siteType: quiz.siteType,
     siteTypeLabel: formatSiteType(quiz.siteType),
     clientTgUsername: quiz.clientTgUsername,
@@ -920,6 +943,7 @@ app.post('/api/admin/codes', requireAdminSecret, (req, res) => {
     siteType: req.body.siteType,
     clientTgUsername: req.body.clientTgUsername,
     expectedQuestionCount: req.body.expectedQuestionCount,
+    remainingQuestionCount: req.body.remainingQuestionCount,
     price: req.body.price,
   };
   const codes = createAccessCodes(count, label, metadata);

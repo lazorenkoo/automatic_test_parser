@@ -232,6 +232,7 @@ async function validateAiAccessCode() {
       },
       body: JSON.stringify({
         accessCode: code,
+        parsedCount: currentDraftPayload?.parsedCount || null,
       }),
     });
 
@@ -579,11 +580,16 @@ async function finalizeCurrentDraft(accessCode = '') {
 function renderFinalResult(payload) {
   resultBox.classList.remove('hidden');
   const disagreements = Array.isArray(payload.aiDisagreements) ? payload.aiDisagreements : [];
-  const disagreementHtml = disagreements.length
+  const suspiciousQuestions = Array.isArray(payload.aiSuspiciousQuestions) ? payload.aiSuspiciousQuestions : [];
+  const warningNumbers = Array.from(new Set([
+    ...disagreements.map((item) => String(item.questionNumber || '?')),
+    ...suspiciousQuestions.map((item) => String(item.questionNumber || '?')),
+  ]));
+  const disagreementHtml = warningNumbers.length
     ? `
       <div class="notes-box">
         <p><strong>Будь ласка, перевірте ще раз такі питання:</strong></p>
-        <p>${escapeHtml(disagreements.map((item) => String(item.questionNumber || '?')).join(', '))}</p>
+        <p>${escapeHtml(warningNumbers.join(', '))}</p>
       </div>
     `
     : '';

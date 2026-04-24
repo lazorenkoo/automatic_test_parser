@@ -6,6 +6,7 @@ export async function solveQuizAnswersWithAI({
   filename,
   questions,
   optionCount,
+  mode = 'double',
   requestContext = null,
   onProgress = null,
 }) {
@@ -26,6 +27,8 @@ export async function solveQuizAnswersWithAI({
 
   const primaryModel = String(process.env.OPENAI_PRIMARY_MODEL || 'gpt-5.4').trim();
   const checkModel = String(process.env.OPENAI_CHECK_MODEL || 'gpt-5.4-mini').trim();
+  const normalizedMode = String(mode || '').trim().toLowerCase() === 'single' ? 'single' : 'double';
+  const useChecker = normalizedMode === 'double';
 
   const compactQuestions = questions.map((question, index) => ({
     number: index + 1,
@@ -37,8 +40,9 @@ export async function solveQuizAnswersWithAI({
   }));
   const chunkSize = resolveChunkSize();
   const questionChunks = chunkQuestions(compactQuestions, chunkSize);
-  const totalSteps = Math.max(1, questionChunks.length * 2);
+  const totalSteps = Math.max(1, questionChunks.length * (useChecker ? 2 : 1));
   const primaryAnswers = {};
+  const primaryInsights = {};
   const checkAnswers = {};
   const primaryTexts = [];
   const checkTexts = [];
@@ -78,6 +82,7 @@ export async function solveQuizAnswersWithAI({
       apiKey,
       model: primaryModel,
       passType: 'primary',
+      detailed: true,
       requestContext,
       reasoningEffort: resolveReasoningEffort('primary'),
       prompt: primaryPrompt,
@@ -85,7 +90,7 @@ export async function solveQuizAnswersWithAI({
       maxAnswerIndex,
       maxOutputTokens: resolveInitialMaxOutputTokens(chunk.length, 'primary'),
     });
-    const primaryChunkAnswers = primaryResult.answers;
+    const primaryChunkAnswers = extractAnswerIndexMap(primaryResult.answers);
     completedSteps += 1;
     reportAiProgress(onProgress, {
       stage: 'primary-complete',
@@ -96,45 +101,60 @@ export async function solveQuizAnswersWithAI({
       totalSteps,
     });
 
-    const checkResult = await createOpenAIAnswersResponse({
-      apiKey,
-      model: checkModel,
-      passType: 'check',
-      requestContext,
-      reasoningEffort: resolveReasoningEffort('check'),
-      prompt: checkPrompt,
-      expectedQuestionNumbers: questionNumbers,
-      maxAnswerIndex,
-      maxOutputTokens: resolveInitialMaxOutputTokens(chunk.length, 'check'),
-    });
-    const checkChunkAnswers = checkResult.answers;
-    completedSteps += 1;
-    reportAiProgress(onProgress, {
-      stage: 'check-complete',
-      percent: Math.round((completedSteps / totalSteps) * 100),
-      chunkIndex: chunkIndex + 1,
-      chunkCount: questionChunks.length,
-      completedSteps,
-      totalSteps,
-    });
-
     Object.assign(primaryAnswers, primaryChunkAnswers);
-    Object.assign(checkAnswers, checkChunkAnswers);
+    Object.assign(primaryInsights, buildPrimaryInsightsMap(primaryResult.answers));
     primaryTexts.push(primaryResult.rawText);
-    checkTexts.push(checkResult.rawText);
+
+    if (useChecker) {
+      const checkResult = await createOpenAIAnswersResponse({
+        apiKey,
+        model: checkModel,
+        passType: 'check',
+        detailed: false,
+        requestContext,
+        reasoningEffort: resolveReasoningEffort('check'),
+        prompt: checkPrompt,
+        expectedQuestionNumbers: questionNumbers,
+        maxAnswerIndex,
+        maxOutputTokens: resolveInitialMaxOutputTokens(chunk.length, 'check'),
+      });
+      const checkChunkAnswers = extractAnswerIndexMap(checkResult.answers);
+      completedSteps += 1;
+      reportAiProgress(onProgress, {
+        stage: 'check-complete',
+        percent: Math.round((completedSteps / totalSteps) * 100),
+        chunkIndex: chunkIndex + 1,
+        chunkCount: questionChunks.length,
+        completedSteps,
+        totalSteps,
+      });
+
+      Object.assign(checkAnswers, checkChunkAnswers);
+      checkTexts.push(checkResult.rawText);
+    }
   }
 
   const disagreements = [];
-  for (let index = 0; index < questions.length; index += 1) {
-    const questionNumber = index + 1;
-    if (primaryAnswers[questionNumber] !== checkAnswers[questionNumber]) {
-      disagreements.push({
-        questionNumber,
-        primary: primaryAnswers[questionNumber],
-        checker: checkAnswers[questionNumber],
-      });
+  if (useChecker) {
+    for (let index = 0; index < questions.length; index += 1) {
+      const questionNumber = index + 1;
+      if (primaryAnswers[questionNumber] !== checkAnswers[questionNumber]) {
+        disagreements.push({
+          questionNumber,
+          primary: primaryAnswers[questionNumber],
+          checker: checkAnswers[questionNumber],
+        });
+      }
     }
   }
+
+  const suspiciousQuestions = buildSuspiciousQuestions({
+    questions,
+    primaryInsights,
+    checkAnswers: useChecker ? checkAnswers : null,
+    disagreements,
+    mode: normalizedMode,
+  });
 
   const resolvedQuestions = questions.map((question, index) => {
     const questionNumber = index + 1;
@@ -154,9 +174,11 @@ export async function solveQuizAnswersWithAI({
   return {
     questions: resolvedQuestions,
     answerKeyText: formatAnswerKeyText(primaryAnswers, questions.length),
+    mode: normalizedMode,
     primaryModel,
-    checkModel,
+    checkModel: useChecker ? checkModel : null,
     disagreements,
+    suspiciousQuestions,
     primaryRaw: primaryTexts.join('\n'),
     checkRaw: checkTexts.join('\n'),
   };
@@ -189,8 +211,11 @@ function buildMockAiResult(questions) {
       correctIndex: 0,
     })),
     answerKeyText: formatAnswerKeyText(answers, questions.length),
+    mode: 'double',
     primaryModel: 'mock-primary',
     checkModel: 'mock-check',
+    disagreements: [],
+    suspiciousQuestions: [],
     primaryRaw: formatAnswerKeyText(answers, questions.length),
     checkRaw: formatAnswerKeyText(answers, questions.length),
   };
@@ -200,6 +225,7 @@ async function createOpenAIAnswersResponse({
   apiKey,
   model,
   passType,
+  detailed = false,
   requestContext,
   reasoningEffort,
   prompt,
@@ -211,7 +237,7 @@ async function createOpenAIAnswersResponse({
     type: 'json_schema',
     name: 'quiz_answers',
     strict: true,
-    schema: buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex),
+    schema: buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex, detailed),
   };
 
   let currentMaxOutputTokens = Math.max(2000, Number(maxOutputTokens) || 0);
@@ -256,7 +282,7 @@ async function createOpenAIAnswersResponse({
     const outputText = extractResponseText(payload);
     const parsedObject = extractStructuredAnswerObject(payload, outputText);
     if (parsedObject) {
-      const answers = normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers);
+      const answers = normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers, detailed);
       return {
         answers,
         rawText: outputText || JSON.stringify(parsedObject),
@@ -357,20 +383,31 @@ function extractStructuredAnswerObject(payload, outputText) {
   return null;
 }
 
-function normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers) {
+function normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers, detailed = false) {
   const rows = Array.isArray(parsedObject?.answers) ? parsedObject.answers : [];
   const answers = {};
   for (const row of rows) {
     const questionNumber = Number(row?.questionNumber);
     const answerIndex = Number(row?.answerIndex);
     if (Number.isInteger(questionNumber) && Number.isInteger(answerIndex)) {
-      answers[questionNumber] = answerIndex;
+      answers[questionNumber] = detailed
+        ? {
+          questionNumber,
+          answerIndex,
+          confidence: normalizeAiConfidence(row?.confidence),
+          needsReview: Boolean(row?.needsReview),
+          note: sanitizeAiNote(row?.note),
+        }
+        : {
+          questionNumber,
+          answerIndex,
+        };
     }
   }
 
   const missing = [];
   for (const questionNumber of expectedQuestionNumbers) {
-    if (!Number.isInteger(answers[questionNumber])) {
+    if (!answers[questionNumber] || !Number.isInteger(Number(answers[questionNumber].answerIndex))) {
       missing.push(questionNumber);
     }
   }
@@ -384,7 +421,7 @@ function normalizeStructuredAnswers(parsedObject, expectedQuestionNumbers) {
   return answers;
 }
 
-function buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex) {
+function buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex, detailed = false) {
   return {
     type: 'object',
     additionalProperties: false,
@@ -397,7 +434,9 @@ function buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex) {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['questionNumber', 'answerIndex'],
+          required: detailed
+            ? ['questionNumber', 'answerIndex', 'confidence', 'needsReview', 'note']
+            : ['questionNumber', 'answerIndex'],
           properties: {
             questionNumber: {
               type: 'integer',
@@ -408,6 +447,19 @@ function buildAnswerSchema(expectedQuestionNumbers, maxAnswerIndex) {
               minimum: 1,
               maximum: Math.max(1, Number(maxAnswerIndex) || 1),
             },
+            ...(detailed ? {
+              confidence: {
+                type: 'string',
+                enum: ['high', 'medium', 'low'],
+              },
+              needsReview: {
+                type: 'boolean',
+              },
+              note: {
+                type: 'string',
+                maxLength: 220,
+              },
+            } : {}),
           },
         },
       },
@@ -423,6 +475,95 @@ function formatAnswerKeyText(answers, expectedCount) {
   return lines.join('\n');
 }
 
+function extractAnswerIndexMap(answerRows) {
+  const answers = {};
+  for (const [questionNumber, row] of Object.entries(answerRows || {})) {
+    const numericQuestionNumber = Number(questionNumber);
+    const answerIndex = Number(row?.answerIndex);
+    if (Number.isInteger(numericQuestionNumber) && Number.isInteger(answerIndex)) {
+      answers[numericQuestionNumber] = answerIndex;
+    }
+  }
+  return answers;
+}
+
+function buildPrimaryInsightsMap(answerRows) {
+  const insights = {};
+  for (const [questionNumber, row] of Object.entries(answerRows || {})) {
+    const numericQuestionNumber = Number(questionNumber);
+    if (!Number.isInteger(numericQuestionNumber)) {
+      continue;
+    }
+
+    insights[numericQuestionNumber] = {
+      answerIndex: Number(row?.answerIndex),
+      confidence: normalizeAiConfidence(row?.confidence),
+      needsReview: Boolean(row?.needsReview),
+      note: sanitizeAiNote(row?.note),
+    };
+  }
+  return insights;
+}
+
+function normalizeAiConfidence(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'low' || normalized === 'medium') {
+    return normalized;
+  }
+  return 'high';
+}
+
+function sanitizeAiNote(value) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  return normalized.slice(0, 220);
+}
+
+function buildSuspiciousQuestions({ questions, primaryInsights, checkAnswers, disagreements, mode }) {
+  const disagreementMap = new Map(
+    Array.isArray(disagreements)
+      ? disagreements.map((item) => [Number(item.questionNumber), item])
+      : [],
+  );
+  const suspicious = [];
+
+  for (let index = 0; index < questions.length; index += 1) {
+    const questionNumber = index + 1;
+    const insight = primaryInsights[questionNumber] || {};
+    const disagreement = disagreementMap.get(questionNumber) || null;
+    const reasons = [];
+
+    if (insight.needsReview) {
+      reasons.push('model_marked_review');
+    }
+    if (insight.confidence === 'low') {
+      reasons.push('low_confidence');
+    }
+    if (disagreement) {
+      reasons.push('model_disagreement');
+    }
+
+    if (!reasons.length) {
+      continue;
+    }
+
+    suspicious.push({
+      questionNumber,
+      confidence: insight.confidence || 'high',
+      primaryAnswer: Number.isInteger(Number(insight.answerIndex)) ? Number(insight.answerIndex) : null,
+      checkerAnswer: disagreement ? Number(disagreement.checker || 0) || null : null,
+      needsReview: Boolean(insight.needsReview),
+      note: insight.note || '',
+      reasons,
+      mode,
+      questionPreview: String(questions[index]?.q || '').slice(0, 160),
+      optionCount: Array.isArray(questions[index]?.options) ? questions[index].options.length : 0,
+      checkerUsed: Boolean(checkAnswers),
+    });
+  }
+
+  return suspicious;
+}
+
 function resolveChunkSize() {
   const configured = Number(process.env.OPENAI_CHUNK_SIZE || 120);
   if (!Number.isInteger(configured) || configured < 20) {
@@ -433,8 +574,8 @@ function resolveChunkSize() {
 }
 
 function resolveInitialMaxOutputTokens(chunkLength, passType) {
-  const multiplier = passType === 'primary' ? 48 : 36;
-  const floor = passType === 'primary' ? 4000 : 3000;
+  const multiplier = passType === 'primary' ? 80 : 36;
+  const floor = passType === 'primary' ? 6000 : 3000;
   return Math.max(floor, chunkLength * multiplier);
 }
 
@@ -471,6 +612,9 @@ function buildPrimaryPrompt({
     'You are validating answers for a multiple-choice medical quiz.',
     'Return the answers only for the parsed questions provided below.',
     'Choose exactly one answer option for every question.',
+    'For every question, also estimate confidence as high, medium, or low.',
+    'Set needsReview=true when the parsed question looks ambiguous, damaged, OCR-corrupted, or otherwise doubtful.',
+    'Write a short note explaining why review is needed or why confidence is not high. Use an empty string when there is no issue.',
     'Do not infer extra questions and do not skip any question.',
     '',
     `Filename: ${filename || 'quiz file'}`,

@@ -34,6 +34,8 @@ db.exec(`
     site_type TEXT,
     client_tg_username TEXT,
     expected_question_count INTEGER,
+    remaining_question_count INTEGER,
+    consumed_question_count INTEGER NOT NULL DEFAULT 0,
     price REAL NOT NULL DEFAULT 0,
     is_reusable INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
@@ -154,6 +156,8 @@ db.exec(`
 ensureColumn('access_codes', 'site_type', 'TEXT');
 ensureColumn('access_codes', 'client_tg_username', 'TEXT');
 ensureColumn('access_codes', 'expected_question_count', 'INTEGER');
+ensureColumn('access_codes', 'remaining_question_count', 'INTEGER');
+ensureColumn('access_codes', 'consumed_question_count', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('access_codes', 'price', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('access_codes', 'is_reusable', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('access_codes', 'revoked_at', 'INTEGER');
@@ -186,11 +190,13 @@ const insertCodeStmt = db.prepare(`
     site_type,
     client_tg_username,
     expected_question_count,
+    remaining_question_count,
+    consumed_question_count,
     price,
     is_reusable,
     created_at,
     revoked_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 `);
 
 const upsertReusableCodeStmt = db.prepare(`
@@ -200,6 +206,8 @@ const upsertReusableCodeStmt = db.prepare(`
     site_type,
     client_tg_username,
     expected_question_count,
+    remaining_question_count,
+    consumed_question_count,
     price,
     is_reusable,
     created_at,
@@ -207,12 +215,14 @@ const upsertReusableCodeStmt = db.prepare(`
     reservation_token,
     used_at,
     used_by_quiz_id
-  ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL)
   ON CONFLICT(code_hash) DO UPDATE SET
     label = excluded.label,
     site_type = excluded.site_type,
     client_tg_username = excluded.client_tg_username,
     expected_question_count = excluded.expected_question_count,
+    remaining_question_count = excluded.remaining_question_count,
+    consumed_question_count = excluded.consumed_question_count,
     price = excluded.price,
     is_reusable = 1,
     revoked_at = NULL,
@@ -246,6 +256,8 @@ const selectReservedCodeStmt = db.prepare(`
     site_type AS siteType,
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
+    remaining_question_count AS remainingQuestionCount,
+    consumed_question_count AS consumedQuestionCount,
     price,
     is_reusable AS isReusable,
     revoked_at AS revokedAt
@@ -267,6 +279,8 @@ const findCodeByTokenStmt = db.prepare(`
     site_type AS siteType,
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
+    remaining_question_count AS remainingQuestionCount,
+    consumed_question_count AS consumedQuestionCount,
     price,
     is_reusable AS isReusable,
     revoked_at AS revokedAt
@@ -290,6 +304,8 @@ const findAccessCodeByHashStmt = db.prepare(`
     site_type AS siteType,
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
+    remaining_question_count AS remainingQuestionCount,
+    consumed_question_count AS consumedQuestionCount,
     price,
     is_reusable AS isReusable,
     revoked_at AS revokedAt,
@@ -440,6 +456,39 @@ const releaseReusableCodeStmt = db.prepare(`
   WHERE id = ?
 `)
 
+const consumeAccessCodeQuestionsStmt = db.prepare(`
+  UPDATE access_codes
+  SET
+    remaining_question_count = remaining_question_count - ?,
+    consumed_question_count = consumed_question_count + ?
+  WHERE code_hash = ?
+    AND revoked_at IS NULL
+    AND remaining_question_count IS NOT NULL
+    AND remaining_question_count >= ?
+`);
+
+const refundAccessCodeQuestionsStmt = db.prepare(`
+  UPDATE access_codes
+  SET
+    remaining_question_count = remaining_question_count + ?,
+    consumed_question_count = CASE
+      WHEN consumed_question_count >= ? THEN consumed_question_count - ?
+      ELSE 0
+    END
+  WHERE id = ?
+    AND revoked_at IS NULL
+    AND remaining_question_count IS NOT NULL
+`);
+
+const topUpAccessCodeStmt = db.prepare(`
+  UPDATE access_codes
+  SET
+    expected_question_count = COALESCE(expected_question_count, 0) + ?,
+    remaining_question_count = COALESCE(remaining_question_count, 0) + ?
+  WHERE code_hash = ?
+    AND revoked_at IS NULL
+`);
+
 const unlinkCodeFromQuizStmt = db.prepare(`
   UPDATE access_codes
   SET used_by_quiz_id = NULL
@@ -452,6 +501,8 @@ const getQuizBySlugStmt = db.prepare(`
     c.site_type AS siteType,
     c.client_tg_username AS clientTgUsername,
     c.expected_question_count AS expectedQuestionCount,
+    c.remaining_question_count AS remainingQuestionCount,
+    c.consumed_question_count AS consumedQuestionCount,
     c.price AS price,
     c.label AS codeLabel
   FROM quizzes q
@@ -465,6 +516,8 @@ const getQuizByIdStmt = db.prepare(`
     c.site_type AS siteType,
     c.client_tg_username AS clientTgUsername,
     c.expected_question_count AS expectedQuestionCount,
+    c.remaining_question_count AS remainingQuestionCount,
+    c.consumed_question_count AS consumedQuestionCount,
     c.price AS price,
     c.label AS codeLabel
   FROM quizzes q
@@ -570,6 +623,8 @@ const listQuizzesForAdminStmt = db.prepare(`
     c.site_type AS siteType,
     c.client_tg_username AS clientTgUsername,
     c.expected_question_count AS expectedQuestionCount,
+    c.remaining_question_count AS remainingQuestionCount,
+    c.consumed_question_count AS consumedQuestionCount,
     c.price AS price,
     COUNT(d.id) AS deviceCount,
     MAX(d.last_seen_at) AS lastSeenAt
@@ -621,10 +676,10 @@ const deleteQuizByIdStmt = db.prepare(`
 
 const accountingSummaryStmt = db.prepare(`
   SELECT
-    COUNT(*) AS usedCodeCount,
+    COUNT(*) FILTER (WHERE COALESCE(consumed_question_count, 0) > 0) AS usedCodeCount,
+    COALESCE(SUM(consumed_question_count), 0) AS consumedQuestionCount,
     COALESCE(SUM(price), 0) AS totalAmount
   FROM access_codes
-  WHERE used_at IS NOT NULL
 `);
 
 const insertQuizReportStmt = db.prepare(`
@@ -729,6 +784,7 @@ const deleteUploadReportByIdStmt = db.prepare(`
 
 syncUnlimitedEvaAccessCode();
 syncInternalAiFreeCode();
+syncLegacyAccessCodeBalances();
 ensureDefaultAiSettings();
 
 export function getDbMeta() {
@@ -744,6 +800,7 @@ export function getAiRuntimeSettings() {
     enabled: readBooleanSetting('ai.enabled', true),
     requireCode: readBooleanSetting('ai.require_code', false),
     dailyLimit: readIntegerSetting('ai.daily_limit', 0),
+    mode: readAiModeSetting('ai.mode', 'double'),
   };
 }
 
@@ -753,12 +810,14 @@ export function updateAiRuntimeSettings(patch = {}) {
     enabled: patch.enabled == null ? current.enabled : Boolean(patch.enabled),
     requireCode: patch.requireCode == null ? current.requireCode : Boolean(patch.requireCode),
     dailyLimit: patch.dailyLimit == null ? current.dailyLimit : normalizeAiDailyLimit(patch.dailyLimit),
+    mode: patch.mode == null ? current.mode : normalizeAiMode(patch.mode),
   };
   const updatedAt = nowMs();
 
   upsertAppSettingStmt.run('ai.enabled', next.enabled ? '1' : '0', updatedAt);
   upsertAppSettingStmt.run('ai.require_code', next.requireCode ? '1' : '0', updatedAt);
   upsertAppSettingStmt.run('ai.daily_limit', String(next.dailyLimit), updatedAt);
+  upsertAppSettingStmt.run('ai.mode', next.mode, updatedAt);
 
   return next;
 }
@@ -978,6 +1037,7 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
   const siteType = normalizeSiteType(metadata.siteType);
   const clientTgUsername = normalizeClientUsername(metadata.clientTgUsername);
   const expectedQuestionCount = normalizeExpectedQuestionCount(metadata.expectedQuestionCount);
+  const remainingQuestionCount = normalizeRemainingQuestionCount(metadata.remainingQuestionCount, expectedQuestionCount);
   const price = normalizePrice(metadata.price);
 
   const tx = createTransaction(() => {
@@ -992,8 +1052,10 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
           siteType,
           clientTgUsername,
           expectedQuestionCount,
-          price,
+          remainingQuestionCount,
           0,
+          price,
+          1,
           createdAt,
         );
         codes.push(code);
@@ -1014,6 +1076,7 @@ export function createReusableAccessCode(label = null, metadata = {}) {
   const siteType = normalizeSiteType(metadata.siteType);
   const clientTgUsername = normalizeClientUsername(metadata.clientTgUsername);
   const expectedQuestionCount = normalizeExpectedQuestionCount(metadata.expectedQuestionCount);
+  const remainingQuestionCount = normalizeRemainingQuestionCount(metadata.remainingQuestionCount, expectedQuestionCount);
   const price = normalizePrice(metadata.price);
 
   let code = '';
@@ -1031,6 +1094,8 @@ export function createReusableAccessCode(label = null, metadata = {}) {
         siteType,
         clientTgUsername,
         expectedQuestionCount,
+        remainingQuestionCount,
+        0,
         price,
         createdAt,
       );
@@ -1064,6 +1129,8 @@ export function revokeAccessCode(plainCode) {
       siteType: existing.siteType || null,
       clientTgUsername: existing.clientTgUsername || null,
       expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
+      remainingQuestionCount: existing.remainingQuestionCount != null ? Number(existing.remainingQuestionCount) : null,
+      consumedQuestionCount: Number(existing.consumedQuestionCount || 0),
       price: Number(existing.price || 0),
       isReusable: Number(existing.isReusable || 0) === 1,
       revokedAt: Number(existing.revokedAt),
@@ -1079,6 +1146,8 @@ export function revokeAccessCode(plainCode) {
     siteType: updated.siteType || null,
     clientTgUsername: updated.clientTgUsername || null,
     expectedQuestionCount: updated.expectedQuestionCount ? Number(updated.expectedQuestionCount) : null,
+    remainingQuestionCount: updated.remainingQuestionCount != null ? Number(updated.remainingQuestionCount) : null,
+    consumedQuestionCount: Number(updated.consumedQuestionCount || 0),
     price: Number(updated.price || 0),
     isReusable: Number(updated.isReusable || 0) === 1,
     revokedAt: updated.revokedAt ? Number(updated.revokedAt) : null,
@@ -1103,12 +1172,106 @@ export function inspectAccessCode(plainCode) {
     siteType: existing.siteType || null,
     clientTgUsername: existing.clientTgUsername || null,
     expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
+    remainingQuestionCount: existing.remainingQuestionCount != null ? Number(existing.remainingQuestionCount) : null,
+    consumedQuestionCount: Number(existing.consumedQuestionCount || 0),
     price: Number(existing.price || 0),
     isReusable: Number(existing.isReusable || 0) === 1,
     revokedAt: existing.revokedAt ? Number(existing.revokedAt) : null,
     usedAt: existing.usedAt ? Number(existing.usedAt) : null,
     usedByQuizId: existing.usedByQuizId ? Number(existing.usedByQuizId) : null,
   };
+}
+
+export function topUpAccessCode(plainCode, questionCount) {
+  const normalized = normalizeCode(plainCode);
+  const normalizedQuestionCount = normalizeExpectedQuestionCount(questionCount);
+  if (!normalized || !normalizedQuestionCount) {
+    return null;
+  }
+
+  const update = topUpAccessCodeStmt.run(
+    normalizedQuestionCount,
+    normalizedQuestionCount,
+    hashCode(normalized),
+  );
+  if (update.changes !== 1) {
+    return null;
+  }
+
+  return inspectAccessCode(normalized);
+}
+
+export function consumeAccessCodeQuestions(plainCode, questionCount) {
+  const normalized = normalizeCode(plainCode);
+  const normalizedQuestionCount = normalizeExpectedQuestionCount(questionCount);
+  if (!normalized || !normalizedQuestionCount) {
+    return null;
+  }
+
+  const tx = createTransaction(() => {
+    const existing = findAccessCodeByHashStmt.get(hashCode(normalized));
+    if (!existing || existing.revokedAt) {
+      return null;
+    }
+
+    if (existing.remainingQuestionCount == null) {
+      return {
+        codeId: Number(existing.id),
+        consumedQuestions: 0,
+        remainingQuestionCount: null,
+        expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
+        clientTgUsername: existing.clientTgUsername || null,
+        siteType: existing.siteType || null,
+        label: existing.label || null,
+        price: Number(existing.price || 0),
+      };
+    }
+
+    const update = consumeAccessCodeQuestionsStmt.run(
+      normalizedQuestionCount,
+      normalizedQuestionCount,
+      hashCode(normalized),
+      normalizedQuestionCount,
+    );
+    if (update.changes !== 1) {
+      return null;
+    }
+
+    const updated = findAccessCodeByHashStmt.get(hashCode(normalized));
+    return {
+      codeId: Number(updated.id),
+      consumedQuestions: normalizedQuestionCount,
+      remainingQuestionCount: updated.remainingQuestionCount != null ? Number(updated.remainingQuestionCount) : null,
+      expectedQuestionCount: updated.expectedQuestionCount ? Number(updated.expectedQuestionCount) : null,
+      clientTgUsername: updated.clientTgUsername || null,
+      siteType: updated.siteType || null,
+      label: updated.label || null,
+      price: Number(updated.price || 0),
+    };
+  });
+
+  return tx();
+}
+
+export function refundAccessCodeQuestions(codeId, questionCount) {
+  const numericCodeId = Number(codeId);
+  const normalizedQuestionCount = normalizeExpectedQuestionCount(questionCount);
+  if (!Number.isInteger(numericCodeId) || numericCodeId < 1 || !normalizedQuestionCount) {
+    return null;
+  }
+
+  const update = refundAccessCodeQuestionsStmt.run(
+    normalizedQuestionCount,
+    normalizedQuestionCount,
+    normalizedQuestionCount,
+    numericCodeId,
+  );
+  if (update.changes !== 1) {
+    return null;
+  }
+
+  const row = getCodeById(numericCodeId);
+  return row ? mapAccessCodeRow(row) : null;
 }
 
 export function reserveAccessCode(plainCode) {
@@ -1430,6 +1593,7 @@ export function getAccountingSummary() {
   const row = accountingSummaryStmt.get() || {};
   return {
     usedCodeCount: Number(row.usedCodeCount || 0),
+    consumedQuestionCount: Number(row.consumedQuestionCount || 0),
     totalAmount: Number(row.totalAmount || 0),
   };
 }
@@ -1642,6 +1806,8 @@ function mapQuizRow(row) {
     siteType: row.siteType || null,
     clientTgUsername: row.clientTgUsername || null,
     expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
+    remainingQuestionCount: row.remainingQuestionCount != null ? Number(row.remainingQuestionCount) : null,
+    consumedQuestionCount: Number(row.consumedQuestionCount || 0),
     price: Number(row.price || 0),
     codeLabel: row.codeLabel || null,
   };
@@ -1701,6 +1867,7 @@ function ensureDefaultAiSettings() {
     ['ai.enabled', '1'],
     ['ai.require_code', '0'],
     ['ai.daily_limit', '0'],
+    ['ai.mode', 'double'],
   ];
   const updatedAt = nowMs();
 
@@ -1719,6 +1886,8 @@ function syncInternalAiFreeCode() {
     null,
     null,
     null,
+    null,
+    0,
     0,
     nowMs(),
   );
@@ -1735,9 +1904,58 @@ function syncUnlimitedEvaAccessCode() {
     '1',
     null,
     null,
+    null,
+    0,
     0,
     nowMs(),
   );
+}
+
+function syncLegacyAccessCodeBalances() {
+  db.exec(`
+    UPDATE access_codes
+    SET remaining_question_count = expected_question_count
+    WHERE remaining_question_count IS NULL
+      AND expected_question_count IS NOT NULL
+      AND code_hash NOT IN ('${hashCode(internalAiFreeCode)}'${unlimitedAccessCode ? `, '${hashCode(unlimitedAccessCode)}'` : ''})
+  `);
+}
+
+function getCodeById(codeId) {
+  return db.prepare(`
+    SELECT
+      id,
+      label,
+      site_type AS siteType,
+      client_tg_username AS clientTgUsername,
+      expected_question_count AS expectedQuestionCount,
+      remaining_question_count AS remainingQuestionCount,
+      consumed_question_count AS consumedQuestionCount,
+      price,
+      is_reusable AS isReusable,
+      revoked_at AS revokedAt,
+      used_at AS usedAt,
+      used_by_quiz_id AS usedByQuizId
+    FROM access_codes
+    WHERE id = ?
+  `).get(codeId);
+}
+
+function mapAccessCodeRow(row) {
+  return {
+    id: Number(row.id),
+    label: row.label || null,
+    siteType: row.siteType || null,
+    clientTgUsername: row.clientTgUsername || null,
+    expectedQuestionCount: row.expectedQuestionCount != null ? Number(row.expectedQuestionCount) : null,
+    remainingQuestionCount: row.remainingQuestionCount != null ? Number(row.remainingQuestionCount) : null,
+    consumedQuestionCount: Number(row.consumedQuestionCount || 0),
+    price: Number(row.price || 0),
+    isReusable: Number(row.isReusable || 0) === 1,
+    revokedAt: row.revokedAt ? Number(row.revokedAt) : null,
+    usedAt: row.usedAt ? Number(row.usedAt) : null,
+    usedByQuizId: row.usedByQuizId ? Number(row.usedByQuizId) : null,
+  };
 }
 
 function ensureColumn(tableName, columnName, columnType) {
@@ -1794,6 +2012,14 @@ function normalizeExpectedQuestionCount(value) {
   return numericValue;
 }
 
+function normalizeRemainingQuestionCount(value, fallbackValue = null) {
+  if (value == null || value === '') {
+    return fallbackValue == null ? null : normalizeExpectedQuestionCount(fallbackValue);
+  }
+
+  return normalizeExpectedQuestionCount(value);
+}
+
 function normalizePrice(value) {
   if (value == null || value === '') {
     return 0;
@@ -1821,6 +2047,11 @@ function normalizeAiDailyLimit(value) {
   return numericValue;
 }
 
+function normalizeAiMode(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'single' ? 'single' : 'double';
+}
+
 function readBooleanSetting(key, fallbackValue) {
   const row = getAppSettingStmt.get(key);
   if (!row) {
@@ -1838,6 +2069,15 @@ function readIntegerSetting(key, fallbackValue) {
 
   const numericValue = Number(row.value);
   return Number.isInteger(numericValue) && numericValue >= 0 ? numericValue : fallbackValue;
+}
+
+function readAiModeSetting(key, fallbackValue) {
+  const row = getAppSettingStmt.get(key);
+  if (!row) {
+    return normalizeAiMode(fallbackValue);
+  }
+
+  return normalizeAiMode(row.value);
 }
 
 function getLocalDayRange(now) {

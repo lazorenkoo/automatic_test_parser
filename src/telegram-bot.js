@@ -22,6 +22,7 @@ import {
   listUploadReports,
   listQuizzesForAdmin,
   revokeAccessCode,
+  topUpAccessCode,
   setQuizBanStatusById,
   unbanAiDevice,
   updateAiRuntimeSettings,
@@ -50,11 +51,13 @@ export function startTelegramBot() {
   const helpText = [
     'Admin commands:',
     '/code <questions> <tg_user>',
-    '/reusecode <type> <questions> [price] <tg_user> [label]',
-    '/codes <count> <type> <questions> [price] <tg_user> [label]',
+    '/reusecode <questions> <tg_user> [label]',
+    '/codes <count> <questions> <tg_user> [label]',
+    '/addcode <CODE> <questions>',
     '/delcode <CODE>',
     '/checkcode <CODE>',
     '/ai',
+    '/aimode <single|double>',
     '/aicode <on|off>',
     '/ailimit <N|off>',
     '/ailogs <count>',
@@ -84,9 +87,11 @@ export function startTelegramBot() {
     { command: 'code', description: 'Create one code' },
     { command: 'reusecode', description: 'Create reusable code' },
     { command: 'codes', description: 'Create many codes' },
+    { command: 'addcode', description: 'Top up code balance' },
     { command: 'delcode', description: 'Disable a code' },
     { command: 'checkcode', description: 'Check code status' },
     { command: 'ai', description: 'Show AI status' },
+    { command: 'aimode', description: 'Set AI mode single/double' },
     { command: 'aicode', description: 'Require code for AI on/off' },
     { command: 'ailimit', description: 'Set AI daily limit' },
     { command: 'ailogs', description: 'Export AI request logs' },
@@ -149,6 +154,7 @@ export function startTelegramBot() {
     await bot.sendMessage(msg.chat.id, [
       'Accounting:',
       `Used codes: ${summary.usedCodeCount}`,
+      `Consumed questions: ${summary.consumedQuestionCount}`,
       `Total amount: ${formatPrice(summary.totalAmount)}`,
     ].join('\n'));
   });
@@ -168,6 +174,7 @@ export function startTelegramBot() {
       siteType: parsed.siteType,
       clientTgUsername: parsed.clientUsername,
       expectedQuestionCount: parsed.questionCount,
+      remainingQuestionCount: parsed.questionCount,
       price: parsed.price,
     })[0];
 
@@ -189,6 +196,7 @@ export function startTelegramBot() {
       siteType: parsed.siteType,
       clientTgUsername: parsed.clientUsername,
       expectedQuestionCount: parsed.questionCount,
+      remainingQuestionCount: parsed.questionCount,
       price: parsed.price,
     });
 
@@ -210,6 +218,7 @@ export function startTelegramBot() {
       siteType: parsed.siteType,
       clientTgUsername: parsed.clientUsername,
       expectedQuestionCount: parsed.questionCount,
+      remainingQuestionCount: parsed.questionCount,
       price: parsed.price,
     });
 
@@ -234,6 +243,32 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, result.alreadyRevoked ? 'Code was already disabled.' : 'Code disabled.');
+  });
+
+  bot.onText(/^\/addcode(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseTopUpCodeArgs(match?.[1]);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const result = topUpAccessCode(parsed.code, parsed.questionCount);
+    if (!result) {
+      await bot.sendMessage(msg.chat.id, 'Code not found or already revoked.');
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, [
+      `Code: ${parsed.code}`,
+      `Added: ${parsed.questionCount}`,
+      `Remaining: ${result.remainingQuestionCount ?? 'unlimited'}`,
+      `Total credited: ${result.expectedQuestionCount ?? 'unlimited'}`,
+      `TG: ${result.clientTgUsername || '-'}`,
+    ].join('\n'));
   });
 
   bot.onText(/^\/checkcode(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -262,6 +297,24 @@ export function startTelegramBot() {
     }
 
     await bot.sendMessage(msg.chat.id, formatAiRuntimeStatus());
+  });
+
+  bot.onText(/^\/aimode(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseAiModeCommand(match?.[1]);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const settings = updateAiRuntimeSettings({ mode: parsed.value });
+    await bot.sendMessage(msg.chat.id, [
+      `AI mode: ${settings.mode.toUpperCase()}`,
+      formatAiRuntimeStatus(),
+    ].join('\n\n'));
   });
 
   bot.onText(/^\/aicode(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -827,11 +880,13 @@ function isPrivateChat(msg) {
 
 function parseSingleCodeArgs(rawValue, commandName = 'code') {
   const parts = tokenizeArgs(rawValue);
-  if (commandName === 'code') {
+  if (commandName === 'code' || commandName === 'reusecode') {
     if (parts.length < 2) {
       return {
         ok: false,
-        error: 'Format: /code <questions> <tg_user>',
+        error: commandName === 'reusecode'
+          ? 'Format: /reusecode <questions> <tg_user> [label]'
+          : 'Format: /code <questions> <tg_user> [label]',
       };
     }
 
@@ -852,7 +907,7 @@ function parseSingleCodeArgs(rawValue, commandName = 'code') {
       questionCount,
       price: 0,
       clientUsername,
-      label: null,
+      label: parts.slice(2).join(' ').trim() || null,
     };
   }
 
@@ -897,10 +952,36 @@ function parseSingleCodeArgs(rawValue, commandName = 'code') {
 
 function parseBatchCodeArgs(rawValue) {
   const parts = tokenizeArgs(rawValue);
+  if (parts.length >= 3 && !normalizeSiteType(parts[1])) {
+    const count = Math.max(1, Math.min(100, Number(parts[0] || 1)));
+    const questionCount = normalizeQuestionCount(parts[1]);
+    const clientUsername = normalizeClientUsername(parts[2]);
+
+    if (!Number.isInteger(count) || count < 1) {
+      return { ok: false, error: 'Code count must be between 1 and 100.' };
+    }
+    if (!questionCount) {
+      return { ok: false, error: 'Question count must be an integer greater than 0.' };
+    }
+    if (!clientUsername) {
+      return { ok: false, error: 'Telegram user is required, for example @ivan.' };
+    }
+
+    return {
+      ok: true,
+      count,
+      siteType: null,
+      questionCount,
+      price: 0,
+      clientUsername,
+      label: parts.slice(3).join(' ').trim() || null,
+    };
+  }
+
   if (parts.length < 4) {
     return {
       ok: false,
-      error: 'Format: /codes <count> <type> <questions> [price] <tg_user> [label]',
+      error: 'Format: /codes <count> <questions> <tg_user> [label]',
     };
   }
 
@@ -935,6 +1016,28 @@ function parseBatchCodeArgs(rawValue) {
     price,
     clientUsername,
     label: parts.slice(hasExplicitPrice ? 5 : 4).join(' ').trim() || null,
+  };
+}
+
+function parseTopUpCodeArgs(rawValue) {
+  const parts = tokenizeArgs(rawValue);
+  if (parts.length < 2) {
+    return { ok: false, error: 'Format: /addcode <CODE> <questions>' };
+  }
+
+  const code = String(parts[0] || '').trim();
+  const questionCount = normalizeQuestionCount(parts[1]);
+  if (!code) {
+    return { ok: false, error: 'Format: /addcode <CODE> <questions>' };
+  }
+  if (!questionCount) {
+    return { ok: false, error: 'Question count must be an integer greater than 0.' };
+  }
+
+  return {
+    ok: true,
+    code,
+    questionCount,
   };
 }
 
@@ -1026,6 +1129,15 @@ function parseToggleCommand(rawValue, formatHint) {
   }
 
   return { ok: false, error: `Format: ${formatHint}` };
+}
+
+function parseAiModeCommand(rawValue) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  if (value === 'single' || value === 'double') {
+    return { ok: true, value };
+  }
+
+  return { ok: false, error: 'Format: /aimode <single|double>' };
 }
 
 function parseAiLimitCommand(rawValue) {
@@ -1316,9 +1428,9 @@ function applyFilterPart(filters, part) {
 
 function formatCreatedCodesMessage(codes, parsed) {
   const common = [
-    parsed.isReusable ? 'Mode: reusable code' : null,
+    'Mode: balance code',
     parsed.label ? `Label: ${parsed.label}` : null,
-    `Question count: ${parsed.questionCount}`,
+    `Initial balance: ${parsed.questionCount}`,
     parsed.clientUsername ? `For: ${parsed.clientUsername}` : null,
   ].filter(Boolean);
 
@@ -1437,10 +1549,11 @@ function formatAccessCodeStatus(code, result) {
 
   return [
     `Code: ${String(code || '').trim()}`,
-    `Status: ${result.usedAt ? 'used' : 'not used'}`,
-    `Reusable: ${result.isReusable ? 'yes' : 'no'}`,
+    `Status: ${result.revokedAt ? 'disabled' : 'active'}`,
     `Type: ${result.siteType || '-'}${result.siteType ? ` (${result.siteType === '2' ? 'group' : 'single'})` : ''}`,
-    `Questions: ${result.expectedQuestionCount || '-'}`,
+    `Remaining: ${result.remainingQuestionCount ?? 'unlimited'}`,
+    `Consumed: ${result.consumedQuestionCount || 0}`,
+    `Total credited: ${result.expectedQuestionCount ?? 'unlimited'}`,
     `TG: ${result.clientTgUsername || '-'}`,
     `Price: ${formatPrice(result.price)}`,
     `Used at: ${formatDateTime(result.usedAt)}`,
@@ -1455,6 +1568,7 @@ function formatAiRuntimeStatus() {
   return [
     'AI status:',
     `Enabled: ${settings.enabled ? 'yes' : 'no'}`,
+    `Mode: ${settings.mode}`,
     `Require code: ${settings.requireCode ? 'yes' : 'no'}`,
     `Today requests: ${usage.usedToday}`,
     `Daily limit: ${settings.dailyLimit > 0 ? settings.dailyLimit : 'off'}`,

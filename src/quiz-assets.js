@@ -326,6 +326,9 @@ const bootstrapQuestions = Array.isArray(bootstrapData.questions)
 const aiDisagreements = Array.isArray(bootstrapData.aiDisagreements)
   ? bootstrapData.aiDisagreements
   : [];
+const aiSuspiciousQuestions = Array.isArray(bootstrapData.aiSuspiciousQuestions)
+  ? bootstrapData.aiSuspiciousQuestions
+  : [];
 const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
 
@@ -436,10 +439,15 @@ function applyLanguage() {
     els.reportBtn.textContent = t('report');
   }
   if (els.warningBox) {
-    if (aiDisagreements.length) {
+    const warningNumbers = Array.from(new Set([
+      ...aiDisagreements.map((item) => String(item.questionNumber || '?')),
+      ...aiSuspiciousQuestions.map((item) => String(item.questionNumber || '?')),
+    ]));
+
+    if (warningNumbers.length) {
       els.warningBox.innerHTML =
         '<strong>' + t('warningTitle') + '</strong>' +
-        aiDisagreements.map((item) => String(item.questionNumber || '?')).join(', ');
+        warningNumbers.join(', ');
       els.warningBox.classList.remove('hidden');
     } else {
       els.warningBox.classList.add('hidden');
@@ -703,6 +711,7 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     title: quiz.title,
     questions: quiz.questions,
     aiDisagreements: Array.isArray(quiz.rawModelJson?.aiDisagreements) ? quiz.rawModelJson.aiDisagreements : [],
+    aiSuspiciousQuestions: Array.isArray(quiz.rawModelJson?.aiSuspiciousQuestions) ? quiz.rawModelJson.aiSuspiciousQuestions : [],
   });
 
   return `<!doctype html>
