@@ -805,7 +805,7 @@ export function startTelegramBot() {
   });
 
   bot.on('message', async (msg) => {
-    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+    if (!isPrivateChat(msg) || Number(msg.from?.id || 0) !== adminUserId) {
       return;
     }
 
@@ -994,17 +994,8 @@ function getClientMenuKeyboard() {
 }
 
 async function sendClientHome(bot, chatId, from) {
-  const codes = listAccessCodesByClient({
-    clientTgUserId: from?.id,
-    clientTgUsername: from?.username,
-  });
-  const username = formatClientDisplayName(from);
   const activeSession = getActivePaymentSessionByUser(from?.id);
-  const lines = [
-    `Привет, ${username}.`,
-    'Что делаем?',
-    `Кодов у вас: ${codes.length}.`,
-  ];
+  const lines = ['Выберите действие.'];
 
   if (activeSession) {
     lines.push(`Есть активная оплата до ${formatDateTime(activeSession.expiresAt)}.`);
@@ -1045,12 +1036,10 @@ async function sendClientCodes(bot, chatId, from) {
 
   const lines = [
     'Ваши коды:',
-    'Полный текст нового кода бот показывает в момент создания, здесь — список и баланс.',
     '',
     ...codes.map((code, index) => [
-      `${index + 1}. Код #${code.id}`,
+      `${index + 1}. ${code.label || `Код #${code.id}`}`,
       `Осталось вопросов: ${code.remainingQuestionCount ?? 'unlimited'}`,
-      `Списано: ${code.consumedQuestionCount || 0}`,
     ].join('\n')),
   ];
 

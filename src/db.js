@@ -1444,9 +1444,10 @@ export function createClientAccessCode({ clientTgUserId, clientTgUsername, label
     }
 
     try {
+      const storedLabel = sanitizeNullableValue(label) || candidate;
       insertClientEmptyCodeStmt.run(
         candidateHash,
-        sanitizeNullableValue(label),
+        storedLabel,
         normalizedUserId,
         normalizedUsername,
         createdAt,
