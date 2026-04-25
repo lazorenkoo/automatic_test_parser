@@ -32,6 +32,7 @@ db.exec(`
     code_hash TEXT NOT NULL UNIQUE,
     label TEXT,
     site_type TEXT,
+    client_tg_user_id INTEGER,
     client_tg_username TEXT,
     expected_question_count INTEGER,
     remaining_question_count INTEGER,
@@ -128,6 +129,21 @@ db.exec(`
     updated_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS payment_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tg_user_id INTEGER NOT NULL,
+    tg_username TEXT,
+    target_code TEXT NOT NULL,
+    question_count INTEGER NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    confirmed_at INTEGER,
+    matched_statement_id TEXT UNIQUE,
+    cancel_reason TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS ai_request_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at INTEGER NOT NULL,
@@ -151,9 +167,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_quiz_reports_created_at ON quiz_reports(created_at);
   CREATE INDEX IF NOT EXISTS idx_upload_reports_created_at ON upload_reports(created_at);
   CREATE INDEX IF NOT EXISTS idx_ai_request_logs_created_at ON ai_request_logs(created_at);
+  CREATE INDEX IF NOT EXISTS idx_payment_sessions_user_created_at ON payment_sessions(tg_user_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_payment_sessions_status_expires_at ON payment_sessions(status, expires_at);
 `);
 
 ensureColumn('access_codes', 'site_type', 'TEXT');
+ensureColumn('access_codes', 'client_tg_user_id', 'INTEGER');
 ensureColumn('access_codes', 'client_tg_username', 'TEXT');
 ensureColumn('access_codes', 'expected_question_count', 'INTEGER');
 ensureColumn('access_codes', 'remaining_question_count', 'INTEGER');
@@ -188,6 +207,7 @@ const insertCodeStmt = db.prepare(`
     code_hash,
     label,
     site_type,
+    client_tg_user_id,
     client_tg_username,
     expected_question_count,
     remaining_question_count,
@@ -196,7 +216,7 @@ const insertCodeStmt = db.prepare(`
     is_reusable,
     created_at,
     revoked_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 `);
 
 const upsertReusableCodeStmt = db.prepare(`
@@ -204,6 +224,7 @@ const upsertReusableCodeStmt = db.prepare(`
     code_hash,
     label,
     site_type,
+    client_tg_user_id,
     client_tg_username,
     expected_question_count,
     remaining_question_count,
@@ -215,10 +236,11 @@ const upsertReusableCodeStmt = db.prepare(`
     reservation_token,
     used_at,
     used_by_quiz_id
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL)
   ON CONFLICT(code_hash) DO UPDATE SET
     label = excluded.label,
     site_type = excluded.site_type,
+    client_tg_user_id = excluded.client_tg_user_id,
     client_tg_username = excluded.client_tg_username,
     expected_question_count = excluded.expected_question_count,
     remaining_question_count = excluded.remaining_question_count,
@@ -254,6 +276,7 @@ const selectReservedCodeStmt = db.prepare(`
     id,
     label,
     site_type AS siteType,
+    client_tg_user_id AS clientTgUserId,
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
     remaining_question_count AS remainingQuestionCount,
@@ -277,6 +300,7 @@ const findCodeByTokenStmt = db.prepare(`
     id,
     label,
     site_type AS siteType,
+    client_tg_user_id AS clientTgUserId,
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
     remaining_question_count AS remainingQuestionCount,
@@ -302,6 +326,7 @@ const findAccessCodeByHashStmt = db.prepare(`
     id,
     label,
     site_type AS siteType,
+    client_tg_user_id AS clientTgUserId,
     client_tg_username AS clientTgUsername,
     expected_question_count AS expectedQuestionCount,
     remaining_question_count AS remainingQuestionCount,
@@ -487,6 +512,174 @@ const topUpAccessCodeStmt = db.prepare(`
     remaining_question_count = COALESCE(remaining_question_count, 0) + ?
   WHERE code_hash = ?
     AND revoked_at IS NULL
+`);
+
+const insertClientEmptyCodeStmt = db.prepare(`
+  INSERT INTO access_codes (
+    code_hash,
+    label,
+    site_type,
+    client_tg_user_id,
+    client_tg_username,
+    expected_question_count,
+    remaining_question_count,
+    consumed_question_count,
+    price,
+    is_reusable,
+    created_at,
+    revoked_at
+  ) VALUES (?, ?, NULL, ?, ?, 0, 0, 0, 0, 1, ?, NULL)
+`);
+
+const listAccessCodesByOwnerStmt = db.prepare(`
+  SELECT
+    id,
+    label,
+    site_type AS siteType,
+    client_tg_user_id AS clientTgUserId,
+    client_tg_username AS clientTgUsername,
+    expected_question_count AS expectedQuestionCount,
+    remaining_question_count AS remainingQuestionCount,
+    consumed_question_count AS consumedQuestionCount,
+    price,
+    is_reusable AS isReusable,
+    revoked_at AS revokedAt,
+    used_at AS usedAt,
+    used_by_quiz_id AS usedByQuizId
+  FROM access_codes
+  WHERE revoked_at IS NULL
+    AND (
+      client_tg_user_id = ?
+      OR (
+        client_tg_user_id IS NULL
+        AND ? IS NOT NULL
+        AND client_tg_username = ?
+      )
+    )
+  ORDER BY created_at DESC, id DESC
+`);
+
+const getLatestPaymentSessionByUserStmt = db.prepare(`
+  SELECT
+    id,
+    tg_user_id AS tgUserId,
+    tg_username AS tgUsername,
+    target_code AS targetCode,
+    question_count AS questionCount,
+    amount_minor AS amountMinor,
+    status,
+    created_at AS createdAt,
+    expires_at AS expiresAt,
+    confirmed_at AS confirmedAt,
+    matched_statement_id AS matchedStatementId,
+    cancel_reason AS cancelReason
+  FROM payment_sessions
+  WHERE tg_user_id = ?
+  ORDER BY created_at DESC, id DESC
+  LIMIT 1
+`);
+
+const getActivePaymentSessionStmt = db.prepare(`
+  SELECT
+    id,
+    tg_user_id AS tgUserId,
+    tg_username AS tgUsername,
+    target_code AS targetCode,
+    question_count AS questionCount,
+    amount_minor AS amountMinor,
+    status,
+    created_at AS createdAt,
+    expires_at AS expiresAt,
+    confirmed_at AS confirmedAt,
+    matched_statement_id AS matchedStatementId,
+    cancel_reason AS cancelReason
+  FROM payment_sessions
+  WHERE status = 'pending'
+    AND expires_at > ?
+  ORDER BY created_at ASC, id ASC
+  LIMIT 1
+`);
+
+const getActivePaymentSessionByUserStmt = db.prepare(`
+  SELECT
+    id,
+    tg_user_id AS tgUserId,
+    tg_username AS tgUsername,
+    target_code AS targetCode,
+    question_count AS questionCount,
+    amount_minor AS amountMinor,
+    status,
+    created_at AS createdAt,
+    expires_at AS expiresAt,
+    confirmed_at AS confirmedAt,
+    matched_statement_id AS matchedStatementId,
+    cancel_reason AS cancelReason
+  FROM payment_sessions
+  WHERE tg_user_id = ?
+    AND status = 'pending'
+    AND expires_at > ?
+  ORDER BY created_at DESC, id DESC
+  LIMIT 1
+`);
+
+const insertPaymentSessionStmt = db.prepare(`
+  INSERT INTO payment_sessions (
+    tg_user_id,
+    tg_username,
+    target_code,
+    question_count,
+    amount_minor,
+    status,
+    created_at,
+    expires_at,
+    confirmed_at,
+    matched_statement_id,
+    cancel_reason
+  ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NULL, NULL, NULL)
+`);
+
+const expirePaymentSessionsStmt = db.prepare(`
+  UPDATE payment_sessions
+  SET status = 'expired', cancel_reason = 'timeout'
+  WHERE status = 'pending'
+    AND expires_at <= ?
+`);
+
+const cancelPaymentSessionByIdStmt = db.prepare(`
+  UPDATE payment_sessions
+  SET status = 'cancelled', cancel_reason = ?
+  WHERE id = ?
+    AND status = 'pending'
+`);
+
+const getPaymentSessionByIdStmt = db.prepare(`
+  SELECT
+    id,
+    tg_user_id AS tgUserId,
+    tg_username AS tgUsername,
+    target_code AS targetCode,
+    question_count AS questionCount,
+    amount_minor AS amountMinor,
+    status,
+    created_at AS createdAt,
+    expires_at AS expiresAt,
+    confirmed_at AS confirmedAt,
+    matched_statement_id AS matchedStatementId,
+    cancel_reason AS cancelReason
+  FROM payment_sessions
+  WHERE id = ?
+`);
+
+const completePaymentSessionStmt = db.prepare(`
+  UPDATE payment_sessions
+  SET
+    status = 'confirmed',
+    confirmed_at = ?,
+    matched_statement_id = ?,
+    cancel_reason = NULL
+  WHERE id = ?
+    AND status = 'pending'
+    AND matched_statement_id IS NULL
 `);
 
 const unlinkCodeFromQuizStmt = db.prepare(`
@@ -1064,6 +1257,7 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
   const createdAt = nowMs();
   const codes = [];
   const siteType = normalizeSiteType(metadata.siteType);
+  const clientTgUserId = normalizeTelegramUserId(metadata.clientTgUserId);
   const clientTgUsername = normalizeClientUsername(metadata.clientTgUsername);
   const expectedQuestionCount = normalizeExpectedQuestionCount(metadata.expectedQuestionCount);
   const remainingQuestionCount = normalizeRemainingQuestionCount(metadata.remainingQuestionCount, expectedQuestionCount);
@@ -1079,6 +1273,7 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
           codeHash,
           sanitizeNullableValue(label),
           siteType,
+          clientTgUserId,
           clientTgUsername,
           expectedQuestionCount,
           remainingQuestionCount,
@@ -1103,6 +1298,7 @@ export function createAccessCodes(count = 1, label = null, metadata = {}) {
 export function createReusableAccessCode(label = null, metadata = {}) {
   const createdAt = nowMs();
   const siteType = normalizeSiteType(metadata.siteType);
+  const clientTgUserId = normalizeTelegramUserId(metadata.clientTgUserId);
   const clientTgUsername = normalizeClientUsername(metadata.clientTgUsername);
   const expectedQuestionCount = normalizeExpectedQuestionCount(metadata.expectedQuestionCount);
   const remainingQuestionCount = normalizeRemainingQuestionCount(metadata.remainingQuestionCount, expectedQuestionCount);
@@ -1121,6 +1317,7 @@ export function createReusableAccessCode(label = null, metadata = {}) {
         candidateHash,
         sanitizeNullableValue(label),
         siteType,
+        clientTgUserId,
         clientTgUsername,
         expectedQuestionCount,
         remainingQuestionCount,
@@ -1156,6 +1353,7 @@ export function revokeAccessCode(plainCode) {
       id: Number(existing.id),
       label: existing.label || null,
       siteType: existing.siteType || null,
+      clientTgUserId: existing.clientTgUserId != null ? Number(existing.clientTgUserId) : null,
       clientTgUsername: existing.clientTgUsername || null,
       expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
       remainingQuestionCount: existing.remainingQuestionCount != null ? Number(existing.remainingQuestionCount) : null,
@@ -1173,6 +1371,7 @@ export function revokeAccessCode(plainCode) {
     id: Number(updated.id),
     label: updated.label || null,
     siteType: updated.siteType || null,
+    clientTgUserId: updated.clientTgUserId != null ? Number(updated.clientTgUserId) : null,
     clientTgUsername: updated.clientTgUsername || null,
     expectedQuestionCount: updated.expectedQuestionCount ? Number(updated.expectedQuestionCount) : null,
     remainingQuestionCount: updated.remainingQuestionCount != null ? Number(updated.remainingQuestionCount) : null,
@@ -1199,6 +1398,7 @@ export function inspectAccessCode(plainCode) {
     id: Number(existing.id),
     label: existing.label || null,
     siteType: existing.siteType || null,
+    clientTgUserId: existing.clientTgUserId != null ? Number(existing.clientTgUserId) : null,
     clientTgUsername: existing.clientTgUsername || null,
     expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
     remainingQuestionCount: existing.remainingQuestionCount != null ? Number(existing.remainingQuestionCount) : null,
@@ -1230,6 +1430,191 @@ export function topUpAccessCode(plainCode, questionCount) {
   return inspectAccessCode(normalized);
 }
 
+export function createClientAccessCode({ clientTgUserId, clientTgUsername, label = null } = {}) {
+  const createdAt = nowMs();
+  const normalizedUserId = normalizeTelegramUserId(clientTgUserId);
+  const normalizedUsername = normalizeClientUsername(clientTgUsername);
+  let code = '';
+
+  while (!code) {
+    const candidate = generateAccessCode();
+    const candidateHash = hashCode(candidate);
+    if (findAccessCodeByHashStmt.get(candidateHash)) {
+      continue;
+    }
+
+    try {
+      insertClientEmptyCodeStmt.run(
+        candidateHash,
+        sanitizeNullableValue(label),
+        normalizedUserId,
+        normalizedUsername,
+        createdAt,
+      );
+      code = candidate;
+    } catch (error) {
+      if (error.code !== 'SQLITE_CONSTRAINT_UNIQUE') {
+        throw error;
+      }
+    }
+  }
+
+  return code;
+}
+
+export function listAccessCodesByClient({ clientTgUserId = null, clientTgUsername = null } = {}) {
+  const normalizedUserId = normalizeTelegramUserId(clientTgUserId);
+  const normalizedUsername = normalizeClientUsername(clientTgUsername);
+  if (!normalizedUserId && !normalizedUsername) {
+    return [];
+  }
+
+  return listAccessCodesByOwnerStmt
+    .all(normalizedUserId, normalizedUsername, normalizedUsername)
+    .map(mapAccessCodeRow);
+}
+
+export function getPaymentCooldownState({ tgUserId, cooldownMs = 60 * 60 * 1000, now = nowMs() }) {
+  const normalizedUserId = normalizeTelegramUserId(tgUserId);
+  if (!normalizedUserId) {
+    return {
+      allowed: false,
+      nextAllowedAt: null,
+      remainingMs: Math.max(0, Number(cooldownMs) || 0),
+    };
+  }
+
+  expirePaymentSessionsStmt.run(now);
+  const latest = getLatestPaymentSessionByUserStmt.get(normalizedUserId);
+  if (!latest) {
+    return {
+      allowed: true,
+      nextAllowedAt: now,
+      remainingMs: 0,
+    };
+  }
+
+  const nextAllowedAt = Number(latest.createdAt || 0) + Math.max(0, Number(cooldownMs) || 0);
+  return {
+    allowed: nextAllowedAt <= now,
+    nextAllowedAt,
+    remainingMs: Math.max(0, nextAllowedAt - now),
+  };
+}
+
+export function getActivePaymentSession(now = nowMs()) {
+  expirePaymentSessionsStmt.run(now);
+  const row = getActivePaymentSessionStmt.get(now);
+  return row ? mapPaymentSessionRow(row) : null;
+}
+
+export function getActivePaymentSessionByUser(tgUserId, now = nowMs()) {
+  const normalizedUserId = normalizeTelegramUserId(tgUserId);
+  if (!normalizedUserId) {
+    return null;
+  }
+
+  expirePaymentSessionsStmt.run(now);
+  const row = getActivePaymentSessionByUserStmt.get(normalizedUserId, now);
+  return row ? mapPaymentSessionRow(row) : null;
+}
+
+export function createTopUpPaymentSession({
+  tgUserId,
+  tgUsername = null,
+  targetCode,
+  questionCount,
+  amountMinor,
+  ttlMs = 15 * 60 * 1000,
+} = {}) {
+  const normalizedUserId = normalizeTelegramUserId(tgUserId);
+  const normalizedUsername = normalizeClientUsername(tgUsername);
+  const normalizedCode = normalizeCode(targetCode);
+  const normalizedQuestionCount = normalizeExpectedQuestionCount(questionCount);
+  const normalizedAmountMinor = normalizeAmountMinor(amountMinor);
+  const createdAt = nowMs();
+  const expiresAt = createdAt + Math.max(60 * 1000, Number(ttlMs) || (15 * 60 * 1000));
+
+  if (!normalizedUserId || !normalizedCode || !normalizedQuestionCount || !normalizedAmountMinor) {
+    return { ok: false, error: 'invalid_input' };
+  }
+
+  const tx = createTransaction(() => {
+    expirePaymentSessionsStmt.run(createdAt);
+    const active = getActivePaymentSessionStmt.get(createdAt);
+    if (active) {
+      return { ok: false, error: 'busy', activeSession: mapPaymentSessionRow(active) };
+    }
+
+    insertPaymentSessionStmt.run(
+      normalizedUserId,
+      normalizedUsername,
+      normalizedCode,
+      normalizedQuestionCount,
+      normalizedAmountMinor,
+      createdAt,
+      expiresAt,
+    );
+
+    const session = getActivePaymentSessionByUserStmt.get(normalizedUserId, createdAt);
+    return session
+      ? { ok: true, session: mapPaymentSessionRow(session) }
+      : { ok: false, error: 'create_failed' };
+  });
+
+  return tx();
+}
+
+export function cancelPaymentSession(sessionId, reason = 'cancelled') {
+  const numericSessionId = Number(sessionId);
+  if (!Number.isInteger(numericSessionId) || numericSessionId < 1) {
+    return null;
+  }
+
+  cancelPaymentSessionByIdStmt.run(sanitizeNullableValue(reason) || 'cancelled', numericSessionId);
+  const row = getPaymentSessionByIdStmt.get(numericSessionId);
+  return row ? mapPaymentSessionRow(row) : null;
+}
+
+export function completeTopUpPaymentSession(sessionId, statementId) {
+  const numericSessionId = Number(sessionId);
+  const normalizedStatementId = sanitizeNullableValue(statementId);
+  if (!Number.isInteger(numericSessionId) || numericSessionId < 1 || !normalizedStatementId) {
+    return null;
+  }
+
+  const confirmedAt = nowMs();
+  const tx = createTransaction(() => {
+    expirePaymentSessionsStmt.run(confirmedAt);
+    const existing = getPaymentSessionByIdStmt.get(numericSessionId);
+    if (!existing || existing.status !== 'pending' || Number(existing.expiresAt || 0) <= confirmedAt) {
+      return null;
+    }
+
+    const topUpResult = topUpAccessCodeStmt.run(
+      Number(existing.questionCount || 0),
+      Number(existing.questionCount || 0),
+      hashCode(normalizeCode(existing.targetCode)),
+    );
+    if (topUpResult.changes !== 1) {
+      return null;
+    }
+
+    const update = completePaymentSessionStmt.run(confirmedAt, normalizedStatementId, numericSessionId);
+    if (update.changes !== 1) {
+      throw new Error('payment_session_already_matched');
+    }
+
+    const session = getPaymentSessionByIdStmt.get(numericSessionId);
+    const code = inspectAccessCode(existing.targetCode);
+    return session && code
+      ? { session: mapPaymentSessionRow(session), code }
+      : null;
+  });
+
+  return tx();
+}
+
 export function consumeAccessCodeQuestions(plainCode, questionCount) {
   const normalized = normalizeCode(plainCode);
   const normalizedQuestionCount = normalizeExpectedQuestionCount(questionCount);
@@ -1244,12 +1629,13 @@ export function consumeAccessCodeQuestions(plainCode, questionCount) {
     }
 
     if (existing.remainingQuestionCount == null) {
-      return {
-        codeId: Number(existing.id),
-        consumedQuestions: 0,
-        remainingQuestionCount: null,
-        expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
-        clientTgUsername: existing.clientTgUsername || null,
+    return {
+      codeId: Number(existing.id),
+      consumedQuestions: 0,
+      remainingQuestionCount: null,
+      expectedQuestionCount: existing.expectedQuestionCount ? Number(existing.expectedQuestionCount) : null,
+      clientTgUserId: existing.clientTgUserId != null ? Number(existing.clientTgUserId) : null,
+      clientTgUsername: existing.clientTgUsername || null,
         siteType: existing.siteType || null,
         label: existing.label || null,
         price: Number(existing.price || 0),
@@ -1272,6 +1658,7 @@ export function consumeAccessCodeQuestions(plainCode, questionCount) {
       consumedQuestions: normalizedQuestionCount,
       remainingQuestionCount: updated.remainingQuestionCount != null ? Number(updated.remainingQuestionCount) : null,
       expectedQuestionCount: updated.expectedQuestionCount ? Number(updated.expectedQuestionCount) : null,
+      clientTgUserId: updated.clientTgUserId != null ? Number(updated.clientTgUserId) : null,
       clientTgUsername: updated.clientTgUsername || null,
       siteType: updated.siteType || null,
       label: updated.label || null,
@@ -1330,6 +1717,7 @@ export function reserveAccessCode(plainCode) {
       reservationToken,
       label: row.label || null,
       siteType: row.siteType || null,
+      clientTgUserId: row.clientTgUserId != null ? Number(row.clientTgUserId) : null,
       clientTgUsername: row.clientTgUsername || null,
       expectedQuestionCount: row.expectedQuestionCount ? Number(row.expectedQuestionCount) : null,
       price: Number(row.price || 0),
@@ -1956,6 +2344,7 @@ function getCodeById(codeId) {
       id,
       label,
       site_type AS siteType,
+      client_tg_user_id AS clientTgUserId,
       client_tg_username AS clientTgUsername,
       expected_question_count AS expectedQuestionCount,
       remaining_question_count AS remainingQuestionCount,
@@ -1975,6 +2364,7 @@ function mapAccessCodeRow(row) {
     id: Number(row.id),
     label: row.label || null,
     siteType: row.siteType || null,
+    clientTgUserId: row.clientTgUserId != null ? Number(row.clientTgUserId) : null,
     clientTgUsername: row.clientTgUsername || null,
     expectedQuestionCount: row.expectedQuestionCount != null ? Number(row.expectedQuestionCount) : null,
     remainingQuestionCount: row.remainingQuestionCount != null ? Number(row.remainingQuestionCount) : null,
@@ -2028,6 +2418,11 @@ function normalizeClientUsername(value) {
   return normalized ? `@${normalized}` : null;
 }
 
+function normalizeTelegramUserId(value) {
+  const numericValue = Number(value);
+  return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : null;
+}
+
 function normalizeExpectedQuestionCount(value) {
   if (value == null || value === '') {
     return null;
@@ -2061,6 +2456,11 @@ function normalizePrice(value) {
   }
 
   return Math.round(numericValue * 100) / 100;
+}
+
+function normalizeAmountMinor(value) {
+  const numericValue = Number(value);
+  return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : null;
 }
 
 function normalizeAiDailyLimit(value) {
@@ -2169,4 +2569,21 @@ function parseJsonField(value, fallbackValue) {
   } catch {
     return fallbackValue;
   }
+}
+
+function mapPaymentSessionRow(row) {
+  return {
+    id: Number(row.id),
+    tgUserId: Number(row.tgUserId || 0),
+    tgUsername: row.tgUsername || null,
+    targetCode: row.targetCode,
+    questionCount: Number(row.questionCount || 0),
+    amountMinor: Number(row.amountMinor || 0),
+    status: row.status,
+    createdAt: Number(row.createdAt || 0),
+    expiresAt: Number(row.expiresAt || 0),
+    confirmedAt: row.confirmedAt ? Number(row.confirmedAt) : null,
+    matchedStatementId: row.matchedStatementId || null,
+    cancelReason: row.cancelReason || null,
+  };
 }

@@ -1,22 +1,30 @@
 import TelegramBot from 'node-telegram-bot-api';
 import {
   createAccessCodes,
+  createClientAccessCode,
+  createTopUpPaymentSession,
   createReusableAccessCode,
   banAiDevice,
+  cancelPaymentSession,
   deleteQuizById,
   deleteQuizReportById,
   deleteUploadReportById,
+  completeTopUpPaymentSession,
+  getActivePaymentSession,
+  getActivePaymentSessionByUser,
   getAiDeviceBan,
   getAiRuntimeSettings,
   getAiUsageStats,
   getAccountingSummary,
   getDbMeta,
+  getPaymentCooldownState,
   getHomepageNotice,
   getQuizById,
   getQuizQuestionStatsByRange,
   getQuizReportById,
   getUploadReportById,
   inspectAccessCode,
+  listAccessCodesByClient,
   listAiDeviceBans,
   listAiRequestLogs,
   listQuizReports,
@@ -34,6 +42,15 @@ import {
 let botInstance = null;
 let shutdownBound = false;
 const pendingReportDeletionByChat = new Map();
+const clientFlowStateByChat = new Map();
+const questionPriceMinor = Math.max(1, Number(process.env.TELEGRAM_QUESTION_PRICE_MINOR || 10) || 10);
+const paymentCooldownMs = Math.max(60 * 1000, Number(process.env.TELEGRAM_PAYMENT_COOLDOWN_MS || 60 * 60 * 1000) || (60 * 60 * 1000));
+const paymentSessionTtlMs = Math.max(60 * 1000, Number(process.env.TELEGRAM_PAYMENT_SESSION_MS || 15 * 60 * 1000) || (15 * 60 * 1000));
+const paymentCardNumber = String(process.env.TELEGRAM_PAYMENT_CARD_NUMBER || process.env.MONOBANK_TOPUP_CARD || '').trim();
+const paymentCardLabel = String(process.env.TELEGRAM_PAYMENT_CARD_LABEL || 'mono').trim();
+const paymentTopUpLink = String(process.env.TELEGRAM_PAYMENT_TOPUP_LINK || process.env.MONOBANK_TOPUP_LINK || '').trim();
+const monobankToken = String(process.env.MONOBANK_PERSONAL_TOKEN || '').trim();
+const monobankAccount = String(process.env.MONOBANK_PERSONAL_ACCOUNT || '0').trim() || '0';
 
 export function startTelegramBot() {
   if (botInstance) {
@@ -88,7 +105,15 @@ export function startTelegramBot() {
     '/help',
   ].join('\n');
 
-  bot.setMyCommands([
+  const clientCommands = [
+    { command: 'start', description: 'Open menu' },
+    { command: 'createcode', description: 'Create new code' },
+    { command: 'mycodes', description: 'Show my codes' },
+    { command: 'topup', description: 'Top up code' },
+    { command: 'cancel', description: 'Cancel current action' },
+    { command: 'id', description: 'Show Telegram ID' },
+  ];
+  const adminCommands = [
     { command: 'code', description: 'Create one code' },
     { command: 'reusecode', description: 'Create reusable code' },
     { command: 'codes', description: 'Create many codes' },
@@ -122,7 +147,17 @@ export function startTelegramBot() {
     { command: 'db', description: 'Show SQLite path' },
     { command: 'id', description: 'Show Telegram ID' },
     { command: 'help', description: 'Show help' },
-  ]).catch(() => {});
+  ];
+
+  bot.setMyCommands(clientCommands).catch(() => {});
+  if (adminUserId) {
+    bot.setMyCommands(adminCommands, {
+      scope: {
+        type: 'chat',
+        chat_id: adminUserId,
+      },
+    }).catch(() => {});
+  }
 
   bot.onText(/^\/id(?:@[\w_]+)?$/i, async (msg) => {
     if (!isPrivateChat(msg)) {
@@ -135,12 +170,120 @@ export function startTelegramBot() {
     ].join('\n'));
   });
 
-  bot.onText(/^\/(?:start|help)(?:@[\w_]+)?$/i, async (msg) => {
-    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+  bot.onText(/^\/createcode(?:@[\w_]+)?$/i, async (msg) => {
+    if (!isPrivateChat(msg) || Number(msg.from?.id || 0) === adminUserId) {
       return;
     }
 
-    await bot.sendMessage(msg.chat.id, helpText);
+    await handleClientCreateCode(bot, msg);
+  });
+
+  bot.onText(/^\/mycodes(?:@[\w_]+)?$/i, async (msg) => {
+    if (!isPrivateChat(msg) || Number(msg.from?.id || 0) === adminUserId) {
+      return;
+    }
+
+    await sendClientCodes(bot, msg.chat.id, msg.from);
+  });
+
+  bot.onText(/^\/topup(?:@[\w_]+)?$/i, async (msg) => {
+    if (!isPrivateChat(msg) || Number(msg.from?.id || 0) === adminUserId) {
+      return;
+    }
+
+    await startClientTopUpFlow(bot, msg.chat.id, msg.from);
+  });
+
+  bot.onText(/^\/cancel(?:@[\w_]+)?$/i, async (msg) => {
+    if (!isPrivateChat(msg) || Number(msg.from?.id || 0) === adminUserId) {
+      return;
+    }
+
+    await cancelClientFlow(bot, msg.chat.id, msg.from, true);
+  });
+
+  bot.on('callback_query', async (query) => {
+    const msg = query.message;
+    if (!msg || !isPrivateChat(msg) || Number(query.from?.id || 0) === adminUserId) {
+      return;
+    }
+
+    const data = String(query.data || '');
+    try {
+      if (data === 'client:confirm_topup') {
+        await bot.answerCallbackQuery(query.id);
+        await handleClientTopUpConfirmation(bot, msg.chat.id, query.from);
+        return;
+      }
+
+      if (data === 'client:cancel_topup') {
+        await bot.answerCallbackQuery(query.id);
+        await cancelClientFlow(bot, msg.chat.id, query.from, true);
+        return;
+      }
+
+      if (data === 'client:paid_topup') {
+        await bot.answerCallbackQuery(query.id, { text: 'Проверяю оплату...' }).catch(() => {});
+        await handleClientPaidConfirmation(bot, msg.chat.id, query.from);
+        return;
+      }
+
+      if (data === 'client:refresh_codes') {
+        await bot.answerCallbackQuery(query.id);
+        await sendClientCodes(bot, msg.chat.id, query.from);
+      }
+    } catch (error) {
+      await bot.sendMessage(msg.chat.id, error.message || 'Не удалось обработать действие.');
+    }
+  });
+
+  bot.on('message', async (msg) => {
+    if (!isPrivateChat(msg) || Number(msg.from?.id || 0) === adminUserId) {
+      return;
+    }
+
+    const text = String(msg.text || '').trim();
+    if (!text || text.startsWith('/')) {
+      return;
+    }
+
+    if (text === 'Создать код') {
+      await handleClientCreateCode(bot, msg);
+      return;
+    }
+
+    if (text === 'Пополнить код') {
+      await startClientTopUpFlow(bot, msg.chat.id, msg.from);
+      return;
+    }
+
+    if (text === 'Мои коды') {
+      await sendClientCodes(bot, msg.chat.id, msg.from);
+      return;
+    }
+
+    if (text === 'Отмена') {
+      await cancelClientFlow(bot, msg.chat.id, msg.from, true);
+      return;
+    }
+
+    await handleClientStateMessage(bot, msg);
+  });
+
+  bot.onText(/^\/(?:start|help)(?:@[\w_]+)?$/i, async (msg) => {
+    if (!isPrivateChat(msg)) {
+      return;
+    }
+
+    if (Number(msg.from?.id || 0) === adminUserId) {
+      if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+        return;
+      }
+      await bot.sendMessage(msg.chat.id, helpText);
+      return;
+    }
+
+    await sendClientHome(bot, msg.chat.id, msg.from);
   });
 
   bot.onText(/^\/db(?:@[\w_]+)?$/i, async (msg) => {
@@ -838,6 +981,351 @@ export function startTelegramBot() {
   bindShutdown(bot);
   return bot;
 }
+
+function getClientMenuKeyboard() {
+  return {
+    keyboard: [
+      [{ text: 'Создать код' }, { text: 'Пополнить код' }],
+      [{ text: 'Мои коды' }, { text: 'Отмена' }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
+async function sendClientHome(bot, chatId, from) {
+  const codes = listAccessCodesByClient({
+    clientTgUserId: from?.id,
+    clientTgUsername: from?.username,
+  });
+  const username = formatClientDisplayName(from);
+  const activeSession = getActivePaymentSessionByUser(from?.id);
+  const lines = [
+    `Привет, ${username}.`,
+    'Что делаем?',
+    `Кодов у вас: ${codes.length}.`,
+  ];
+
+  if (activeSession) {
+    lines.push(`Есть активная оплата до ${formatDateTime(activeSession.expiresAt)}.`);
+  }
+
+  await bot.sendMessage(chatId, lines.join('\n'), {
+    reply_markup: getClientMenuKeyboard(),
+  });
+}
+
+async function handleClientCreateCode(bot, msg) {
+  const code = createClientAccessCode({
+    clientTgUserId: msg.from?.id,
+    clientTgUsername: msg.from?.username,
+  });
+
+  await bot.sendMessage(msg.chat.id, [
+    'Новый код создан.',
+    `Код: ${code}`,
+    'Сейчас в нём 0 вопросов.',
+  ].join('\n'), {
+    reply_markup: getClientMenuKeyboard(),
+  });
+}
+
+async function sendClientCodes(bot, chatId, from) {
+  const codes = listAccessCodesByClient({
+    clientTgUserId: from?.id,
+    clientTgUsername: from?.username,
+  });
+
+  if (!codes.length) {
+    await bot.sendMessage(chatId, 'У вас пока нет кодов. Нажмите "Создать код".', {
+      reply_markup: getClientMenuKeyboard(),
+    });
+    return;
+  }
+
+  const lines = [
+    'Ваши коды:',
+    'Полный текст нового кода бот показывает в момент создания, здесь — список и баланс.',
+    '',
+    ...codes.map((code, index) => [
+      `${index + 1}. Код #${code.id}`,
+      `Осталось вопросов: ${code.remainingQuestionCount ?? 'unlimited'}`,
+      `Списано: ${code.consumedQuestionCount || 0}`,
+    ].join('\n')),
+  ];
+
+  await bot.sendMessage(chatId, lines.join('\n\n'), {
+    reply_markup: {
+      inline_keyboard: [[{ text: 'Обновить', callback_data: 'client:refresh_codes' }]],
+    },
+  });
+}
+
+async function startClientTopUpFlow(bot, chatId, from) {
+  const activeOwnSession = getActivePaymentSessionByUser(from?.id);
+  if (activeOwnSession) {
+    await sendPaymentInstructions(bot, chatId, activeOwnSession);
+    return;
+  }
+
+  const codes = listAccessCodesByClient({
+    clientTgUserId: from?.id,
+    clientTgUsername: from?.username,
+  });
+  if (!codes.length) {
+    await bot.sendMessage(chatId, 'Сначала создайте код, а потом уже пополняйте его.', {
+      reply_markup: getClientMenuKeyboard(),
+    });
+    return;
+  }
+
+  clientFlowStateByChat.set(chatId, {
+    step: 'await_topup_code',
+    fromUserId: Number(from?.id || 0),
+  });
+
+  await bot.sendMessage(chatId, 'Отправьте код, который хотите пополнить.', {
+    reply_markup: getClientMenuKeyboard(),
+  });
+}
+
+async function cancelClientFlow(bot, chatId, from, notify = false) {
+  clientFlowStateByChat.delete(chatId);
+  const activeSession = getActivePaymentSessionByUser(from?.id);
+  if (activeSession) {
+    cancelPaymentSession(activeSession.id, 'cancelled_by_user');
+  }
+
+  if (notify) {
+    await bot.sendMessage(chatId, 'Текущее действие отменено.', {
+      reply_markup: getClientMenuKeyboard(),
+    });
+  }
+}
+
+async function handleClientStateMessage(bot, msg) {
+  const state = clientFlowStateByChat.get(msg.chat.id);
+  if (!state || state.fromUserId !== Number(msg.from?.id || 0)) {
+    return;
+  }
+
+  if (state.step === 'await_topup_code') {
+    const code = String(msg.text || '').trim();
+    const details = inspectAccessCode(code);
+    const ownerMatches = isCodeOwnedByClient(details, msg.from);
+    if (!details || !ownerMatches) {
+      await bot.sendMessage(msg.chat.id, 'Код не найден или он не привязан к вашему Telegram.');
+      return;
+    }
+
+    clientFlowStateByChat.set(msg.chat.id, {
+      ...state,
+      step: 'await_topup_question_count',
+      targetCode: code,
+    });
+    await bot.sendMessage(msg.chat.id, 'Сколько вопросов хотите купить? Введите целое число больше 0.');
+    return;
+  }
+
+  if (state.step === 'await_topup_question_count') {
+    const questionCount = normalizeQuestionCount(msg.text);
+    if (!questionCount) {
+      await bot.sendMessage(msg.chat.id, 'Введите целое число больше 0.');
+      return;
+    }
+
+    const amountMinor = questionCount * questionPriceMinor;
+    clientFlowStateByChat.set(msg.chat.id, {
+      ...state,
+      step: 'await_topup_confirm',
+      questionCount,
+      amountMinor,
+    });
+
+    await bot.sendMessage(msg.chat.id, [
+      'Проверьте данные:',
+      `Код: ${state.targetCode}`,
+      `Вопросов: ${questionCount}`,
+      `Цена: ${formatMinorPrice(amountMinor)}`,
+      '',
+      'Если всё верно, подтвердите оплату.',
+    ].join('\n'), {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: 'Подтвердить', callback_data: 'client:confirm_topup' },
+          { text: 'Отмена', callback_data: 'client:cancel_topup' },
+        ]],
+      },
+    });
+  }
+}
+
+async function handleClientTopUpConfirmation(bot, chatId, from) {
+  const state = clientFlowStateByChat.get(chatId);
+  if (!state || state.fromUserId !== Number(from?.id || 0) || state.step !== 'await_topup_confirm') {
+    await bot.sendMessage(chatId, 'Сначала начните пополнение заново.');
+    return;
+  }
+
+  const cooldown = getPaymentCooldownState({
+    tgUserId: from?.id,
+    cooldownMs: paymentCooldownMs,
+  });
+  if (!cooldown.allowed) {
+    await bot.sendMessage(chatId, `Новое пополнение можно начать после ${formatDateTime(cooldown.nextAllowedAt)}.`);
+    return;
+  }
+
+  const created = createTopUpPaymentSession({
+    tgUserId: from?.id,
+    tgUsername: from?.username,
+    targetCode: state.targetCode,
+    questionCount: state.questionCount,
+    amountMinor: state.amountMinor,
+    ttlMs: paymentSessionTtlMs,
+  });
+
+  if (!created?.ok) {
+    if (created?.error === 'busy' && created.activeSession) {
+      await bot.sendMessage(chatId, [
+        'Сейчас другой клиент находится в оплате.',
+        `Попробуйте после ${formatDateTime(created.activeSession.expiresAt)}.`,
+      ].join('\n'));
+      return;
+    }
+
+    await bot.sendMessage(chatId, 'Не удалось открыть оплату. Попробуйте ещё раз позже.');
+    return;
+  }
+
+  clientFlowStateByChat.delete(chatId);
+  await sendPaymentInstructions(bot, chatId, created.session);
+}
+
+async function handleClientPaidConfirmation(bot, chatId, from) {
+  const session = getActivePaymentSessionByUser(from?.id);
+  if (!session) {
+    await bot.sendMessage(chatId, 'Активной оплаты не найдено. Начните пополнение заново.');
+    return;
+  }
+
+  if (!monobankToken) {
+    await bot.sendMessage(chatId, 'На сервере не настроен токен monobank для проверки оплаты.');
+    return;
+  }
+
+  const matchedItem = await findMatchingMonobankPayment({
+    createdAt: session.createdAt,
+    amountMinor: session.amountMinor,
+  });
+
+  if (!matchedItem) {
+    await bot.sendMessage(chatId, [
+      'Платёж пока не найден.',
+      'Если вы оплатили только что, подождите немного и нажмите "Я оплатил" ещё раз.',
+    ].join('\n'));
+    return;
+  }
+
+  const completed = completeTopUpPaymentSession(session.id, matchedItem.id);
+  if (!completed?.code) {
+    await bot.sendMessage(chatId, 'Не удалось завершить пополнение. Напишите администратору.');
+    return;
+  }
+
+  await bot.sendMessage(chatId, [
+    'Оплата найдена, код пополнен.',
+    `Код: ${completed.session.targetCode}`,
+    `Начислено вопросов: ${completed.session.questionCount}`,
+    `Теперь осталось: ${completed.code.remainingQuestionCount ?? 'unlimited'}`,
+  ].join('\n'), {
+    reply_markup: getClientMenuKeyboard(),
+  });
+}
+
+async function sendPaymentInstructions(bot, chatId, session) {
+  const lines = [
+    'Оплатите пополнение по реквизитам ниже.',
+    `Сумма: ${formatMinorPrice(session.amountMinor)}`,
+    `Код: ${session.targetCode}`,
+    `Вопросов: ${session.questionCount}`,
+    `Действует до: ${formatDateTime(session.expiresAt)}`,
+  ];
+
+  if (session.amountMinor >= 10000 && paymentTopUpLink) {
+    lines.push(`Ссылка на пополнение: ${paymentTopUpLink}`);
+  } else if (paymentCardNumber) {
+    lines.push(`${paymentCardLabel}: ${paymentCardNumber}`);
+  } else {
+    lines.push('Реквизиты для оплаты не настроены в .env.');
+  }
+
+  lines.push('', 'После перевода нажмите "Я оплатил".');
+
+  await bot.sendMessage(chatId, lines.join('\n'), {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: 'Я оплатил', callback_data: 'client:paid_topup' },
+        { text: 'Отмена', callback_data: 'client:cancel_topup' },
+      ]],
+    },
+  });
+}
+
+async function findMatchingMonobankPayment({ createdAt, amountMinor }) {
+  const fromUnix = Math.max(0, Math.floor((Number(createdAt || 0) - (5 * 60 * 1000)) / 1000));
+  const url = `https://api.monobank.ua/personal/statement/${encodeURIComponent(monobankAccount)}/${fromUnix}`;
+  const response = await fetch(url, {
+    headers: {
+      'X-Token': monobankToken,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Monobank statement check failed: ${response.status}`);
+  }
+
+  const items = await response.json();
+  if (!Array.isArray(items)) {
+    return null;
+  }
+
+  return items.find((item) => {
+    const amount = Number(item?.amount || 0);
+    const timeMs = Number(item?.time || 0) * 1000;
+    return item?.id && amount === Number(amountMinor || 0) && amount > 0 && timeMs >= Number(createdAt || 0) - 60 * 1000;
+  }) || null;
+}
+
+function isCodeOwnedByClient(code, from) {
+  if (!code) {
+    return false;
+  }
+
+  const numericUserId = Number(from?.id || 0);
+  const username = normalizeClientUsername(from?.username);
+  if (code.clientTgUserId && code.clientTgUserId === numericUserId) {
+    return true;
+  }
+
+  return Boolean(username && code.clientTgUsername === username);
+}
+
+function formatMinorPrice(value) {
+  const amountMinor = Number(value || 0);
+  return `${(amountMinor / 100).toFixed(2)} грн`;
+}
+
+function formatClientDisplayName(from) {
+  if (from?.first_name) {
+    return from.first_name;
+  }
+  if (from?.username) {
+    return `@${from.username.replace(/^@+/, '')}`;
+  }
+  return 'друг';
+}
+
 
 export async function sendAdminTelegramLog(message) {
   const bot = botInstance || startTelegramBot();
