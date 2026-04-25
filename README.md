@@ -1,192 +1,192 @@
 # PDMU
 
-Сервис для создания и публикации медицинских тестов из `.txt`, `.pdf`, `.doc`, `.docx` и `.json` файлов.
+A service for creating and publishing medical quizzes from `.txt`, `.pdf`, `.doc`, `.docx`, and `.json` files.
 
-Проект принимает исходный файл с вопросами, локально парсит структуру теста, при необходимости подтягивает ответы из отдельного файла или определяет их через OpenAI, а затем публикует готовую страницу теста по публичной ссылке. Вокруг этого построены одноразовые и пополняемые коды доступа, Telegram-админка, хранение отчётов, антиабьюз и экспорт готового теста.
+The project accepts a source file with questions, parses the quiz structure locally, optionally reads the answer key from a separate file or resolves answers through OpenAI, and then publishes the final quiz as a public hosted page. Around that core flow, the system includes access codes, Telegram-based administration, issue reports, anti-abuse tooling, and quiz export.
 
-## Что умеет
+## Features
 
-- Загружать тесты через веб-интерфейс.
-- Поддерживать форматы `.txt`, `.pdf`, `.doc`, `.docx`, `.json`.
-- Работать в двух режимах ответов:
-  - один фиксированный правильный вариант для всех вопросов;
-  - отдельный файл с ключами ответов.
-- Поддерживать AI-режим, в котором сервис сначала парсит тест локально, а потом находит ответы через OpenAI.
-- Создавать публичную страницу теста `GET /quiz/:slug`.
-- Отдавать JSON-версию теста и ZIP-пакет для скачивания.
-- Ограничивать создание тестов кодами доступа и учитывать расход вопросов по коду.
-- Поддерживать одноразовые, многоразовые и пополняемые коды.
-- Давать администратору Telegram-бота для управления кодами, AI-настройками, банами и отчётами.
-- Сохранять отчёты о проблемах от пользователей вместе с исходными файлами и метаданными устройства.
-- Вести простую антиабьюз-аналитику: устройства, browser id, визиты, AI-баны, логи запросов.
+- Upload quizzes through a web interface.
+- Support `.txt`, `.pdf`, `.doc`, `.docx`, and `.json` input files.
+- Work in two answer modes:
+  - one fixed correct answer index for all questions;
+  - a separate answer key file.
+- Support an AI mode where the quiz is parsed locally first and then answered through OpenAI.
+- Publish hosted quiz pages at `GET /quiz/:slug`.
+- Return both a JSON version of the quiz and a ZIP export bundle.
+- Restrict quiz creation with access codes and track question usage per code.
+- Support one-time, reusable, and refillable access codes.
+- Provide a Telegram bot for admin operations, code management, AI settings, bans, and reports.
+- Store user issue reports together with uploaded source files and device metadata.
+- Track basic anti-abuse data such as devices, browser id, visits, AI bans, and request logs.
 
-## Как устроен проект
+## How It Works
 
-### Основной поток
+### Main flow
 
-1. Пользователь загружает файл через фронтенд из `public/`.
-2. `server.js` принимает файл через `multer`.
-3. Парсер из `src/parser.js` извлекает текст и пытается восстановить структуру вопросов несколькими стратегиями.
-4. Результат сохраняется как draft в SQLite.
-5. После проверки кода доступа draft финализируется в опубликованный quiz.
-6. Публичная страница теста рендерится через `src/quiz-assets.js`.
+1. A user uploads a source file through the frontend in `public/`.
+2. `server.js` accepts the file through `multer`.
+3. The parser in `src/parser.js` extracts text and tries several strategies to reconstruct quiz questions.
+4. The parsed result is stored as a draft in SQLite.
+5. After an access code is validated, the draft is finalized into a published quiz.
+6. The public quiz page is rendered through `src/quiz-assets.js`.
 
-### Если включён AI-режим
+### AI flow
 
-1. Локальный парсер подготавливает список вопросов.
-2. `src/openai-answering.js` отправляет вопросы в OpenAI Responses API.
-3. Используется один или два прохода:
-   - primary model;
-   - optional checker model.
-4. Сервис сохраняет найденные ответы, подозрительные вопросы и сырые AI-результаты.
+1. The local parser prepares a normalized list of questions.
+2. `src/openai-answering.js` sends those questions to the OpenAI Responses API.
+3. The service can run either:
+   - a primary model only;
+   - or a primary model plus a checker model.
+4. The resolved answers, suspicious questions, and raw AI outputs are stored with the quiz data.
 
-## Из чего сделано
+## Tech Stack
 
 ### Backend
 
 - `Node.js`
 - `Express 5`
-- `multer` для приёма файлов
-- `archiver` для ZIP-экспорта
+- `multer` for file uploads
+- `archiver` for ZIP export
 
-### Хранение данных
+### Storage
 
-- SQLite через встроенный `node:sqlite`
-- база лежит в `DATA_DIR/pdmu.sqlite`
+- SQLite through built-in `node:sqlite`
+- database file stored at `DATA_DIR/pdmu.sqlite`
 
-### Парсинг документов
+### Document parsing
 
-- `pdf-parse` для PDF
-- `mammoth` для DOCX
-- `word-extractor` для DOC
+- `pdf-parse` for PDF
+- `mammoth` for DOCX
+- `word-extractor` for DOC
 
 ### AI
 
 - OpenAI Responses API
-- модели по умолчанию:
+- default models:
   - `gpt-5.4`
   - `gpt-5.4-mini`
 
-### Генерация и экспорт
+### Export and generation
 
 - `pdfkit`
 - `docx`
 
-### Интеграции
+### Integrations
 
-- `node-telegram-bot-api` для Telegram-бота администратора и клиентских кодов
+- `node-telegram-bot-api` for Telegram admin and client code workflows
 
-## Структура репозитория
+## Repository Structure
 
 ```text
 .
 ├── public/
-│   ├── admin.html        # веб-интерфейс загрузки и AI-сценария
-│   ├── admin.js          # клиентская логика формы, AI, отчётов
-│   └── admin.css         # стили панели
+│   ├── admin.html        # upload UI and AI flow
+│   ├── admin.js          # client-side form, AI, and reporting logic
+│   └── admin.css         # frontend styles
 ├── scripts/
-│   ├── create-codes.mjs  # CLI-генерация кодов
-│   └── smoke-test.mjs    # локальный smoke test
+│   ├── create-codes.mjs  # CLI access code generator
+│   └── smoke-test.mjs    # local smoke test
 ├── src/
-│   ├── db.js             # схема SQLite и все операции с данными
+│   ├── db.js             # SQLite schema and data access
 │   ├── openai-answering.js
 │   ├── parser.js
-│   ├── quiz-assets.js    # HTML/CSS публичного теста и ZIP
+│   ├── quiz-assets.js    # public quiz HTML/CSS and ZIP bundle
 │   ├── telegram-bot.js
 │   └── utils.js
-├── data/                 # SQLite и служебные файлы
-├── server.js             # точка входа HTTP-сервиса
-└── render.yaml           # конфиг деплоя
+├── data/                 # SQLite database and stored files
+├── server.js             # HTTP entry point
+└── render.yaml           # deployment config
 ```
 
-## База данных
+## Database
 
-В SQLite хранятся:
+The SQLite database stores:
 
-- `access_codes` — коды доступа, лимиты вопросов, привязка к клиенту, цена, статус.
-- `quizzes` — опубликованные тесты.
-- `quiz_drafts` — промежуточные результаты локального парсинга до публикации.
-- `quiz_devices` — посещения и устройства.
-- `quiz_reports` — жалобы по уже опубликованным тестам.
-- `upload_reports` — жалобы на проблемы парсинга до публикации.
-- `app_settings` — настройки сайта и AI.
-- `payment_sessions` — сессии пополнения кодов.
-- `ai_request_logs` — логи AI-запросов.
-- `ai_device_bans` — заблокированные browser id.
+- `access_codes` — access codes, question limits, client linkage, price, and status.
+- `quizzes` — published quizzes.
+- `quiz_drafts` — intermediate parsing results before publication.
+- `quiz_devices` — visit and device tracking.
+- `quiz_reports` — reports for already published quizzes.
+- `upload_reports` — reports for parsing or upload issues before publication.
+- `app_settings` — site-wide and AI settings.
+- `payment_sessions` — access code refill sessions.
+- `ai_request_logs` — AI request history.
+- `ai_device_bans` — blocked browser ids.
 
-## Веб-интерфейс
+## Web Interface
 
-Стартовая страница находится по `/` и открывает форму создания теста.
+The main page is available at `/` and opens the quiz creation form.
 
-Во фронтенде уже реализованы:
+The frontend already supports:
 
-- выбор курса;
-- ввод названия теста;
-- загрузка исходного файла;
-- выбор количества вариантов ответа;
-- переключение между режимом фиксированного ответа и файлом-ключом;
-- выбор количества вопросов;
-- запуск AI-подготовки;
-- отправка отчёта о проблеме.
+- course selection;
+- quiz title input;
+- source file upload;
+- answer option count selection;
+- switching between fixed-answer mode and answer-key-file mode;
+- question count selection;
+- AI preparation flow;
+- reporting an issue with the current upload.
 
 ## API
 
-### Публичные маршруты
+### Public routes
 
-- `GET /` — страница создания теста.
-- `GET /health` — healthcheck и базовая информация о конфигурации.
-- `GET /api/site-notice` — текущее объявление на главной.
-- `POST /api/parse` — локальный парсинг файла в draft.
-- `POST /api/ai-quizzes/inspect` — локальная проверка файла перед AI.
-- `POST /api/ai-quizzes/prepare` — запуск AI-подготовки.
-- `GET /api/ai-quizzes/jobs/:jobId` — статус AI-задачи.
-- `POST /api/access-codes/check` — проверка кода доступа.
-- `POST /api/quizzes/finalize` — публикация draft в готовый тест.
-- `GET /api/quizzes/:slug` — JSON опубликованного теста.
-- `GET /quiz/:slug` — публичная HTML-страница теста.
-- `POST /api/quizzes/:slug/report` — жалоба на тест.
-- `POST /api/reports/upload` — жалоба на проблему парсинга с приложением файлов.
-- `GET /api/download/:slug` — ZIP-экспорт теста.
+- `GET /` — quiz creation page.
+- `GET /health` — healthcheck and basic runtime configuration.
+- `GET /api/site-notice` — current homepage notice.
+- `POST /api/parse` — parse an uploaded file into a draft.
+- `POST /api/ai-quizzes/inspect` — inspect a file locally before AI processing.
+- `POST /api/ai-quizzes/prepare` — start AI preparation.
+- `GET /api/ai-quizzes/jobs/:jobId` — get AI job status.
+- `POST /api/access-codes/check` — validate an access code.
+- `POST /api/quizzes/finalize` — publish a draft as a final quiz.
+- `GET /api/quizzes/:slug` — JSON representation of a published quiz.
+- `GET /quiz/:slug` — public hosted HTML quiz page.
+- `POST /api/quizzes/:slug/report` — submit a report for a published quiz.
+- `POST /api/reports/upload` — report a parsing/upload problem with attached files.
+- `GET /api/download/:slug` — download the quiz as a ZIP bundle.
 
-### Админские маршруты
+### Admin routes
 
-Все защищены через заголовок `X-Admin-Secret`.
+All admin routes are protected with the `X-Admin-Secret` header.
 
-- `POST /api/admin/codes` — создание кодов доступа.
-- `GET /api/admin/quizzes/:id` — детали теста для админа.
-- `GET /api/admin/reports` — список отчётов.
-- `GET /api/admin/reports/:id` — детали отчёта.
-- `GET /api/admin/reports/:id/files/:kind` — скачать файл из отчёта.
-- `POST /api/admin/quizzes/:slug/ban` — бан/разбан теста.
-- `DELETE /api/admin/quizzes/:id` — удаление теста.
+- `POST /api/admin/codes` — create access codes.
+- `GET /api/admin/quizzes/:id` — get quiz details for admin use.
+- `GET /api/admin/reports` — list reports.
+- `GET /api/admin/reports/:id` — get a single report.
+- `GET /api/admin/reports/:id/files/:kind` — download a file attached to a report.
+- `POST /api/admin/quizzes/:slug/ban` — ban or unban a quiz.
+- `DELETE /api/admin/quizzes/:id` — delete a quiz.
 
-## Telegram-бот
+## Telegram Bot
 
-Бот работает в том же процессе и использует ту же SQLite-базу, что и веб-сервис.
+The Telegram bot runs in the same process and uses the same SQLite database as the web service.
 
-Через него можно:
+It can be used to:
 
-- выпускать коды;
-- делать reusable-коды;
-- пополнять коды;
-- проверять код;
-- смотреть базу и финансовую сводку;
-- управлять homepage notice;
-- переключать AI-режимы и лимиты;
-- смотреть AI-логи и AI-баны;
-- искать и банить сайты;
-- смотреть и удалять отчёты;
-- работать с клиентскими кодами и пополнениями.
+- issue access codes;
+- create reusable codes;
+- top up existing codes;
+- inspect code status;
+- check database and accounting info;
+- manage the homepage notice;
+- switch AI modes and limits;
+- inspect AI logs and AI bans;
+- search and moderate hosted quizzes;
+- inspect and delete reports;
+- manage client code and refill flows.
 
-Для включения нужны:
+To enable it, configure:
 
 - `TELEGRAM_BOT_ENABLED=1`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ADMIN_USER_ID`
 
-## Переменные окружения
+## Environment Variables
 
-Минимум для локального запуска:
+Minimum setup for local development:
 
 ```env
 PORT=3000
@@ -199,7 +199,7 @@ QUIZ_PUBLIC_TTL_DAYS=7
 TELEGRAM_BOT_ENABLED=0
 ```
 
-AI-настройки:
+AI configuration:
 
 ```env
 OPENAI_API_KEY=replace-me
@@ -209,7 +209,7 @@ OPENAI_CHUNK_SIZE=180
 USE_MOCK_AI=0
 ```
 
-Telegram:
+Telegram configuration:
 
 ```env
 TELEGRAM_BOT_ENABLED=0
@@ -218,27 +218,27 @@ TELEGRAM_ADMIN_USER_ID=123456789
 ADMIN_CONTACT_TG=@your_username
 ```
 
-Отдельно в проекте используются и дополнительные переменные для оплаты, AI-режимов, cooldown, лимитов и служебных сценариев. Основной ориентир по ним сейчас — код в `server.js`, `src/db.js` и `src/telegram-bot.js`.
+The project also uses additional environment variables for payment flows, AI runtime behavior, cooldowns, limits, and internal service settings. The best source of truth for those is currently the code in `server.js`, `src/db.js`, and `src/telegram-bot.js`.
 
-## Локальный запуск
+## Local Development
 
 ```bash
 npm install
 ```
 
-Создайте `.env` на основе `.env.example`, затем:
+Create `.env` from `.env.example`, then run:
 
 ```bash
 npm run dev
 ```
 
-Открыть в браузере:
+Open:
 
 ```text
 http://localhost:3000
 ```
 
-## Скрипты
+## Scripts
 
 ```bash
 npm run dev
@@ -248,67 +248,67 @@ npm run smoke:test
 npm run smoke:test -- .docx
 ```
 
-Что делают:
+What they do:
 
-- `npm run dev` — запуск с `node --watch`.
-- `npm start` — обычный запуск сервера.
-- `npm run codes:create -- 5` — создать 5 кодов через CLI.
-- `npm run smoke:test` — локально поднять сервис и прогнать сценарий на тестовом PDF.
-- `npm run smoke:test -- .docx` — тот же smoke test для DOCX.
+- `npm run dev` — run the server with `node --watch`.
+- `npm start` — start the server normally.
+- `npm run codes:create -- 5` — create 5 access codes through the CLI.
+- `npm run smoke:test` — start the app locally and run a smoke test against a sample PDF.
+- `npm run smoke:test -- .docx` — run the same smoke test against a DOCX file.
 
-## Пример сценария работы
+## Typical Usage Scenarios
 
-### Локальный парсинг без AI
+### Local parsing without AI
 
-1. Администратор создаёт код доступа.
-2. Пользователь открывает главную страницу.
-3. Загружает файл с вопросами.
-4. Выбирает режим ответов.
-5. Сервис создаёт draft.
-6. После проверки кода draft публикуется как отдельный тест с `slug`.
+1. The admin creates an access code.
+2. A user opens the main page.
+3. The user uploads a question file.
+4. The user selects the answer mode.
+5. The service creates a draft.
+6. After code validation, the draft is published under a unique `slug`.
 
-### AI-сценарий
+### AI-assisted quiz generation
 
-1. Пользователь загружает файл и запускает AI-проверку.
-2. Локальный парсер извлекает вопросы.
-3. OpenAI возвращает индексы ответов.
-4. При двухпроходном режиме сервис сверяет результаты между моделями.
-5. Подозрительные вопросы помечаются для ручной проверки.
-6. Готовый тест публикуется так же, как и обычный.
+1. A user uploads a file and starts AI inspection.
+2. The local parser extracts the questions.
+3. OpenAI returns answer indexes.
+4. In double-pass mode, the service compares primary and checker outputs.
+5. Suspicious questions are flagged for review.
+6. The final quiz is published in the same way as a regular quiz.
 
-## Особенности реализации
+## Implementation Notes
 
-- Парсер не завязан на один шаблон документа и перебирает несколько стратегий извлечения вопросов.
-- Для DOCX есть отдельные эвристики, потому что переносы и структура часто ломаются сильнее всего.
-- В AI-режиме есть чанкинг вопросов, JSON schema-ответы и повторные попытки при упоре в `max_output_tokens`.
-- В базе есть draft-слой, поэтому публикация отделена от самого парсинга.
-- В проекте уже встроены учёт устройств, browser id и жалобы, что полезно для модерации и антиабьюза.
+- The parser is not tied to a single document template and tries multiple extraction strategies.
+- DOCX files have extra heuristics because line breaks and structure are often the least stable there.
+- The AI flow includes question chunking, schema-constrained responses, and retries when the response hits `max_output_tokens`.
+- Draft storage exists as a separate layer, so publication is decoupled from parsing.
+- The project already includes device tracking, browser id capture, and report handling, which helps with moderation and anti-abuse workflows.
 
-## Деплой
+## Deployment
 
-В репозитории есть `render.yaml`, но для постоянной эксплуатации проекту лучше подходит хостинг с persistent storage, потому что SQLite и загруженные файлы должны сохраняться между рестартами.
+The repository includes a `render.yaml`, but for real usage the project is better suited to hosting with persistent storage, because both SQLite and uploaded files need to survive restarts.
 
-Практически это означает:
+In practice, that means:
 
-- для демо можно использовать Render;
-- для нормальной эксплуатации лучше Railway, VPS или любой хостинг с постоянным диском.
+- Render can work for demos;
+- Railway, a VPS, or any host with persistent disk is a better fit for continuous use.
 
-## Ограничения и что стоит учитывать
+## Limitations
 
-- SQLite хорошо подходит для небольшого и среднего проекта, но не для тяжёлой горизонтальной нагрузки.
-- Качество парсинга зависит от структуры исходных документов.
-- AI-режим требует валидный `OPENAI_API_KEY`.
-- Некоторые строки интерфейса и ответов сейчас смешаны по языкам: украинский, русский и английский.
-- Проект содержит много бизнес-логики в `server.js` и `src/telegram-bot.js`, поэтому при дальнейшем росте будет полезно вынести её по модулям.
+- SQLite is a good fit for a small or medium project, but not for heavy horizontal scaling.
+- Parsing quality still depends on the structure and quality of the source documents.
+- AI mode requires a valid `OPENAI_API_KEY`.
+- Some interface and response strings in the codebase are still mixed across Ukrainian, Russian, and English.
+- A lot of business logic currently lives in `server.js` and `src/telegram-bot.js`, so splitting those modules further would help as the project grows.
 
-## Что можно развивать дальше
+## Good Next Steps
 
-- Вынести админское API в отдельные роутеры.
-- Добавить полноценные интеграционные тесты кроме smoke test.
-- Сделать отдельную веб-админку вместо Telegram-only управления.
-- Добавить редактор вопросов перед публикацией.
-- Перевести все пользовательские тексты в одну локаль.
+- Move admin API logic into dedicated routers.
+- Add full integration tests beyond the current smoke test.
+- Build a proper web admin panel instead of Telegram-only admin tooling.
+- Add a question editor before publication.
+- Normalize all user-facing copy into one language.
 
-## Лицензия
+## License
 
-Пока в `package.json` указана `ISC`.
+`package.json` currently declares the project as `ISC`.
