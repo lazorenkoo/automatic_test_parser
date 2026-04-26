@@ -1706,18 +1706,30 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
 
   for (const question of Array.isArray(questions) ? questions : []) {
     const embedded = extractEmbeddedQuestion(question?.q, optionCount);
-    if (!embedded) {
-      repairedQuestions.push(question);
+    if (embedded) {
+      repairedQuestions.push({
+        ...question,
+        q: embedded.questionText,
+        options: embedded.options,
+        correctIndex: Math.max(0, Math.min(embedded.options.length - 1, Number(question?.correctIndex) || 0)),
+      });
+      repairedCount += 1;
       continue;
     }
 
-    repairedQuestions.push({
-      ...question,
-      q: embedded.questionText,
-      options: embedded.options,
-      correctIndex: Math.max(0, Math.min(embedded.options.length - 1, Number(question?.correctIndex) || 0)),
-    });
-    repairedCount += 1;
+    const inlineLeak = extractQuestionContinuationFromOptions(question, optionCount);
+    if (inlineLeak) {
+      repairedQuestions.push({
+        ...question,
+        q: inlineLeak.questionText,
+        options: inlineLeak.options,
+        correctIndex: Math.max(0, Math.min(inlineLeak.options.length - 1, Number(question?.correctIndex) || 0)),
+      });
+      repairedCount += 1;
+      continue;
+    }
+
+    repairedQuestions.push(question);
   }
 
   const notes = [];
@@ -1729,6 +1741,64 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
     questions: repairedQuestions,
     notes,
   };
+}
+
+function extractQuestionContinuationFromOptions(question, optionCount) {
+  const questionText = sanitizeText(question?.q);
+  const options = Array.isArray(question?.options)
+    ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+    : [];
+
+  if (!questionText || options.length < 4) {
+    return null;
+  }
+
+  const promptLooksOpen = /[:;,]$/.test(questionText) || !/[.?!]$/.test(questionText);
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
+
+  for (let index = 0; index < options.length; index += 1) {
+    const candidate = options[index];
+    const candidateEndsWithQuestion = /[?]$/.test(candidate);
+    if (!candidate || (!candidateEndsWithQuestion && candidate.length < 45)) {
+      continue;
+    }
+
+    if (!looksLikePromptSentence(candidate) && !looksLikeQuestionTail(candidate)) {
+      continue;
+    }
+
+    if (!promptLooksOpen && !/[?]$/.test(candidate)) {
+      continue;
+    }
+
+    const remainingOptions = options.filter((_, optionIndex) => optionIndex !== index);
+    if (remainingOptions.length < minOptionCount || !isAcceptableOptionCount(remainingOptions.length, optionCount)) {
+      continue;
+    }
+
+    const remainingLengths = remainingOptions.map((option) => option.length).filter(Boolean);
+    const maxRemainingLength = remainingLengths.length ? Math.max(...remainingLengths) : 0;
+    const shortRemainingCount = remainingOptions.filter((option) => option.length <= 80 && !looksLikeQuestionTail(option)).length;
+    if (!candidateEndsWithQuestion && candidate.length < Math.max(60, Math.round(maxRemainingLength * 1.8))) {
+      continue;
+    }
+
+    if (shortRemainingCount < Math.max(2, remainingOptions.length - 1)) {
+      continue;
+    }
+
+    const mergedQuestion = sanitizeText(`${questionText} ${candidate}`);
+    if (!looksLikeRealQuestion(mergedQuestion, remainingOptions)) {
+      continue;
+    }
+
+    return {
+      questionText: mergedQuestion,
+      options: remainingOptions,
+    };
+  }
+
+  return null;
 }
 
 function extractEmbeddedQuestion(questionText, optionCount) {
