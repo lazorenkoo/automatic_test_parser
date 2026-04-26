@@ -34,7 +34,7 @@ export async function parseQuizFromFile({
   const normalizedOptionCount = normalizeOptionCountSetting(optionCount);
   let fixedDocxResult = null;
 
-  if (preferDocxFixedAuto && extension === '.docx' && normalizedOptionCount === AUTO_OPTION_COUNT) {
+  if (preferDocxFixedAuto && (extension === '.docx' || extension === '.pdf') && normalizedOptionCount === AUTO_OPTION_COUNT) {
     try {
       fixedDocxResult = await parseQuizFromFile({
         buffer,
@@ -2318,6 +2318,14 @@ function collectSequentialOptionsAuto(lines, startIndex) {
 
     if (
       optionEntries.length >= AUTO_OPTION_MIN
+      && looksLikeWrappedQuestionLead(lines, index)
+    ) {
+      nextIndex = index;
+      break;
+    }
+
+    if (
+      optionEntries.length >= AUTO_OPTION_MIN
       && looksLikeQuestionTail(optionText)
       && looksLikePromptSentence(optionText)
     ) {
@@ -2624,6 +2632,39 @@ function looksLikePotentialQuestionStart(firstEntry, secondEntry) {
   if (second) {
     const combined = sanitizeText(`${first} ${second}`);
     if (looksLikePromptSentence(combined)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function looksLikeWrappedQuestionLead(lines, startIndex) {
+  const fragments = [];
+
+  for (let index = startIndex; index < lines.length && fragments.length < 3; index += 1) {
+    const line = sanitizeText(lines[index]);
+    if (!line || shouldIgnoreLine(line)) {
+      continue;
+    }
+
+    if (matchQuestionStart(line) || matchStandaloneQuestionStart(line)) {
+      return true;
+    }
+
+    fragments.push(line);
+    const combined = sanitizeText(fragments.join(' '));
+    if (!combined || !looksLikePromptSentence(combined)) {
+      continue;
+    }
+
+    const firstFragment = fragments[0];
+    if (firstFragment.length < 55) {
+      continue;
+    }
+
+    const tail = fragments.at(-1);
+    if (looksLikeQuestionTail(tail) || /[.?:]$/.test(tail) || (fragments.length >= 2 && combined.length >= 80)) {
       return true;
     }
   }
@@ -2938,7 +2979,7 @@ function shouldIgnoreLine(line, { allowNumeric = false } = {}) {
   return false;
 }
 
-function isLikelyTopicHeading(line) {
+function isLikelyTopicHeadingLegacy(line) {
   if (!line) {
     return false;
   }
@@ -2952,6 +2993,26 @@ function isLikelyTopicHeading(line) {
   }
 
   if (/^[A-ZА-ЯІЇЄҐ0-9\s.,()/-]{8,}$/u.test(line) && !/[?:]$/.test(line)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isLikelyTopicHeading(line) {
+  if (!line) {
+    return false;
+  }
+
+  if (matchesNormalizedModuleHeading(line)) {
+    return true;
+  }
+
+  if (/^Ð·Ð¼Ñ–ÑÑ‚Ð¾Ð²Ð¸Ð¹ Ð¼Ð¾Ð´ÑƒÐ»ÑŒ$/i.test(line)) {
+    return true;
+  }
+
+  if (/^[A-ZÐ-Ð¯Ð†Ð‡Ð„Ò0-9\s.,()/-]{8,}$/u.test(line) && !/[?:]$/.test(line)) {
     return true;
   }
 
