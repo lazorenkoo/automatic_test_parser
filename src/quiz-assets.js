@@ -148,6 +148,30 @@ h1{
   gap:12px;
   margin-top:18px;
 }
+.jump-nav{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:10px;
+  margin:14px 0 18px;
+}
+.jump-nav label{
+  color:var(--muted);
+  font-size:14px;
+}
+.jump-input{
+  width:92px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:10px 12px;
+  background:#fffaf6;
+  color:var(--ink);
+  font:inherit;
+}
+.jump-input:focus{
+  outline:2px solid rgba(187,77,0,.18);
+  border-color:#d8bfa9;
+}
 .btn{
   appearance:none;
   border:none;
@@ -268,6 +292,12 @@ h1{
     flex-direction:column-reverse;
     align-items:stretch;
   }
+  .jump-nav{
+    align-items:stretch;
+  }
+  .jump-input{
+    width:100%;
+  }
   .btn{
     width:100%;
     padding:14px 16px;
@@ -341,7 +371,10 @@ const i18n = {
   start: 'Start',
   questionShort: 'Question',
   questionCounter: 'Question {current} of {total}',
+  jumpLabel: 'Go to question',
+  jumpButton: 'Go',
   finish: 'Finish now',
+  finishConfirm: 'Finish the test now? The results will be shown immediately.',
   next: 'Next',
   results: 'Results',
   restart: 'Restart',
@@ -379,6 +412,9 @@ const els = {
   options: document.getElementById('options'),
   next: document.getElementById('next'),
   finish: document.getElementById('finish'),
+  jumpInput: document.getElementById('jumpInput'),
+  jumpBtn: document.getElementById('jumpBtn'),
+  jumpLabel: document.getElementById('jumpLabel'),
   sum: document.getElementById('sum'),
   list: document.getElementById('resultsList'),
   shuffle: document.getElementById('shuffle'),
@@ -425,6 +461,12 @@ function applyLanguage() {
   }
   if (els.finish) {
     els.finish.textContent = t('finish');
+  }
+  if (els.jumpLabel) {
+    els.jumpLabel.textContent = t('jumpLabel');
+  }
+  if (els.jumpBtn) {
+    els.jumpBtn.textContent = t('jumpButton');
   }
   if (els.next) {
     els.next.textContent = t('next');
@@ -534,6 +576,16 @@ function renderQuestion() {
     els.options.appendChild(button);
   });
 
+  if (els.jumpInput) {
+    els.jumpInput.min = '1';
+    els.jumpInput.max = String(state.order.length);
+    els.jumpInput.value = String(visibleIndex + 1);
+  }
+
+  if (state.chosenAt[questionIndex] !== null) {
+    colorize(questionIndex, state.chosenAt[questionIndex]);
+  }
+
   els.next.disabled = visibleIndex >= state.order.length - 1;
 }
 
@@ -569,6 +621,28 @@ function nextQuestion() {
     state.cur += 1;
     renderQuestion();
   }
+}
+
+function goToQuestion(rawValue) {
+  const total = state.order.length;
+  const numericValue = Number(rawValue);
+  if (!Number.isInteger(numericValue) || numericValue < 1 || numericValue > total) {
+    if (els.jumpInput) {
+      els.jumpInput.value = String(state.cur + 1);
+    }
+    return;
+  }
+
+  state.cur = numericValue - 1;
+  renderQuestion();
+}
+
+function confirmFinishQuiz() {
+  if (!window.confirm(t('finishConfirm'))) {
+    return;
+  }
+
+  showResults();
 }
 
 function showResults() {
@@ -693,7 +767,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   els.startBtn?.addEventListener('click', startQuiz);
   els.next?.addEventListener('click', nextQuestion);
-  els.finish?.addEventListener('click', showResults);
+  els.finish?.addEventListener('click', confirmFinishQuiz);
+  els.jumpBtn?.addEventListener('click', () => goToQuestion(els.jumpInput?.value));
+  els.jumpInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      goToQuestion(els.jumpInput?.value);
+    }
+  });
   els.restartBtn?.addEventListener('click', resetQuiz);
   els.reportBtn?.addEventListener('click', reportBrokenQuiz);
 });
@@ -754,6 +835,11 @@ export function renderHostedQuizHtml(quiz, options = {}) {
 
     <section id="quiz" class="card hidden">
       <div class="small" id="questionCounter">Question</div>
+      <div class="jump-nav">
+        <label for="jumpInput" id="jumpLabel">Go to question</label>
+        <input id="jumpInput" class="jump-input" type="number" min="1" step="1" inputmode="numeric" />
+        <button id="jumpBtn" class="btn secondary" type="button">Go</button>
+      </div>
       <p id="qText" class="question"></p>
       <div id="options" class="options"></div>
       <div class="controls">
@@ -818,6 +904,11 @@ export function buildZipBundle(quiz) {
 
     <section id="quiz" class="card hidden">
       <div class="small" id="questionCounter">Question</div>
+      <div class="jump-nav">
+        <label for="jumpInput" id="jumpLabel">Go to question</label>
+        <input id="jumpInput" class="jump-input" type="number" min="1" step="1" inputmode="numeric" />
+        <button id="jumpBtn" class="btn secondary" type="button">Go</button>
+      </div>
       <p id="qText" class="question"></p>
       <div id="options" class="options"></div>
       <div class="controls">
