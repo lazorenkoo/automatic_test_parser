@@ -183,6 +183,10 @@ export async function parseQuizFromFile({
   questions = repaired.questions;
   notes.push(...repaired.notes);
 
+  const shiftedRepair = repairShiftedQuestionLines(questions, normalizedOptionCount);
+  questions = shiftedRepair.questions;
+  notes.push(...shiftedRepair.notes);
+
   if (answerKey) {
     const resolved = applyAnswerKeyToQuestions(questions, answerKey);
     questions = resolved.questions;
@@ -1784,6 +1788,80 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
   };
 }
 
+function repairShiftedQuestionLines(questions, optionCount) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
+  let movedIntoQuestionCount = 0;
+  let movedToNextQuestionCount = 0;
+
+  for (const question of repairedQuestions) {
+    const questionText = sanitizeText(question?.q);
+    const firstOption = sanitizeText(question?.options?.[0]);
+    if (!questionText || !firstOption) {
+      continue;
+    }
+
+    if (
+      question.options.length > minOptionCount
+      && !looksLikeQuestionTail(questionText)
+      && !/[?]$/.test(questionText)
+      && looksLikePromptSentence(firstOption)
+      && (looksLikeQuestionTail(firstOption) || firstOption.length >= 55)
+    ) {
+      question.q = sanitizeText(`${questionText} ${firstOption}`);
+      question.options.shift();
+      question.correctIndex = Math.max(0, Math.min(question.options.length - 1, Number(question.correctIndex) || 0));
+      movedIntoQuestionCount += 1;
+    }
+  }
+
+  for (let index = 0; index < repairedQuestions.length - 1; index += 1) {
+    const current = repairedQuestions[index];
+    const next = repairedQuestions[index + 1];
+    const lastOption = sanitizeText(current?.options?.at(-1));
+    const nextQuestionText = sanitizeText(next?.q);
+    if (!lastOption || !nextQuestionText) {
+      continue;
+    }
+
+    const nextStartsLikeContinuation = /^[\p{Ll}\p{Lo}]/u.test(nextQuestionText)
+      || /^[,;:)\]-]/u.test(nextQuestionText);
+    const mergedQuestion = sanitizeText(`${lastOption} ${nextQuestionText}`);
+
+    if (
+      current.options.length > minOptionCount
+      && lastOption.length >= 45
+      && nextStartsLikeContinuation
+      && looksLikePromptSentence(mergedQuestion)
+      && looksLikeRealQuestion(mergedQuestion, next.options)
+    ) {
+      current.options.pop();
+      current.correctIndex = Math.max(0, Math.min(current.options.length - 1, Number(current.correctIndex) || 0));
+      next.q = mergedQuestion;
+      movedToNextQuestionCount += 1;
+    }
+  }
+
+  if (movedIntoQuestionCount > 0) {
+    notes.push(`Repaired questions where the prompt started inside the first answer option: ${movedIntoQuestionCount}.`);
+  }
+
+  if (movedToNextQuestionCount > 0) {
+    notes.push(`Repaired questions where the next prompt leaked into the last answer option: ${movedToNextQuestionCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
 function extractQuestionContinuationFromOptions(question, optionCount) {
   const questionText = sanitizeText(question?.q);
   const options = Array.isArray(question?.options)
@@ -3363,6 +3441,12 @@ function matchOptionStart(line, optionCount) {
   // Prevent false positives like "C.D 4" / "CD 4" OCR splits where the leading
   // single-letter "marker" is actually part of an abbreviation in the option text.
   if (markerIsLetter && !spacing && textStartsUppercaseOrDigit) {
+    return null;
+  }
+
+  // Prevent false positives like "E. coli" where the leading letter belongs
+  // to the biological name and is not an answer marker.
+  if (markerIsLetter && spacing && match[2]?.includes('.') && textStartsLowercase) {
     return null;
   }
 
