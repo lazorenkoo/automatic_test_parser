@@ -370,11 +370,52 @@ function choosePreferredDocxAutoResult(autoResult, fixedDocxResult) {
     return autoResult;
   }
 
-  if ((fixedDocxResult.questions?.length || 0) > (autoResult.questions?.length || 0)) {
+  const autoQuestionCount = autoResult.questions?.length || 0;
+  const fixedQuestionCount = fixedDocxResult.questions?.length || 0;
+  if (fixedQuestionCount > autoQuestionCount) {
+    return fixedDocxResult;
+  }
+
+  const autoOptions = summarizeParsedOptionCounts(autoResult.questions);
+  const fixedOptions = summarizeParsedOptionCounts(fixedDocxResult.questions);
+
+  if (
+    fixedQuestionCount >= autoQuestionCount
+    && autoOptions.min < 4
+    && fixedOptions.min >= 4
+  ) {
+    return fixedDocxResult;
+  }
+
+  if (
+    fixedQuestionCount === autoQuestionCount
+    && fixedOptions.min > autoOptions.min
+    && fixedOptions.average >= autoOptions.average + 1
+  ) {
     return fixedDocxResult;
   }
 
   return autoResult;
+}
+
+function summarizeParsedOptionCounts(questions) {
+  const counts = Array.isArray(questions)
+    ? questions
+      .map((question) => Array.isArray(question?.options) ? question.options.length : 0)
+      .filter((count) => Number.isInteger(count) && count > 0)
+    : [];
+
+  if (!counts.length) {
+    return {
+      min: 0,
+      average: 0,
+    };
+  }
+
+  return {
+    min: Math.min(...counts),
+    average: counts.reduce((sum, count) => sum + count, 0) / counts.length,
+  };
 }
 
 export async function parseAnswerKeyFromFile({ buffer, filename }) {
