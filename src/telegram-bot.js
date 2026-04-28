@@ -27,9 +27,11 @@ import {
   listAccessCodesByClient,
   listAiDeviceBans,
   listAiRequestLogs,
+  listQuizCorrections,
   listQuizReports,
   listUploadReports,
   listQuizzesForAdmin,
+  getQuizCorrectionById,
   revokeAccessCode,
   topUpAccessCode,
   setQuizBanStatusById,
@@ -92,6 +94,8 @@ export function startTelegramBot() {
     '/site <id>',
     '/sitecount <fromId> <toId>',
     '/sitejson <id>',
+    '/fixlogs [limit]',
+    '/fixlog <id>',
     '/reports [limit]',
     '/report <id|q-12|u-7>',
     '/reportfile <id|q-12|u-7> <source|answer>',
@@ -136,6 +140,8 @@ export function startTelegramBot() {
     { command: 'site', description: 'Show site details' },
     { command: 'sitecount', description: 'Sum questions for site id range' },
     { command: 'sitejson', description: 'Send parsed quiz JSON' },
+    { command: 'fixlogs', description: 'Latest manual corrections' },
+    { command: 'fixlog', description: 'Show correction details' },
     { command: 'reports', description: 'Latest file reports' },
     { command: 'report', description: 'Show report details' },
     { command: 'reportfile', description: 'Send reported file' },
@@ -703,6 +709,35 @@ export function startTelegramBot() {
       filename: `quiz-${quiz.id}.json`,
       contentType: 'application/json',
     });
+  });
+
+  bot.onText(/^\/fixlogs(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const limit = Math.max(1, Math.min(100, Number(String(match?.[1] || '').trim()) || 10));
+    await bot.sendMessage(msg.chat.id, formatCorrectionLogsList(limit), { disable_web_page_preview: true });
+  });
+
+  bot.onText(/^\/fixlog(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const correctionId = Number(String(match?.[1] || '').trim());
+    if (!Number.isInteger(correctionId) || correctionId < 1) {
+      await bot.sendMessage(msg.chat.id, 'Format: /fixlog <id>');
+      return;
+    }
+
+    const correction = getQuizCorrectionById(correctionId);
+    if (!correction) {
+      await bot.sendMessage(msg.chat.id, `Correction ${correctionId} not found.`);
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, formatCorrectionLogDetails(correction), { disable_web_page_preview: true });
   });
 
   bot.onText(/^\/reports(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -2181,6 +2216,50 @@ function formatReportsList(limit) {
     `Latest reports: ${reports.length}`,
     '',
     ...reports.map((report) => `${report.id}. ${report.reportType === 'upload' ? 'main' : 'site'} | ${truncate(report.note || 'no text', 120)}`),
+  ].join('\n');
+}
+
+function formatCorrectionLogsList(limit) {
+  const corrections = listQuizCorrections(limit);
+  if (!corrections.length) {
+    return 'No correction logs yet.';
+  }
+
+  return [
+    `Latest corrections: ${corrections.length}`,
+    '',
+    ...corrections.map((entry) => [
+      `${entry.id}. Quiz ${entry.quizId} | Q${entry.questionIndex}`,
+      `${truncate(entry.quizTitle || entry.quizSlug || '-', 80)}`,
+      `Created: ${formatDateTime(entry.createdAt)}`,
+      `Edited: ${truncate(entry.editedQuestionText || '-', 120)}`,
+    ].join('\n')),
+  ].join('\n\n');
+}
+
+function formatCorrectionLogDetails(entry) {
+  const originalOptions = Array.isArray(entry.originalOptions) ? entry.originalOptions : [];
+  const editedOptions = Array.isArray(entry.editedOptions) ? entry.editedOptions : [];
+
+  return [
+    `Correction ${entry.id}`,
+    `Quiz ID: ${entry.quizId}`,
+    `Title: ${entry.quizTitle || '-'}`,
+    `Slug: ${entry.quizSlug || '-'}`,
+    `Source question: ${entry.questionIndex || '-'}`,
+    `Visible question: ${entry.visibleQuestionNumber || '-'}`,
+    `Configured answers: ${entry.configuredOptionCount || '-'}`,
+    `Shuffle: ${entry.shuffleQuestions ? 'yes' : 'no'}`,
+    `Created: ${formatDateTime(entry.createdAt)}`,
+    '',
+    `Original question: ${entry.originalQuestionText || '-'}`,
+    `Edited question: ${entry.editedQuestionText || '-'}`,
+    '',
+    'Original answers:',
+    ...(originalOptions.length ? originalOptions.map((item, index) => `${index + 1}. ${item}`) : ['-']),
+    '',
+    'Edited answers:',
+    ...(editedOptions.length ? editedOptions.map((item, index) => `${index + 1}. ${item}`) : ['-']),
   ].join('\n');
 }
 

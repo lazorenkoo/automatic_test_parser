@@ -111,6 +111,22 @@ db.exec(`
     FOREIGN KEY(quiz_id) REFERENCES quizzes(id)
   );
 
+  CREATE TABLE IF NOT EXISTS quiz_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quiz_id INTEGER NOT NULL,
+    question_index INTEGER NOT NULL,
+    visible_question_number INTEGER,
+    configured_option_count INTEGER,
+    shuffle_questions INTEGER NOT NULL DEFAULT 0,
+    shuffled_option_order_json TEXT NOT NULL DEFAULT '[]',
+    original_question_text TEXT NOT NULL,
+    edited_question_text TEXT NOT NULL,
+    original_options_json TEXT NOT NULL,
+    edited_options_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(quiz_id) REFERENCES quizzes(id)
+  );
+
   CREATE TABLE IF NOT EXISTS upload_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT,
@@ -165,6 +181,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_quiz_devices_quiz_id ON quiz_devices(quiz_id);
   CREATE INDEX IF NOT EXISTS idx_quiz_reports_quiz_id ON quiz_reports(quiz_id);
   CREATE INDEX IF NOT EXISTS idx_quiz_reports_created_at ON quiz_reports(created_at);
+  CREATE INDEX IF NOT EXISTS idx_quiz_corrections_quiz_id ON quiz_corrections(quiz_id);
+  CREATE INDEX IF NOT EXISTS idx_quiz_corrections_created_at ON quiz_corrections(created_at);
   CREATE INDEX IF NOT EXISTS idx_upload_reports_created_at ON upload_reports(created_at);
   CREATE INDEX IF NOT EXISTS idx_ai_request_logs_created_at ON ai_request_logs(created_at);
   CREATE INDEX IF NOT EXISTS idx_payment_sessions_user_created_at ON payment_sessions(tg_user_id, created_at DESC);
@@ -862,6 +880,11 @@ const deleteQuizReportsByQuizIdStmt = db.prepare(`
   WHERE quiz_id = ?
 `);
 
+const deleteQuizCorrectionsByQuizIdStmt = db.prepare(`
+  DELETE FROM quiz_corrections
+  WHERE quiz_id = ?
+`);
+
 const deleteQuizByIdStmt = db.prepare(`
   DELETE FROM quizzes
   WHERE id = ?
@@ -919,6 +942,95 @@ const getQuizReportByIdStmt = db.prepare(`
   FROM quiz_reports r
   INNER JOIN quizzes q ON q.id = r.quiz_id
   WHERE r.id = ?
+`);
+
+const insertQuizCorrectionStmt = db.prepare(`
+  INSERT INTO quiz_corrections (
+    quiz_id,
+    question_index,
+    visible_question_number,
+    configured_option_count,
+    shuffle_questions,
+    shuffled_option_order_json,
+    original_question_text,
+    edited_question_text,
+    original_options_json,
+    edited_options_json,
+    created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const trimQuizCorrectionsStmt = db.prepare(`
+  DELETE FROM quiz_corrections
+  WHERE id NOT IN (
+    SELECT id
+    FROM quiz_corrections
+    ORDER BY created_at DESC, id DESC
+    LIMIT 100
+  )
+`);
+
+const listQuizCorrectionsStmt = db.prepare(`
+  SELECT
+    c.id,
+    c.quiz_id AS quizId,
+    q.slug AS quizSlug,
+    q.title AS quizTitle,
+    c.question_index AS questionIndex,
+    c.visible_question_number AS visibleQuestionNumber,
+    c.configured_option_count AS configuredOptionCount,
+    c.shuffle_questions AS shuffleQuestions,
+    c.shuffled_option_order_json AS shuffledOptionOrderJson,
+    c.original_question_text AS originalQuestionText,
+    c.edited_question_text AS editedQuestionText,
+    c.original_options_json AS originalOptionsJson,
+    c.edited_options_json AS editedOptionsJson,
+    c.created_at AS createdAt
+  FROM quiz_corrections c
+  LEFT JOIN quizzes q ON q.id = c.quiz_id
+  ORDER BY c.created_at DESC, c.id DESC
+  LIMIT ?
+`);
+
+const getQuizCorrectionByIdStmt = db.prepare(`
+  SELECT
+    c.id,
+    c.quiz_id AS quizId,
+    q.slug AS quizSlug,
+    q.title AS quizTitle,
+    c.question_index AS questionIndex,
+    c.visible_question_number AS visibleQuestionNumber,
+    c.configured_option_count AS configuredOptionCount,
+    c.shuffle_questions AS shuffleQuestions,
+    c.shuffled_option_order_json AS shuffledOptionOrderJson,
+    c.original_question_text AS originalQuestionText,
+    c.edited_question_text AS editedQuestionText,
+    c.original_options_json AS originalOptionsJson,
+    c.edited_options_json AS editedOptionsJson,
+    c.created_at AS createdAt
+  FROM quiz_corrections c
+  LEFT JOIN quizzes q ON q.id = c.quiz_id
+  WHERE c.id = ?
+`);
+
+const listQuizCorrectionsByQuizIdStmt = db.prepare(`
+  SELECT
+    id,
+    quiz_id AS quizId,
+    question_index AS questionIndex,
+    visible_question_number AS visibleQuestionNumber,
+    configured_option_count AS configuredOptionCount,
+    shuffle_questions AS shuffleQuestions,
+    shuffled_option_order_json AS shuffledOptionOrderJson,
+    original_question_text AS originalQuestionText,
+    edited_question_text AS editedQuestionText,
+    original_options_json AS originalOptionsJson,
+    edited_options_json AS editedOptionsJson,
+    created_at AS createdAt
+  FROM quiz_corrections
+  WHERE quiz_id = ?
+  ORDER BY created_at DESC, id DESC
+  LIMIT 100
 `);
 
 const insertUploadReportStmt = db.prepare(`
@@ -2155,6 +2267,7 @@ export function deleteQuizById(quizId) {
 
   const tx = createTransaction(() => {
     deleteQuizReportsByQuizIdStmt.run(numericQuizId);
+    deleteQuizCorrectionsByQuizIdStmt.run(numericQuizId);
     deleteQuizDevicesByQuizIdStmt.run(numericQuizId);
     unlinkCodeFromQuizStmt.run(numericQuizId);
     deleteQuizByIdStmt.run(numericQuizId);
@@ -2197,6 +2310,67 @@ export function replaceQuizQuestion({ quizId, questionIndex, question }) {
   questions[questionIndex - 1] = question;
   persistQuizContent(quiz, questions, quiz.reviewBlocks || []);
   return getQuizById(quizId);
+}
+
+export function applyQuizQuestionCorrection({ quizId, questionIndex, question, correction }) {
+  const quiz = getQuizById(quizId);
+  if (!quiz) {
+    return null;
+  }
+
+  const questions = Array.isArray(quiz.questions) ? [...quiz.questions] : [];
+  if (questionIndex < 1 || questionIndex > questions.length) {
+    return { error: 'question_not_found' };
+  }
+
+  const createdAt = nowMs();
+  const tx = createTransaction(() => {
+    questions[questionIndex - 1] = question;
+    persistQuizContent(quiz, questions, quiz.reviewBlocks || []);
+
+    insertQuizCorrectionStmt.run(
+      quiz.id,
+      questionIndex,
+      correction?.visibleQuestionNumber != null ? Number(correction.visibleQuestionNumber) : null,
+      correction?.configuredOptionCount != null ? Number(correction.configuredOptionCount) : null,
+      Boolean(correction?.shuffleQuestions) ? 1 : 0,
+      JSON.stringify(Array.isArray(correction?.shuffledOptionOrder) ? correction.shuffledOptionOrder : []),
+      sanitizeNullableValue(correction?.originalQuestionText) || sanitizeNullableValue(quiz.questions?.[questionIndex - 1]?.q) || '',
+      sanitizeNullableValue(correction?.editedQuestionText) || sanitizeNullableValue(question?.q) || '',
+      JSON.stringify(Array.isArray(correction?.originalOptionsSourceOrder) ? correction.originalOptionsSourceOrder : []),
+      JSON.stringify(Array.isArray(correction?.editedOptionsVisibleOrder) ? correction.editedOptionsVisibleOrder : (question?.options || [])),
+      createdAt,
+    );
+
+    trimQuizCorrectionsStmt.run();
+    return getQuizById(quiz.id);
+  });
+
+  return tx();
+}
+
+export function listQuizCorrections(limit = 20) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  return listQuizCorrectionsStmt.all(safeLimit).map(mapQuizCorrectionRow);
+}
+
+export function getQuizCorrectionById(correctionId) {
+  const numericCorrectionId = Number(correctionId);
+  if (!Number.isInteger(numericCorrectionId) || numericCorrectionId < 1) {
+    return null;
+  }
+
+  const row = getQuizCorrectionByIdStmt.get(numericCorrectionId);
+  return row ? mapQuizCorrectionRow(row) : null;
+}
+
+export function listQuizCorrectionsByQuizId(quizId) {
+  const numericQuizId = Number(quizId);
+  if (!Number.isInteger(numericQuizId) || numericQuizId < 1) {
+    return [];
+  }
+
+  return listQuizCorrectionsByQuizIdStmt.all(numericQuizId).map(mapQuizCorrectionRow);
 }
 
 function mapQuizRow(row) {
@@ -2245,6 +2419,25 @@ function mapQuizReportRow(row) {
     sourceUploadName: row.sourceUploadName || null,
     answerUploadPath: row.answerUploadPath || null,
     answerUploadName: row.answerUploadName || null,
+  };
+}
+
+function mapQuizCorrectionRow(row) {
+  return {
+    id: Number(row.id),
+    quizId: Number(row.quizId),
+    quizSlug: row.quizSlug || '',
+    quizTitle: row.quizTitle || '',
+    questionIndex: Number(row.questionIndex || 0),
+    visibleQuestionNumber: row.visibleQuestionNumber != null ? Number(row.visibleQuestionNumber) : null,
+    configuredOptionCount: row.configuredOptionCount != null ? Number(row.configuredOptionCount) : null,
+    shuffleQuestions: Number(row.shuffleQuestions || 0) === 1,
+    shuffledOptionOrder: parseJsonField(row.shuffledOptionOrderJson, []),
+    originalQuestionText: row.originalQuestionText || '',
+    editedQuestionText: row.editedQuestionText || '',
+    originalOptions: parseJsonField(row.originalOptionsJson, []),
+    editedOptions: parseJsonField(row.editedOptionsJson, []),
+    createdAt: Number(row.createdAt || 0),
   };
 }
 

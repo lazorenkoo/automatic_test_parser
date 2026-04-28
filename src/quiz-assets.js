@@ -214,6 +214,19 @@ h1{
   text-transform:uppercase;
   letter-spacing:.04em;
 }
+.question-meta{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.correction-dot{
+  width:10px;
+  height:10px;
+  border-radius:999px;
+  background:#facc15;
+  border:1px solid #ca8a04;
+  flex:0 0 auto;
+}
 .summary{
   font-size:18px;
   font-weight:700;
@@ -238,6 +251,62 @@ h1{
   font-size:14px;
   line-height:1.45;
   z-index:30;
+}
+.correction-panel{
+  margin-top:18px;
+  padding:18px;
+  border:1px solid var(--line);
+  border-radius:20px;
+  background:#fffaf3;
+}
+.correction-panel h3{
+  margin:0 0 8px;
+  font-size:20px;
+}
+.correction-panel p{
+  margin:0 0 14px;
+  color:var(--muted);
+  font-size:14px;
+  line-height:1.45;
+}
+.correction-fields{
+  display:grid;
+  gap:12px;
+}
+.correction-field{
+  display:grid;
+  gap:8px;
+}
+.correction-field label{
+  font-size:14px;
+  font-weight:700;
+}
+.correction-input,
+.correction-textarea{
+  width:100%;
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:12px 14px;
+  background:#fff;
+  color:var(--ink);
+  font:inherit;
+}
+.correction-textarea{
+  min-height:110px;
+  resize:vertical;
+  line-height:1.45;
+}
+.correction-input:focus,
+.correction-textarea:focus{
+  outline:2px solid rgba(187,77,0,.18);
+  border-color:#d8bfa9;
+}
+.correction-actions{
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:10px;
+  margin-top:14px;
 }
 @media (hover:none){
   .option:hover,
@@ -322,6 +391,14 @@ h1{
     right:12px;
     bottom:72px;
   }
+  .correction-panel{
+    padding:14px;
+    border-radius:16px;
+  }
+  .correction-actions{
+    flex-direction:column-reverse;
+    align-items:stretch;
+  }
 }
 @media (max-width:400px){
   .shell{
@@ -361,6 +438,10 @@ const aiSuspiciousQuestions = Array.isArray(bootstrapData.aiSuspiciousQuestions)
   : [];
 const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
+const correctionUrl = bootstrapData.correctionUrl || '';
+const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOptionCount))
+  ? Math.max(0, Number(bootstrapData.configuredOptionCount))
+  : 0;
 
 const i18n = {
   eyebrow: 'PDMU quiz link',
@@ -375,6 +456,17 @@ const i18n = {
   jumpButton: 'Go',
   finish: 'Finish now',
   finishConfirm: 'Finish the test now? The results will be shown immediately.',
+  correctionOpen: 'Fix question',
+  correctionTitle: 'Suggest a correction',
+  correctionIntro: 'You can edit the current question and its answer options. The fix will be saved for review.',
+  correctionQuestion: 'Question',
+  correctionOption: 'Answer {number}',
+  correctionCancel: 'Cancel',
+  correctionSubmit: 'Confirm fix',
+  correctionSuccess: 'The correction was saved.',
+  correctionInvalid: 'Could not prepare this correction.',
+  correctionUnavailable: 'This quiz cannot accept corrections right now.',
+  correctionError: 'Could not save the correction. Please try again later.',
   next: 'Next',
   results: 'Results',
   restart: 'Restart',
@@ -399,12 +491,15 @@ const state = {
   cur: 0,
   startedAt: null,
   shuffleQuestions: false,
+  correctionOpen: false,
+  configuredOptionCount,
 };
 
 const els = {
   pageTitle: document.getElementById('pageTitle'),
   quizTitle: document.getElementById('quizTitle'),
   questionCounter: document.getElementById('questionCounter'),
+  correctionDot: document.getElementById('correctionDot'),
   start: document.getElementById('start'),
   quiz: document.getElementById('quiz'),
   results: document.getElementById('results'),
@@ -412,6 +507,15 @@ const els = {
   options: document.getElementById('options'),
   next: document.getElementById('next'),
   finish: document.getElementById('finish'),
+  correctionOpenBtn: document.getElementById('correctionOpenBtn'),
+  correctionPanel: document.getElementById('correctionPanel'),
+  correctionTitle: document.getElementById('correctionTitle'),
+  correctionIntro: document.getElementById('correctionIntro'),
+  correctionQuestionLabel: document.getElementById('correctionQuestionLabel'),
+  correctionQuestionInput: document.getElementById('correctionQuestionInput'),
+  correctionOptions: document.getElementById('correctionOptions'),
+  correctionCancelBtn: document.getElementById('correctionCancelBtn'),
+  correctionSubmitBtn: document.getElementById('correctionSubmitBtn'),
   jumpInput: document.getElementById('jumpInput'),
   jumpBtn: document.getElementById('jumpBtn'),
   jumpLabel: document.getElementById('jumpLabel'),
@@ -461,6 +565,24 @@ function applyLanguage() {
   }
   if (els.finish) {
     els.finish.textContent = t('finish');
+  }
+  if (els.correctionOpenBtn) {
+    els.correctionOpenBtn.textContent = t('correctionOpen');
+  }
+  if (els.correctionTitle) {
+    els.correctionTitle.textContent = t('correctionTitle');
+  }
+  if (els.correctionIntro) {
+    els.correctionIntro.textContent = t('correctionIntro');
+  }
+  if (els.correctionQuestionLabel) {
+    els.correctionQuestionLabel.textContent = t('correctionQuestion');
+  }
+  if (els.correctionCancelBtn) {
+    els.correctionCancelBtn.textContent = t('correctionCancel');
+  }
+  if (els.correctionSubmitBtn) {
+    els.correctionSubmitBtn.textContent = t('correctionSubmit');
   }
   if (els.jumpLabel) {
     els.jumpLabel.textContent = t('jumpLabel');
@@ -530,6 +652,24 @@ function msToClock(ms) {
   return minutes + ' ' + t('minutes') + ' ' + seconds + ' ' + t('seconds');
 }
 
+function getCurrentQuestionContext() {
+  const visibleIndex = state.cur;
+  const sourceQuestionIndex = state.order[visibleIndex];
+  const question = state.questions[sourceQuestionIndex];
+  const optionOrder = state.optsOrder[sourceQuestionIndex] || [];
+  return {
+    visibleIndex,
+    sourceQuestionIndex,
+    question,
+    optionOrder,
+  };
+}
+
+function getEditableOptionCount(question) {
+  const currentCount = Array.isArray(question?.options) ? question.options.length : 0;
+  return Math.max(currentCount, state.configuredOptionCount || 0);
+}
+
 function startQuiz() {
   const totalQuestions = state.questions.length;
   state.order = [...Array(totalQuestions).keys()];
@@ -547,6 +687,7 @@ function startQuiz() {
   state.chosenAt = Array(totalQuestions).fill(null);
   state.cur = 0;
   state.startedAt = Date.now();
+  state.correctionOpen = false;
 
   hide(els.start);
   hide(els.results);
@@ -555,10 +696,7 @@ function startQuiz() {
 }
 
 function renderQuestion() {
-  const visibleIndex = state.cur;
-  const questionIndex = state.order[visibleIndex];
-  const question = state.questions[questionIndex];
-  const optionOrder = state.optsOrder[questionIndex];
+  const { visibleIndex, sourceQuestionIndex: questionIndex, question, optionOrder } = getCurrentQuestionContext();
 
   els.questionCounter.textContent = t('questionCounter', {
     current: visibleIndex + 1,
@@ -586,6 +724,11 @@ function renderQuestion() {
     colorize(questionIndex, state.chosenAt[questionIndex]);
   }
 
+  if (els.correctionDot) {
+    els.correctionDot.classList.toggle('hidden', !question?.manuallyCorrected);
+  }
+
+  renderCorrectionPanel();
   els.next.disabled = visibleIndex >= state.order.length - 1;
 }
 
@@ -635,6 +778,173 @@ function goToQuestion(rawValue) {
 
   state.cur = numericValue - 1;
   renderQuestion();
+}
+
+function openCorrectionPanel() {
+  state.correctionOpen = true;
+  renderCorrectionPanel();
+}
+
+function closeCorrectionPanel() {
+  state.correctionOpen = false;
+  renderCorrectionPanel();
+}
+
+function renderCorrectionPanel() {
+  if (!els.correctionPanel || !els.correctionQuestionInput || !els.correctionOptions) {
+    return;
+  }
+
+  if (!state.correctionOpen) {
+    hide(els.correctionPanel);
+    return;
+  }
+
+  const { question, optionOrder } = getCurrentQuestionContext();
+  if (!question) {
+    hide(els.correctionPanel);
+    return;
+  }
+
+  show(els.correctionPanel);
+  els.correctionQuestionInput.value = question.q || '';
+  els.correctionOptions.innerHTML = '';
+  const editableOptionCount = getEditableOptionCount(question);
+
+  for (let visibleOptionIndex = 0; visibleOptionIndex < editableOptionCount; visibleOptionIndex += 1) {
+    const sourceOptionIndex = optionOrder[visibleOptionIndex];
+    const field = document.createElement('div');
+    field.className = 'correction-field';
+
+    const label = document.createElement('label');
+    label.textContent = t('correctionOption', { number: visibleOptionIndex + 1 });
+    label.setAttribute('for', 'correctionOption' + visibleOptionIndex);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'correctionOption' + visibleOptionIndex;
+    input.className = 'correction-input';
+    input.value = Number.isInteger(sourceOptionIndex) ? (question.options[sourceOptionIndex] || '') : '';
+    input.dataset.sourceOptionIndex = Number.isInteger(sourceOptionIndex) ? String(sourceOptionIndex) : '';
+    input.dataset.visibleOptionIndex = String(visibleOptionIndex);
+
+    field.appendChild(label);
+    field.appendChild(input);
+    els.correctionOptions.appendChild(field);
+  }
+}
+
+function buildCorrectionPayload() {
+  const { visibleIndex, sourceQuestionIndex, question, optionOrder } = getCurrentQuestionContext();
+  if (!question || !Array.isArray(question.options) || !optionOrder.length) {
+    return null;
+  }
+
+  const editedQuestionText = String(els.correctionQuestionInput?.value || '').trim();
+  const optionInputs = [...(els.correctionOptions?.querySelectorAll('input[data-source-option-index]') || [])];
+  const editableOptionCount = getEditableOptionCount(question);
+  if (!editedQuestionText || optionInputs.length !== editableOptionCount) {
+    return null;
+  }
+
+  const editedOptionsVisibleOrder = optionInputs.map((input) => String(input.value || '').trim());
+  if (editedOptionsVisibleOrder.some((value) => !value)) {
+    return null;
+  }
+
+  const editedOptionsSourceOrder = Array(question.options.length).fill('');
+  let hasFullSourceOrder = true;
+  optionInputs.forEach((input, visibleOptionIndex) => {
+    const sourceOptionIndex = Number(input.dataset.sourceOptionIndex);
+    if (Number.isInteger(sourceOptionIndex) && sourceOptionIndex >= 0 && sourceOptionIndex < editedOptionsSourceOrder.length) {
+      editedOptionsSourceOrder[sourceOptionIndex] = editedOptionsVisibleOrder[visibleOptionIndex];
+      return;
+    }
+    hasFullSourceOrder = false;
+  });
+
+  return {
+    visibleQuestionNumber: visibleIndex + 1,
+    sourceQuestionNumber: sourceQuestionIndex + 1,
+    configuredOptionCount: editableOptionCount,
+    shuffleQuestions: Boolean(state.shuffleQuestions),
+    shuffledOptionOrder: optionOrder.map((sourceIndex) => sourceIndex + 1),
+    originalQuestionText: question.q,
+    editedQuestionText,
+    originalOptionsSourceOrder: [...question.options],
+    editedOptionsSourceOrder: hasFullSourceOrder && !editedOptionsSourceOrder.some((value) => !value)
+      ? editedOptionsSourceOrder
+      : null,
+    originalOptionsVisibleOrder: Array.from({ length: editableOptionCount }, (_, visibleOptionIndex) => {
+      const sourceOptionIndex = optionOrder[visibleOptionIndex];
+      return Number.isInteger(sourceOptionIndex) ? (question.options[sourceOptionIndex] || '') : '';
+    }),
+    editedOptionsVisibleOrder,
+  };
+}
+
+async function submitCorrection() {
+  if (!correctionUrl) {
+    showToast(t('correctionUnavailable'));
+    return;
+  }
+
+  const correction = buildCorrectionPayload();
+  if (!correction) {
+    showToast(t('correctionInvalid'));
+    return;
+  }
+
+  const payload = {
+    correction,
+  };
+
+  const { sourceQuestionIndex } = getCurrentQuestionContext();
+  const currentOrder = Array.isArray(state.optsOrder[sourceQuestionIndex]) ? [...state.optsOrder[sourceQuestionIndex]] : [];
+
+  if (els.correctionSubmitBtn) {
+    els.correctionSubmitBtn.disabled = true;
+  }
+
+  try {
+    const response = await fetch(correctionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error('Correction failed');
+    }
+
+    const result = await response.json();
+    if (!result?.question) {
+      throw new Error('Correction response invalid');
+    }
+
+    state.questions[sourceQuestionIndex] = result.question;
+    const nextOptionCount = Array.isArray(result.question.options) ? result.question.options.length : 0;
+    state.configuredOptionCount = Math.max(state.configuredOptionCount || 0, nextOptionCount);
+    const nextOrder = currentOrder.filter((index) => Number.isInteger(index) && index >= 0 && index < nextOptionCount);
+    for (let optionIndex = 0; optionIndex < nextOptionCount; optionIndex += 1) {
+      if (!nextOrder.includes(optionIndex)) {
+        nextOrder.push(optionIndex);
+      }
+    }
+    state.optsOrder[sourceQuestionIndex] = nextOrder;
+
+    closeCorrectionPanel();
+    renderQuestion();
+    showToast(t('correctionSuccess'));
+  } catch (_error) {
+    showToast(t('correctionError'));
+  } finally {
+    if (els.correctionSubmitBtn) {
+      els.correctionSubmitBtn.disabled = false;
+    }
+  }
 }
 
 function confirmFinishQuiz() {
@@ -699,6 +1009,7 @@ function showResults() {
 }
 
 function resetQuiz() {
+  state.correctionOpen = false;
   hide(els.quiz);
   hide(els.results);
   show(els.start);
@@ -768,6 +1079,9 @@ document.addEventListener('DOMContentLoaded', () => {
   els.startBtn?.addEventListener('click', startQuiz);
   els.next?.addEventListener('click', nextQuestion);
   els.finish?.addEventListener('click', confirmFinishQuiz);
+  els.correctionOpenBtn?.addEventListener('click', openCorrectionPanel);
+  els.correctionCancelBtn?.addEventListener('click', closeCorrectionPanel);
+  els.correctionSubmitBtn?.addEventListener('click', submitCorrection);
   els.jumpBtn?.addEventListener('click', () => goToQuestion(els.jumpInput?.value));
   els.jumpInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
@@ -783,13 +1097,18 @@ document.addEventListener('DOMContentLoaded', () => {
 export function renderHostedQuizHtml(quiz, options = {}) {
   const quizUrl = typeof options === 'string' ? options : options.quizUrl || null;
   const reportUrl = typeof options === 'object' && options ? options.reportUrl || '' : '';
+  const correctionUrl = typeof options === 'object' && options ? options.correctionUrl || '' : '';
   const title = htmlEscape(quiz.title);
   const displayUrl = htmlEscape(quizUrl || quiz.slug);
   const bootstrap = safeJsonForScript({
     slug: quiz.slug,
     quizUrl: quizUrl || '',
     reportUrl,
+    correctionUrl,
     title: quiz.title,
+    configuredOptionCount: Number.isInteger(Number(quiz.rawModelJson?.optionCount))
+      ? Number(quiz.rawModelJson.optionCount)
+      : Math.max(0, ...quiz.questions.map((question) => Array.isArray(question?.options) ? question.options.length : 0)),
     questions: quiz.questions,
     aiDisagreements: Array.isArray(quiz.rawModelJson?.aiDisagreements) ? quiz.rawModelJson.aiDisagreements : [],
     aiSuspiciousQuestions: Array.isArray(quiz.rawModelJson?.aiSuspiciousQuestions) ? quiz.rawModelJson.aiSuspiciousQuestions : [],
@@ -834,7 +1153,10 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     </section>
 
     <section id="quiz" class="card hidden">
-      <div class="small" id="questionCounter">Question</div>
+      <div class="question-meta">
+        <div class="small" id="questionCounter">Question</div>
+        <span id="correctionDot" class="correction-dot hidden" title="Question corrected by a user"></span>
+      </div>
       <div class="jump-nav">
         <label for="jumpInput" id="jumpLabel">Go to question</label>
         <input id="jumpInput" class="jump-input" type="number" min="1" step="1" inputmode="numeric" />
@@ -843,8 +1165,24 @@ export function renderHostedQuizHtml(quiz, options = {}) {
       <p id="qText" class="question"></p>
       <div id="options" class="options"></div>
       <div class="controls">
+        <button id="correctionOpenBtn" class="btn secondary" type="button">Fix question</button>
         <button id="finish" class="btn ghost" type="button">Finish now</button>
         <button id="next" class="btn secondary" type="button">Next</button>
+      </div>
+      <div id="correctionPanel" class="correction-panel hidden">
+        <h3 id="correctionTitle">Suggest a correction</h3>
+        <p id="correctionIntro">You can edit the current question and its answer options. The fix will be saved for review.</p>
+        <div class="correction-fields">
+          <div class="correction-field">
+            <label for="correctionQuestionInput" id="correctionQuestionLabel">Question</label>
+            <textarea id="correctionQuestionInput" class="correction-textarea"></textarea>
+          </div>
+          <div id="correctionOptions" class="correction-fields"></div>
+        </div>
+        <div class="correction-actions">
+          <button id="correctionCancelBtn" class="btn ghost" type="button">Cancel</button>
+          <button id="correctionSubmitBtn" class="btn primary" type="button">Confirm fix</button>
+        </div>
       </div>
     </section>
 
@@ -903,7 +1241,10 @@ export function buildZipBundle(quiz) {
     </section>
 
     <section id="quiz" class="card hidden">
-      <div class="small" id="questionCounter">Question</div>
+      <div class="question-meta">
+        <div class="small" id="questionCounter">Question</div>
+        <span id="correctionDot" class="correction-dot hidden" title="Question corrected by a user"></span>
+      </div>
       <div class="jump-nav">
         <label for="jumpInput" id="jumpLabel">Go to question</label>
         <input id="jumpInput" class="jump-input" type="number" min="1" step="1" inputmode="numeric" />
@@ -912,8 +1253,24 @@ export function buildZipBundle(quiz) {
       <p id="qText" class="question"></p>
       <div id="options" class="options"></div>
       <div class="controls">
+        <button id="correctionOpenBtn" class="btn secondary" type="button">Fix question</button>
         <button id="finish" class="btn ghost" type="button">Finish now</button>
         <button id="next" class="btn secondary" type="button">Next</button>
+      </div>
+      <div id="correctionPanel" class="correction-panel hidden">
+        <h3 id="correctionTitle">Suggest a correction</h3>
+        <p id="correctionIntro">You can edit the current question and its answer options. The fix will be saved for review.</p>
+        <div class="correction-fields">
+          <div class="correction-field">
+            <label for="correctionQuestionInput" id="correctionQuestionLabel">Question</label>
+            <textarea id="correctionQuestionInput" class="correction-textarea"></textarea>
+          </div>
+          <div id="correctionOptions" class="correction-fields"></div>
+        </div>
+        <div class="correction-actions">
+          <button id="correctionCancelBtn" class="btn ghost" type="button">Cancel</button>
+          <button id="correctionSubmitBtn" class="btn primary" type="button">Confirm fix</button>
+        </div>
       </div>
     </section>
 

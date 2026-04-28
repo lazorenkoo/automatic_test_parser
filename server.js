@@ -6,6 +6,7 @@ import multer from 'multer';
 import archiver from 'archiver';
 import {
   createUploadReport,
+  applyQuizQuestionCorrection,
   createQuizReport,
   createAccessCodes,
   consumeAccessCodeQuestions,
@@ -851,7 +852,47 @@ app.get('/quiz/:slug', (req, res) => {
   res.type('html').send(renderHostedQuizHtml(quiz, {
     quizUrl: buildAbsoluteUrl(req, `/quiz/${quiz.slug}`),
     reportUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/report`),
+    correctionUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/corrections`),
   }));
+});
+
+app.post('/api/quizzes/:slug/corrections', (req, res, next) => {
+  try {
+    const quiz = getQuizBySlug(req.params.slug);
+    if (!quiz) {
+      return res.status(404).json({ error: 'Quiz not found.' });
+    }
+
+    const correction = sanitizeQuizCorrectionPayload(req.body?.correction, quiz);
+    if (!correction) {
+      return res.status(400).json({ error: 'Invalid correction payload.' });
+    }
+
+    const nextQuestion = buildCorrectedQuizQuestion(quiz.questions[correction.sourceQuestionNumber - 1], correction);
+    if (!nextQuestion) {
+      return res.status(400).json({ error: 'Could not build corrected question.' });
+    }
+
+    const updatedQuiz = applyQuizQuestionCorrection({
+      quizId: quiz.id,
+      questionIndex: correction.sourceQuestionNumber,
+      question: nextQuestion,
+      correction,
+    });
+
+    if (!updatedQuiz || updatedQuiz?.error) {
+      return res.status(400).json({ error: 'Could not update quiz question.' });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      slug: updatedQuiz.slug,
+      sourceQuestionNumber: correction.sourceQuestionNumber,
+      question: updatedQuiz.questions[correction.sourceQuestionNumber - 1],
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.post('/api/quizzes/:slug/report', (req, res, next) => {
@@ -1563,4 +1604,149 @@ function sanitizeReportClientProfile(rawValue) {
   } catch {
     return null;
   }
+}
+
+function sanitizeQuizCorrectionPayload(rawValue, quiz) {
+  if (!rawValue || !quiz || !Array.isArray(quiz.questions)) {
+    return null;
+  }
+
+  try {
+    const parsed = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const sourceQuestionNumber = Number(parsed.sourceQuestionNumber);
+    if (!Number.isInteger(sourceQuestionNumber) || sourceQuestionNumber < 1 || sourceQuestionNumber > quiz.questions.length) {
+      return null;
+    }
+
+    const sourceQuestion = quiz.questions[sourceQuestionNumber - 1];
+    const sourceOptions = Array.isArray(sourceQuestion?.options)
+      ? sourceQuestion.options.map((item) => sanitizeText(item)).filter(Boolean)
+      : [];
+    if (!sourceOptions.length) {
+      return null;
+    }
+
+    const configuredOptionCount = normalizePositiveInteger(parsed.configuredOptionCount, 12) || sourceOptions.length;
+    if (configuredOptionCount < sourceOptions.length) {
+      return null;
+    }
+
+    const editedQuestionText = sanitizeText(parsed.editedQuestionText || '');
+    const editedOptionsVisibleOrder = sanitizeCorrectionTextArray(parsed.editedOptionsVisibleOrder, configuredOptionCount, 500);
+    if (!editedQuestionText || !editedOptionsVisibleOrder) {
+      return null;
+    }
+
+    const editedOptionsSourceOrder = Array.isArray(parsed.editedOptionsSourceOrder)
+      ? sanitizeCorrectionTextArray(parsed.editedOptionsSourceOrder, sourceOptions.length, 500)
+      : null;
+
+    return {
+      sourceQuestionNumber,
+      visibleQuestionNumber: normalizePositiveInteger(parsed.visibleQuestionNumber, quiz.questions.length),
+      configuredOptionCount,
+      shuffleQuestions: Boolean(parsed.shuffleQuestions),
+      shuffledOptionOrder: sanitizeCorrectionIntegerArray(parsed.shuffledOptionOrder, sourceOptions.length, sourceOptions.length),
+      originalQuestionText: sanitizeText(parsed.originalQuestionText || sourceQuestion?.q || ''),
+      editedQuestionText,
+      optionCount: sourceOptions.length,
+      originalOptionsSourceOrder: sourceOptions,
+      editedOptionsSourceOrder,
+      originalOptionsVisibleOrder: sanitizeCorrectionTextArray(parsed.originalOptionsVisibleOrder, configuredOptionCount, 500),
+      editedOptionsVisibleOrder,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeCorrectionTextArray(value, expectedLength, maxLength) {
+  if (!Array.isArray(value) || value.length !== expectedLength) {
+    return null;
+  }
+
+  const normalized = value
+    .map((item) => trimString(sanitizeText(item), maxLength))
+    .filter(Boolean);
+
+  return normalized.length === expectedLength ? normalized : null;
+}
+
+function sanitizeCorrectionIntegerArray(value, expectedLength, maxValue) {
+  if (!Array.isArray(value) || value.length !== expectedLength) {
+    return null;
+  }
+
+  const normalized = value.map((item) => Number(item));
+  if (normalized.some((item) => !Number.isInteger(item) || item < 1 || item > maxValue)) {
+    return null;
+  }
+
+  return new Set(normalized).size === expectedLength ? normalized : null;
+}
+
+function normalizePositiveInteger(value, maxValue) {
+  const numericValue = Number(value);
+  if (!Number.isInteger(numericValue) || numericValue < 1 || numericValue > maxValue) {
+    return null;
+  }
+
+  return numericValue;
+}
+
+function buildCorrectedQuizQuestion(sourceQuestion, correction) {
+  if (!sourceQuestion || !correction) {
+    return null;
+  }
+
+  const originalOptions = Array.isArray(sourceQuestion.options)
+    ? sourceQuestion.options.map((item) => sanitizeText(item)).filter(Boolean)
+    : [];
+  if (!originalOptions.length) {
+    return null;
+  }
+
+  let nextOptions = null;
+
+  if (Array.isArray(correction.editedOptionsSourceOrder) && correction.editedOptionsSourceOrder.length === originalOptions.length) {
+    nextOptions = correction.editedOptionsSourceOrder.map((item) => sanitizeText(item)).filter(Boolean);
+  } else if (
+    Array.isArray(correction.editedOptionsVisibleOrder)
+    && Array.isArray(correction.shuffledOptionOrder)
+    && correction.shuffledOptionOrder.length === originalOptions.length
+  ) {
+    nextOptions = [...originalOptions];
+
+    correction.shuffledOptionOrder.forEach((sourcePosition, visibleIndex) => {
+      const nextValue = sanitizeText(correction.editedOptionsVisibleOrder[visibleIndex] || '');
+      const sourceIndex = Number(sourcePosition) - 1;
+      if (nextValue && Number.isInteger(sourceIndex) && sourceIndex >= 0 && sourceIndex < nextOptions.length) {
+        nextOptions[sourceIndex] = nextValue;
+      }
+    });
+
+    for (let visibleIndex = correction.shuffledOptionOrder.length; visibleIndex < correction.editedOptionsVisibleOrder.length; visibleIndex += 1) {
+      const extraValue = sanitizeText(correction.editedOptionsVisibleOrder[visibleIndex] || '');
+      if (extraValue) {
+        nextOptions.push(extraValue);
+      }
+    }
+  }
+
+  if (!Array.isArray(nextOptions) || nextOptions.length < 2 || nextOptions.some((item) => !item)) {
+    return null;
+  }
+
+  return {
+    ...sourceQuestion,
+    q: sanitizeText(correction.editedQuestionText || sourceQuestion.q || ''),
+    options: nextOptions,
+    correctIndex: Math.max(0, Math.min(nextOptions.length - 1, Number(sourceQuestion.correctIndex) || 0)),
+    manuallyCorrected: true,
+    manuallyCorrectedAt: Date.now(),
+  };
 }
