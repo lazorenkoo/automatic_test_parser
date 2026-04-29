@@ -1631,7 +1631,7 @@ function sanitizeQuizCorrectionPayload(rawValue, quiz) {
     }
 
     const configuredOptionCount = normalizePositiveInteger(parsed.configuredOptionCount, 12) || sourceOptions.length;
-    if (configuredOptionCount < sourceOptions.length) {
+    if (configuredOptionCount < 2) {
       return null;
     }
 
@@ -1650,7 +1650,8 @@ function sanitizeQuizCorrectionPayload(rawValue, quiz) {
       visibleQuestionNumber: normalizePositiveInteger(parsed.visibleQuestionNumber, quiz.questions.length),
       configuredOptionCount,
       shuffleQuestions: Boolean(parsed.shuffleQuestions),
-      shuffledOptionOrder: sanitizeCorrectionIntegerArray(parsed.shuffledOptionOrder, sourceOptions.length, sourceOptions.length),
+      shuffledOptionOrder: sanitizeCorrectionSourceOrderArray(parsed.shuffledOptionOrder, sourceOptions.length),
+      visibleOptionSourceOrder: sanitizeCorrectionSourceOrderTupleArray(parsed.visibleOptionSourceOrder, configuredOptionCount, sourceOptions.length),
       originalQuestionText: sanitizeText(parsed.originalQuestionText || sourceQuestion?.q || ''),
       editedQuestionText,
       optionCount: sourceOptions.length,
@@ -1689,6 +1690,41 @@ function sanitizeCorrectionIntegerArray(value, expectedLength, maxValue) {
   return new Set(normalized).size === expectedLength ? normalized : null;
 }
 
+function sanitizeCorrectionSourceOrderArray(value, maxValue) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const normalized = value.map((item) => Number(item));
+  if (normalized.some((item) => !Number.isInteger(item) || item < 1 || item > maxValue)) {
+    return null;
+  }
+
+  return new Set(normalized).size === normalized.length ? normalized : null;
+}
+
+function sanitizeCorrectionSourceOrderTupleArray(value, expectedLength, maxValue) {
+  if (!Array.isArray(value) || value.length !== expectedLength) {
+    return null;
+  }
+
+  const normalized = value.map((item) => {
+    if (item === null || item === undefined || item === '') {
+      return null;
+    }
+
+    const numeric = Number(item);
+    return Number.isInteger(numeric) && numeric >= 1 && numeric <= maxValue ? numeric : Number.NaN;
+  });
+
+  if (normalized.some((item) => Number.isNaN(item))) {
+    return null;
+  }
+
+  const concreteValues = normalized.filter((item) => item != null);
+  return new Set(concreteValues).size === concreteValues.length ? normalized : null;
+}
+
 function normalizePositiveInteger(value, maxValue) {
   const numericValue = Number(value);
   if (!Number.isInteger(numericValue) || numericValue < 1 || numericValue > maxValue) {
@@ -1711,13 +1747,27 @@ function buildCorrectedQuizQuestion(sourceQuestion, correction) {
   }
 
   let nextOptions = null;
+  let nextCorrectIndex = Math.max(0, Math.min(originalOptions.length - 1, Number(sourceQuestion.correctIndex) || 0));
 
-  if (Array.isArray(correction.editedOptionsSourceOrder) && correction.editedOptionsSourceOrder.length === originalOptions.length) {
+  if (
+    Array.isArray(correction.visibleOptionSourceOrder)
+    && correction.visibleOptionSourceOrder.length === correction.editedOptionsVisibleOrder?.length
+  ) {
+    nextOptions = correction.editedOptionsVisibleOrder.map((item) => sanitizeText(item)).filter(Boolean);
+    const correctSourcePosition = Number(sourceQuestion.correctIndex) + 1;
+    const visibleCorrectIndex = correction.visibleOptionSourceOrder.findIndex((item) => item === correctSourcePosition);
+    nextCorrectIndex = visibleCorrectIndex >= 0
+      ? visibleCorrectIndex
+      : Math.max(0, Math.min(nextOptions.length - 1, nextCorrectIndex));
+  }
+
+  if (!nextOptions && Array.isArray(correction.editedOptionsSourceOrder) && correction.editedOptionsSourceOrder.length === originalOptions.length) {
     nextOptions = correction.editedOptionsSourceOrder.map((item) => sanitizeText(item)).filter(Boolean);
   } else if (
-    Array.isArray(correction.editedOptionsVisibleOrder)
+    !nextOptions
+    && Array.isArray(correction.editedOptionsVisibleOrder)
     && Array.isArray(correction.shuffledOptionOrder)
-    && correction.shuffledOptionOrder.length === originalOptions.length
+    && correction.shuffledOptionOrder.length <= correction.editedOptionsVisibleOrder.length
   ) {
     nextOptions = [...originalOptions];
 
@@ -1745,7 +1795,7 @@ function buildCorrectedQuizQuestion(sourceQuestion, correction) {
     ...sourceQuestion,
     q: sanitizeText(correction.editedQuestionText || sourceQuestion.q || ''),
     options: nextOptions,
-    correctIndex: Math.max(0, Math.min(nextOptions.length - 1, Number(sourceQuestion.correctIndex) || 0)),
+    correctIndex: Math.max(0, Math.min(nextOptions.length - 1, nextCorrectIndex)),
     manuallyCorrected: true,
     manuallyCorrectedAt: Date.now(),
   };

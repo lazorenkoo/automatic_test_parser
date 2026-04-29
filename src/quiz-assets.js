@@ -277,9 +277,18 @@ h1{
   display:grid;
   gap:8px;
 }
+.correction-option-row{
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) auto;
+  gap:10px;
+  align-items:end;
+}
 .correction-field label{
   font-size:14px;
   font-weight:700;
+}
+.correction-field.correct-answer label{
+  color:#166534;
 }
 .correction-input,
 .correction-textarea{
@@ -300,6 +309,18 @@ h1{
 .correction-textarea:focus{
   outline:2px solid rgba(187,77,0,.18);
   border-color:#d8bfa9;
+}
+.correction-field.correct-answer .correction-input{
+  background:#e7f8ea;
+  border-color:#8bd3a2;
+}
+.correction-option-controls{
+  display:flex;
+  justify-content:flex-start;
+  margin-top:12px;
+}
+.correction-remove-btn{
+  min-width:96px;
 }
 .correction-actions{
   display:flex;
@@ -444,42 +465,44 @@ const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOp
   : 0;
 
 const i18n = {
-  eyebrow: 'PDMU quiz link',
-  linkLabel: 'Link',
-  countLabel: 'Questions',
-  intro: 'You can shuffle the order of questions. Answer options will be shuffled automatically.',
-  shuffle: 'Shuffle questions',
-  start: 'Start',
-  questionShort: 'Question',
-  questionCounter: 'Question {current} of {total}',
-  jumpLabel: 'Go to question',
-  jumpButton: 'Go',
-  finish: 'Finish now',
-  finishConfirm: 'Finish the test now? The results will be shown immediately.',
-  correctionOpen: 'Fix question',
-  correctionTitle: 'Suggest a correction',
-  correctionIntro: 'You can edit the current question and its answer options. The fix will be saved for review.',
-  correctionQuestion: 'Question',
-  correctionOption: 'Answer {number}',
-  correctionCancel: 'Cancel',
-  correctionSubmit: 'Confirm fix',
-  correctionSuccess: 'The correction was saved.',
-  correctionInvalid: 'Could not prepare this correction.',
-  correctionUnavailable: 'This quiz cannot accept corrections right now.',
-  correctionError: 'Could not save the correction. Please try again later.',
-  next: 'Next',
-  results: 'Results',
-  restart: 'Restart',
-  summary: 'Summary: {correct} / {answered} · {time}',
-  correct: 'Correct',
-  wrong: 'Wrong',
-  minutes: 'min',
-  seconds: 'sec',
-  report: 'Report issue',
-  reportPrompt: 'Describe what looks wrong in this test.',
-  reportSuccess: 'The original file was sent to the admin for review.',
-  reportError: 'Could not send the report. Please try again later.',
-  reportUnavailable: 'This quiz cannot send a report right now.',
+  eyebrow: 'Посилання на тест ПДМУ',
+  linkLabel: 'Посилання',
+  countLabel: 'Питань',
+  intro: 'Ви можете перемішати порядок питань. Варіанти відповідей також буде перемішано автоматично.',
+  shuffle: 'Перемішати питання',
+  start: 'Почати',
+  questionShort: 'Питання',
+  questionCounter: 'Питання {current} із {total}',
+  jumpLabel: 'Перейти до питання',
+  jumpButton: 'Перейти',
+  finish: 'Завершити тест',
+  finishConfirm: 'Завершити тест зараз? Результати буде показано одразу.',
+  correctionOpen: 'Виправити питання',
+  correctionTitle: 'Запропонувати виправлення',
+  correctionIntro: 'Ви можете відредагувати поточне питання та його варіанти відповіді. Зміни буде збережено в тесті.',
+  correctionQuestion: 'Питання',
+  correctionOption: 'Відповідь {number}',
+  correctionAddOption: 'Додати варіант',
+  correctionRemoveOption: 'Видалити',
+  correctionCancel: 'Скасувати',
+  correctionSubmit: 'Підтвердити виправлення',
+  correctionSuccess: 'Виправлення збережено.',
+  correctionInvalid: 'Не вдалося підготувати це виправлення.',
+  correctionUnavailable: 'Зараз цей тест не приймає виправлення.',
+  correctionError: 'Не вдалося зберегти виправлення. Спробуйте ще раз пізніше.',
+  next: 'Далі',
+  results: 'Результати',
+  restart: 'Почати знову',
+  summary: 'Підсумок: {correct} / {answered} · {time}',
+  correct: 'Правильно',
+  wrong: 'Неправильно',
+  minutes: 'хв',
+  seconds: 'с',
+  report: 'Повідомити про помилку',
+  reportPrompt: 'Опишіть, що саме не так у цьому тесті.',
+  reportSuccess: 'Оригінальний файл надіслано адміністратору на перевірку.',
+  reportError: 'Не вдалося надіслати повідомлення. Спробуйте ще раз пізніше.',
+  reportUnavailable: 'Зараз цей тест не може надсилати повідомлення.',
   warningTitle: 'Будь ласка, перевірте ще раз такі питання:',
 };
 
@@ -514,6 +537,7 @@ const els = {
   correctionQuestionLabel: document.getElementById('correctionQuestionLabel'),
   correctionQuestionInput: document.getElementById('correctionQuestionInput'),
   correctionOptions: document.getElementById('correctionOptions'),
+  correctionAddOptionBtn: document.getElementById('correctionAddOptionBtn'),
   correctionCancelBtn: document.getElementById('correctionCancelBtn'),
   correctionSubmitBtn: document.getElementById('correctionSubmitBtn'),
   jumpInput: document.getElementById('jumpInput'),
@@ -542,7 +566,7 @@ function t(key, params = {}) {
 }
 
 function applyLanguage() {
-  document.documentElement.lang = 'en';
+  document.documentElement.lang = 'uk';
   document.title = titleText;
 
   if (els.eyebrow) {
@@ -577,6 +601,9 @@ function applyLanguage() {
   }
   if (els.correctionQuestionLabel) {
     els.correctionQuestionLabel.textContent = t('correctionQuestion');
+  }
+  if (els.correctionAddOptionBtn) {
+    els.correctionAddOptionBtn.textContent = t('correctionAddOption');
   }
   if (els.correctionCancelBtn) {
     els.correctionCancelBtn.textContent = t('correctionCancel');
@@ -667,7 +694,7 @@ function getCurrentQuestionContext() {
 
 function getEditableOptionCount(question) {
   const currentCount = Array.isArray(question?.options) ? question.options.length : 0;
-  return Math.max(currentCount, state.configuredOptionCount || 0);
+  return currentCount || state.configuredOptionCount || 0;
 }
 
 function startQuiz() {
@@ -790,6 +817,95 @@ function closeCorrectionPanel() {
   renderCorrectionPanel();
 }
 
+function addCorrectionOption() {
+  appendCorrectionOptionField({ value: '', sourceOptionIndex: null, isCorrectAnswer: false });
+  const lastInput = els.correctionOptions?.querySelector('.correction-option-row:last-child input.correction-input');
+  lastInput?.focus();
+}
+
+function createCorrectionOptionField({ visibleOptionIndex, value = '', sourceOptionIndex = null, isCorrectAnswer = false }) {
+  const field = document.createElement('div');
+  field.className = 'correction-field correction-option-row';
+  if (isCorrectAnswer) {
+    field.classList.add('correct-answer');
+  }
+
+  const inputWrap = document.createElement('div');
+  inputWrap.className = 'correction-field';
+
+  const label = document.createElement('label');
+  label.textContent = t('correctionOption', { number: visibleOptionIndex + 1 });
+  label.setAttribute('for', 'correctionOption' + visibleOptionIndex);
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'correctionOption' + visibleOptionIndex;
+  input.className = 'correction-input';
+  input.value = value;
+  input.dataset.sourceOptionIndex = Number.isInteger(sourceOptionIndex) ? String(sourceOptionIndex) : '';
+  input.dataset.visibleOptionIndex = String(visibleOptionIndex);
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'btn ghost correction-remove-btn';
+  removeBtn.textContent = t('correctionRemoveOption');
+  removeBtn.addEventListener('click', () => {
+    if (!els.correctionOptions || els.correctionOptions.children.length <= 2) {
+      return;
+    }
+    field.remove();
+    refreshCorrectionOptionFields();
+  });
+
+  inputWrap.appendChild(label);
+  inputWrap.appendChild(input);
+  field.appendChild(inputWrap);
+  field.appendChild(removeBtn);
+  return field;
+}
+
+function refreshCorrectionOptionFields() {
+  const fields = [...(els.correctionOptions?.querySelectorAll('.correction-option-row') || [])];
+  const disableRemoval = fields.length <= 2;
+
+  fields.forEach((field, visibleOptionIndex) => {
+    const label = field.querySelector('label');
+    const input = field.querySelector('input.correction-input');
+    const removeBtn = field.querySelector('.correction-remove-btn');
+
+    if (label) {
+      label.textContent = t('correctionOption', { number: visibleOptionIndex + 1 });
+      label.setAttribute('for', 'correctionOption' + visibleOptionIndex);
+    }
+
+    if (input) {
+      input.id = 'correctionOption' + visibleOptionIndex;
+      input.dataset.visibleOptionIndex = String(visibleOptionIndex);
+    }
+
+    if (removeBtn) {
+      removeBtn.textContent = t('correctionRemoveOption');
+      removeBtn.disabled = disableRemoval;
+    }
+  });
+}
+
+function appendCorrectionOptionField({ value = '', sourceOptionIndex = null, isCorrectAnswer = false } = {}) {
+  if (!els.correctionOptions) {
+    return;
+  }
+
+  const visibleOptionIndex = els.correctionOptions.children.length;
+  const field = createCorrectionOptionField({
+    visibleOptionIndex,
+    value,
+    sourceOptionIndex,
+    isCorrectAnswer,
+  });
+  els.correctionOptions.appendChild(field);
+  refreshCorrectionOptionFields();
+}
+
 function renderCorrectionPanel() {
   if (!els.correctionPanel || !els.correctionQuestionInput || !els.correctionOptions) {
     return;
@@ -813,46 +929,37 @@ function renderCorrectionPanel() {
 
   for (let visibleOptionIndex = 0; visibleOptionIndex < editableOptionCount; visibleOptionIndex += 1) {
     const sourceOptionIndex = optionOrder[visibleOptionIndex];
-    const field = document.createElement('div');
-    field.className = 'correction-field';
-
-    const label = document.createElement('label');
-    label.textContent = t('correctionOption', { number: visibleOptionIndex + 1 });
-    label.setAttribute('for', 'correctionOption' + visibleOptionIndex);
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.id = 'correctionOption' + visibleOptionIndex;
-    input.className = 'correction-input';
-    input.value = Number.isInteger(sourceOptionIndex) ? (question.options[sourceOptionIndex] || '') : '';
-    input.dataset.sourceOptionIndex = Number.isInteger(sourceOptionIndex) ? String(sourceOptionIndex) : '';
-    input.dataset.visibleOptionIndex = String(visibleOptionIndex);
-
-    field.appendChild(label);
-    field.appendChild(input);
-    els.correctionOptions.appendChild(field);
+    appendCorrectionOptionField({
+      value: Number.isInteger(sourceOptionIndex) ? (question.options[sourceOptionIndex] || '') : '',
+      sourceOptionIndex: Number.isInteger(sourceOptionIndex) ? sourceOptionIndex : null,
+      isCorrectAnswer: sourceOptionIndex === question.correctIndex,
+    });
   }
 }
 
 function buildCorrectionPayload() {
-  const { visibleIndex, sourceQuestionIndex, question, optionOrder } = getCurrentQuestionContext();
-  if (!question || !Array.isArray(question.options) || !optionOrder.length) {
+  const { visibleIndex, sourceQuestionIndex, question } = getCurrentQuestionContext();
+  if (!question || !Array.isArray(question.options)) {
     return null;
   }
 
   const editedQuestionText = String(els.correctionQuestionInput?.value || '').trim();
   const optionInputs = [...(els.correctionOptions?.querySelectorAll('input[data-source-option-index]') || [])];
-  const editableOptionCount = getEditableOptionCount(question);
+  const editableOptionCount = optionInputs.length;
   if (!editedQuestionText || optionInputs.length !== editableOptionCount) {
     return null;
   }
 
   const editedOptionsVisibleOrder = optionInputs.map((input) => String(input.value || '').trim());
-  if (editedOptionsVisibleOrder.some((value) => !value)) {
+  if (editedOptionsVisibleOrder.length < 2 || editedOptionsVisibleOrder.some((value) => !value)) {
     return null;
   }
 
   const editedOptionsSourceOrder = Array(question.options.length).fill('');
+  const visibleOptionSourceOrder = optionInputs.map((input) => {
+    const sourceOptionIndex = Number(input.dataset.sourceOptionIndex);
+    return Number.isInteger(sourceOptionIndex) ? sourceOptionIndex + 1 : null;
+  });
   let hasFullSourceOrder = true;
   optionInputs.forEach((input, visibleOptionIndex) => {
     const sourceOptionIndex = Number(input.dataset.sourceOptionIndex);
@@ -868,15 +975,16 @@ function buildCorrectionPayload() {
     sourceQuestionNumber: sourceQuestionIndex + 1,
     configuredOptionCount: editableOptionCount,
     shuffleQuestions: Boolean(state.shuffleQuestions),
-    shuffledOptionOrder: optionOrder.map((sourceIndex) => sourceIndex + 1),
+    shuffledOptionOrder: visibleOptionSourceOrder.filter((sourceIndex) => Number.isInteger(sourceIndex)),
+    visibleOptionSourceOrder,
     originalQuestionText: question.q,
     editedQuestionText,
     originalOptionsSourceOrder: [...question.options],
     editedOptionsSourceOrder: hasFullSourceOrder && !editedOptionsSourceOrder.some((value) => !value)
       ? editedOptionsSourceOrder
       : null,
-    originalOptionsVisibleOrder: Array.from({ length: editableOptionCount }, (_, visibleOptionIndex) => {
-      const sourceOptionIndex = optionOrder[visibleOptionIndex];
+    originalOptionsVisibleOrder: optionInputs.map((input, visibleOptionIndex) => {
+      const sourceOptionIndex = Number(input.dataset.sourceOptionIndex);
       return Number.isInteger(sourceOptionIndex) ? (question.options[sourceOptionIndex] || '') : '';
     }),
     editedOptionsVisibleOrder,
@@ -900,7 +1008,6 @@ async function submitCorrection() {
   };
 
   const { sourceQuestionIndex } = getCurrentQuestionContext();
-  const currentOrder = Array.isArray(state.optsOrder[sourceQuestionIndex]) ? [...state.optsOrder[sourceQuestionIndex]] : [];
 
   if (els.correctionSubmitBtn) {
     els.correctionSubmitBtn.disabled = true;
@@ -926,14 +1033,8 @@ async function submitCorrection() {
 
     state.questions[sourceQuestionIndex] = result.question;
     const nextOptionCount = Array.isArray(result.question.options) ? result.question.options.length : 0;
-    state.configuredOptionCount = Math.max(state.configuredOptionCount || 0, nextOptionCount);
-    const nextOrder = currentOrder.filter((index) => Number.isInteger(index) && index >= 0 && index < nextOptionCount);
-    for (let optionIndex = 0; optionIndex < nextOptionCount; optionIndex += 1) {
-      if (!nextOrder.includes(optionIndex)) {
-        nextOrder.push(optionIndex);
-      }
-    }
-    state.optsOrder[sourceQuestionIndex] = nextOrder;
+    state.configuredOptionCount = nextOptionCount;
+    state.optsOrder[sourceQuestionIndex] = Array.from({ length: nextOptionCount }, (_, optionIndex) => optionIndex);
 
     closeCorrectionPanel();
     renderQuestion();
@@ -1080,6 +1181,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.next?.addEventListener('click', nextQuestion);
   els.finish?.addEventListener('click', confirmFinishQuiz);
   els.correctionOpenBtn?.addEventListener('click', openCorrectionPanel);
+  els.correctionAddOptionBtn?.addEventListener('click', addCorrectionOption);
   els.correctionCancelBtn?.addEventListener('click', closeCorrectionPanel);
   els.correctionSubmitBtn?.addEventListener('click', submitCorrection);
   els.jumpBtn?.addEventListener('click', () => goToQuestion(els.jumpInput?.value));
@@ -1115,7 +1217,7 @@ export function renderHostedQuizHtml(quiz, options = {}) {
   });
 
   return `<!doctype html>
-<html lang="en">
+<html lang="uk">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -1124,75 +1226,78 @@ export function renderHostedQuizHtml(quiz, options = {}) {
 </head>
 <body>
   <div class="shell">
-    <button id="reportBtn" class="btn secondary report-fab" type="button">Report issue</button>
+    <button id="reportBtn" class="btn secondary report-fab" type="button">Повідомити про помилку</button>
     <div id="reportToast" class="toast hidden" role="status" aria-live="polite"></div>
 
     <section class="hero">
-      <span id="eyebrow" class="eyebrow">PDMU quiz link</span>
+      <span id="eyebrow" class="eyebrow">Посилання на тест ПДМУ</span>
       <h1 id="pageTitle">${title}</h1>
       <div class="meta">
-        <div class="meta-chip"><span id="linkLabel">Link</span>${displayUrl}</div>
-        <div class="meta-chip"><span id="countLabel">Questions</span><strong id="quizLength">${quiz.questions.length}</strong></div>
+        <div class="meta-chip"><span id="linkLabel">Посилання</span>${displayUrl}</div>
+        <div class="meta-chip"><span id="countLabel">Питань</span><strong id="quizLength">${quiz.questions.length}</strong></div>
       </div>
       <div id="warningBox" class="warning-panel hidden"></div>
     </section>
 
     <section id="start" class="card">
       <h2 id="quizTitle" class="title">${title}</h2>
-      <p id="introText" class="lead">You can shuffle the order of questions. Answer options will be shuffled automatically.</p>
+      <p id="introText" class="lead">Ви можете перемішати порядок питань. Варіанти відповідей також буде перемішано автоматично.</p>
       <div class="controls" style="justify-content:flex-start">
         <label class="small" style="display:flex;align-items:center;gap:10px;font-size:14px">
           <input type="checkbox" id="shuffle" />
-          <span id="shuffleLabel">Shuffle questions</span>
+          <span id="shuffleLabel">Перемішати питання</span>
         </label>
       </div>
       <div class="controls">
         <div></div>
-        <button class="btn primary" id="startBtn" type="button">Start</button>
+        <button class="btn primary" id="startBtn" type="button">Почати</button>
       </div>
     </section>
 
     <section id="quiz" class="card hidden">
       <div class="question-meta">
-        <div class="small" id="questionCounter">Question</div>
-        <span id="correctionDot" class="correction-dot hidden" title="Question corrected by a user"></span>
+        <div class="small" id="questionCounter">Питання</div>
+        <span id="correctionDot" class="correction-dot hidden" title="Питання було виправлене користувачем"></span>
       </div>
       <div class="jump-nav">
-        <label for="jumpInput" id="jumpLabel">Go to question</label>
+        <label for="jumpInput" id="jumpLabel">Перейти до питання</label>
         <input id="jumpInput" class="jump-input" type="number" min="1" step="1" inputmode="numeric" />
-        <button id="jumpBtn" class="btn secondary" type="button">Go</button>
+        <button id="jumpBtn" class="btn secondary" type="button">Перейти</button>
       </div>
       <p id="qText" class="question"></p>
       <div id="options" class="options"></div>
       <div class="controls">
-        <button id="correctionOpenBtn" class="btn secondary" type="button">Fix question</button>
-        <button id="finish" class="btn ghost" type="button">Finish now</button>
-        <button id="next" class="btn secondary" type="button">Next</button>
+        <button id="correctionOpenBtn" class="btn secondary" type="button">Виправити питання</button>
+        <button id="finish" class="btn ghost" type="button">Завершити тест</button>
+        <button id="next" class="btn secondary" type="button">Далі</button>
       </div>
       <div id="correctionPanel" class="correction-panel hidden">
-        <h3 id="correctionTitle">Suggest a correction</h3>
-        <p id="correctionIntro">You can edit the current question and its answer options. The fix will be saved for review.</p>
+        <h3 id="correctionTitle">Запропонувати виправлення</h3>
+        <p id="correctionIntro">Ви можете відредагувати поточне питання та його варіанти відповіді. Зміни буде збережено в тесті.</p>
         <div class="correction-fields">
           <div class="correction-field">
-            <label for="correctionQuestionInput" id="correctionQuestionLabel">Question</label>
+            <label for="correctionQuestionInput" id="correctionQuestionLabel">Питання</label>
             <textarea id="correctionQuestionInput" class="correction-textarea"></textarea>
           </div>
           <div id="correctionOptions" class="correction-fields"></div>
+          <div class="correction-option-controls">
+            <button id="correctionAddOptionBtn" class="btn secondary" type="button">Додати варіант</button>
+          </div>
         </div>
         <div class="correction-actions">
-          <button id="correctionCancelBtn" class="btn ghost" type="button">Cancel</button>
-          <button id="correctionSubmitBtn" class="btn primary" type="button">Confirm fix</button>
+          <button id="correctionCancelBtn" class="btn ghost" type="button">Скасувати</button>
+          <button id="correctionSubmitBtn" class="btn primary" type="button">Підтвердити виправлення</button>
         </div>
       </div>
     </section>
 
     <section id="results" class="card hidden">
-      <h2 id="resultsTitle" class="title">Results</h2>
+      <h2 id="resultsTitle" class="title">Результати</h2>
       <div id="sum" class="summary"></div>
       <div id="resultsList" class="results-list"></div>
       <div class="controls">
         <div></div>
-        <button id="restartBtn" class="btn primary" type="button">Restart</button>
+        <button id="restartBtn" class="btn primary" type="button">Почати знову</button>
       </div>
     </section>
   </div>
@@ -1207,7 +1312,7 @@ export function buildZipBundle(quiz) {
   const folder = sanitizeFolderName(quiz.title || quiz.slug);
 
   const indexHtml = `<!doctype html>
-<html lang="en">
+<html lang="uk">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -1217,70 +1322,73 @@ export function buildZipBundle(quiz) {
 <body>
   <div class="shell">
     <section class="hero">
-      <span id="eyebrow" class="eyebrow">PDMU export</span>
+      <span id="eyebrow" class="eyebrow">Експорт тесту ПДМУ</span>
       <h1 id="pageTitle">${htmlEscape(quiz.title)}</h1>
       <div class="meta">
-        <div class="meta-chip"><span id="linkLabel">Link</span>${htmlEscape(folder)}</div>
-        <div class="meta-chip"><span id="countLabel">Questions</span><strong id="quizLength">${quiz.questions.length}</strong></div>
+        <div class="meta-chip"><span id="linkLabel">Посилання</span>${htmlEscape(folder)}</div>
+        <div class="meta-chip"><span id="countLabel">Питань</span><strong id="quizLength">${quiz.questions.length}</strong></div>
       </div>
     </section>
 
     <section id="start" class="card">
       <h2 id="quizTitle" class="title">${htmlEscape(quiz.title)}</h2>
-      <p id="introText" class="lead">You can shuffle the order of questions. Answer options will be shuffled automatically.</p>
+      <p id="introText" class="lead">Ви можете перемішати порядок питань. Варіанти відповідей також буде перемішано автоматично.</p>
       <div class="controls" style="justify-content:flex-start">
         <label class="small" style="display:flex;align-items:center;gap:10px;font-size:14px">
           <input type="checkbox" id="shuffle" />
-          <span id="shuffleLabel">Shuffle questions</span>
+          <span id="shuffleLabel">Перемішати питання</span>
         </label>
       </div>
       <div class="controls">
         <div></div>
-        <button class="btn primary" id="startBtn" type="button">Start</button>
+        <button class="btn primary" id="startBtn" type="button">Почати</button>
       </div>
     </section>
 
     <section id="quiz" class="card hidden">
       <div class="question-meta">
-        <div class="small" id="questionCounter">Question</div>
-        <span id="correctionDot" class="correction-dot hidden" title="Question corrected by a user"></span>
+        <div class="small" id="questionCounter">Питання</div>
+        <span id="correctionDot" class="correction-dot hidden" title="Питання було виправлене користувачем"></span>
       </div>
       <div class="jump-nav">
-        <label for="jumpInput" id="jumpLabel">Go to question</label>
+        <label for="jumpInput" id="jumpLabel">Перейти до питання</label>
         <input id="jumpInput" class="jump-input" type="number" min="1" step="1" inputmode="numeric" />
-        <button id="jumpBtn" class="btn secondary" type="button">Go</button>
+        <button id="jumpBtn" class="btn secondary" type="button">Перейти</button>
       </div>
       <p id="qText" class="question"></p>
       <div id="options" class="options"></div>
       <div class="controls">
-        <button id="correctionOpenBtn" class="btn secondary" type="button">Fix question</button>
-        <button id="finish" class="btn ghost" type="button">Finish now</button>
-        <button id="next" class="btn secondary" type="button">Next</button>
+        <button id="correctionOpenBtn" class="btn secondary" type="button">Виправити питання</button>
+        <button id="finish" class="btn ghost" type="button">Завершити тест</button>
+        <button id="next" class="btn secondary" type="button">Далі</button>
       </div>
       <div id="correctionPanel" class="correction-panel hidden">
-        <h3 id="correctionTitle">Suggest a correction</h3>
-        <p id="correctionIntro">You can edit the current question and its answer options. The fix will be saved for review.</p>
+        <h3 id="correctionTitle">Запропонувати виправлення</h3>
+        <p id="correctionIntro">Ви можете відредагувати поточне питання та його варіанти відповіді. Зміни буде збережено в тесті.</p>
         <div class="correction-fields">
           <div class="correction-field">
-            <label for="correctionQuestionInput" id="correctionQuestionLabel">Question</label>
+            <label for="correctionQuestionInput" id="correctionQuestionLabel">Питання</label>
             <textarea id="correctionQuestionInput" class="correction-textarea"></textarea>
           </div>
           <div id="correctionOptions" class="correction-fields"></div>
+          <div class="correction-option-controls">
+            <button id="correctionAddOptionBtn" class="btn secondary" type="button">Додати варіант</button>
+          </div>
         </div>
         <div class="correction-actions">
-          <button id="correctionCancelBtn" class="btn ghost" type="button">Cancel</button>
-          <button id="correctionSubmitBtn" class="btn primary" type="button">Confirm fix</button>
+          <button id="correctionCancelBtn" class="btn ghost" type="button">Скасувати</button>
+          <button id="correctionSubmitBtn" class="btn primary" type="button">Підтвердити виправлення</button>
         </div>
       </div>
     </section>
 
     <section id="results" class="card hidden">
-      <h2 id="resultsTitle" class="title">Results</h2>
+      <h2 id="resultsTitle" class="title">Результати</h2>
       <div id="sum" class="summary"></div>
       <div id="resultsList" class="results-list"></div>
       <div class="controls">
         <div></div>
-        <button id="restartBtn" class="btn primary" type="button">Restart</button>
+        <button id="restartBtn" class="btn primary" type="button">Почати знову</button>
       </div>
     </section>
   </div>

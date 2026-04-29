@@ -83,7 +83,7 @@ export async function parseQuizFromFile({
   });
 
   if (shouldPreferExactParagraphBlocks(extension, paragraphs, exactParagraphCandidate, normalizedOptionCount)) {
-    let questions = exactParagraphCandidate.questions;
+    let questions = normalizeParsedQuestionsForOutput(exactParagraphCandidate.questions, normalizedOptionCount, safeAnswerIndex);
     const notes = [...exactParagraphCandidate.notes];
     const reviewBlocks = Array.isArray(exactParagraphCandidate.reviewBlocks) ? exactParagraphCandidate.reviewBlocks : [];
 
@@ -106,7 +106,7 @@ export async function parseQuizFromFile({
   }
 
   if (shouldPreferParagraphMarkers(extension, paragraphs, paragraphMarkersCandidate, normalizedOptionCount)) {
-    let questions = paragraphMarkersCandidate.questions;
+    let questions = normalizeParsedQuestionsForOutput(paragraphMarkersCandidate.questions, normalizedOptionCount, safeAnswerIndex);
     const notes = [...paragraphMarkersCandidate.notes];
     const reviewBlocks = Array.isArray(paragraphMarkersCandidate.reviewBlocks) ? paragraphMarkersCandidate.reviewBlocks : [];
 
@@ -187,6 +187,8 @@ export async function parseQuizFromFile({
   questions = shiftedRepair.questions;
   notes.push(...shiftedRepair.notes);
 
+  questions = normalizeParsedQuestionsForOutput(questions, normalizedOptionCount, safeAnswerIndex);
+
   if (answerKey) {
     const resolved = applyAnswerKeyToQuestions(questions, answerKey);
     questions = resolved.questions;
@@ -204,6 +206,11 @@ export async function parseQuizFromFile({
     reviewBlocks,
   }), fixedDocxResult);
 }
+
+export const __test__ = {
+  rebuildPdfPageTextForReadingOrder,
+  normalizeParsedQuestionsForOutput,
+};
 
 function parseQuizFromJsonFile({
   buffer,
@@ -484,7 +491,7 @@ async function extractTextFromFile(buffer, extension) {
     const parser = new PDFParse({ data: buffer });
     try {
       const result = await parser.getText();
-      return result.text || '';
+      return buildPdfTextFromPages(result.pages, result.text || '');
     } finally {
       await parser.destroy();
     }
@@ -501,6 +508,101 @@ async function extractTextFromFile(buffer, extension) {
   }
 
   throw new Error(`Неподдерживаемый формат файла: ${extension}`);
+}
+
+function buildPdfTextFromPages(pages, fallbackText = '') {
+  if (!Array.isArray(pages) || !pages.length) {
+    return String(fallbackText || '');
+  }
+
+  const normalizedPages = pages
+    .map((page) => rebuildPdfPageTextForReadingOrder(page?.text || ''))
+    .filter(Boolean);
+
+  return normalizedPages.length ? normalizedPages.join('\n\n') : String(fallbackText || '');
+}
+
+function rebuildPdfPageTextForReadingOrder(pageText) {
+  const normalized = String(pageText || '')
+    .replace(/\r/g, '\n')
+    .trim();
+
+  if (!normalized) {
+    return '';
+  }
+
+  const lines = normalized
+    .split('\n')
+    .map((line) => cleanupLine(line))
+    .filter(Boolean);
+
+  if (lines.length < 8) {
+    return normalized;
+  }
+
+  const blockStarts = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const questionMatch = matchQuestionStart(lines[index]);
+    const questionNumber = extractLeadingQuestionNumber(lines[index]);
+    if (questionMatch && Number.isInteger(questionNumber)) {
+      blockStarts.push({ index, number: questionNumber });
+    }
+  }
+
+  if (blockStarts.length < 4) {
+    return normalized;
+  }
+
+  let outOfOrderPairs = 0;
+  for (let index = 1; index < blockStarts.length; index += 1) {
+    if (blockStarts[index].number <= blockStarts[index - 1].number) {
+      outOfOrderPairs += 1;
+    }
+  }
+
+  if (!outOfOrderPairs) {
+    return normalized;
+  }
+
+  const uniqueNumbers = new Set(blockStarts.map((block) => block.number));
+  if (uniqueNumbers.size !== blockStarts.length) {
+    return normalized;
+  }
+
+  const prefix = lines.slice(0, blockStarts[0].index);
+  const blocks = blockStarts.map((block, index) => ({
+    number: block.number,
+    lines: lines.slice(block.index, blockStarts[index + 1]?.index ?? lines.length),
+  }));
+
+  const sortedBlocks = [...blocks].sort((left, right) => left.number - right.number);
+  return [
+    ...prefix,
+    ...sortedBlocks.flatMap((block) => block.lines),
+  ].join('\n');
+}
+
+function normalizeParsedQuestionsForOutput(questions, optionCount, answerIndex) {
+  const expectedOptionCount = Number(optionCount);
+  if (!Number.isInteger(expectedOptionCount) || expectedOptionCount < 2) {
+    return Array.isArray(questions) ? questions : [];
+  }
+
+  return (Array.isArray(questions) ? questions : []).map((question) => {
+    const normalizedOptions = Array.isArray(question?.options)
+      ? question.options.map((option) => sanitizeText(option)).filter(Boolean).slice(0, expectedOptionCount)
+      : [];
+
+    while (normalizedOptions.length < expectedOptionCount) {
+      normalizedOptions.push('');
+    }
+
+    return {
+      ...question,
+      options: normalizedOptions,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, expectedOptionCount),
+    };
+  });
 }
 
 function normalizeJsonQuestion(question, index, fallbackAnswerIndex, fallbackOptionCount) {
@@ -1762,6 +1864,18 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
       continue;
     }
 
+    const leakedPromptOptions = extractQuestionOptionsLeakedIntoPrompt(question, optionCount);
+    if (leakedPromptOptions) {
+      repairedQuestions.push({
+        ...question,
+        q: leakedPromptOptions.questionText,
+        options: leakedPromptOptions.options,
+        correctIndex: Math.max(0, Math.min(leakedPromptOptions.options.length - 1, Number(question?.correctIndex) || 0)),
+      });
+      repairedCount += 1;
+      continue;
+    }
+
     const inlineLeak = extractQuestionContinuationFromOptions(question, optionCount);
     if (inlineLeak) {
       repairedQuestions.push({
@@ -1859,6 +1973,63 @@ function repairShiftedQuestionLines(questions, optionCount) {
   return {
     questions: repairedQuestions,
     notes,
+  };
+}
+
+function extractQuestionOptionsLeakedIntoPrompt(question, optionCount) {
+  const questionText = sanitizeText(question?.q);
+  const existingOptions = Array.isArray(question?.options)
+    ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+    : [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+
+  if (!questionText || existingOptions.length < 2 || expectedOptionCount < 4) {
+    return null;
+  }
+
+  const promptEndIndex = findFirstPromptBoundary(questionText);
+  if (promptEndIndex < 0 || promptEndIndex >= questionText.length - 1) {
+    return null;
+  }
+
+  const cleanQuestionText = sanitizeText(questionText.slice(0, promptEndIndex + 1));
+  const leakedTail = sanitizeText(questionText.slice(promptEndIndex + 1));
+  if (!cleanQuestionText || !leakedTail) {
+    return null;
+  }
+
+  const leakedCandidates = leakedTail
+    .split(/(?<=[.?!;:])\s+(?=[\p{Lu}])/u)
+    .map((option) => sanitizeText(option))
+    .filter(Boolean);
+  const leakedOptions = (leakedCandidates.length > 1 ? leakedCandidates : splitLeadingTitlePhrases(leakedTail, expectedOptionCount + 2))
+    .map((option) => sanitizeText(option))
+    .filter(Boolean)
+    .filter((option) => looksLikeStandaloneOptionLine(option));
+
+  if (!leakedOptions.length) {
+    return null;
+  }
+
+  const combinedOptions = [...leakedOptions, ...existingOptions]
+    .filter((option) => !/^\d{1,3}[.)]?$/.test(option));
+
+  while (
+    combinedOptions.length > expectedOptionCount
+    && combinedOptions.at(-1)
+    && looksLikePromptSentence(combinedOptions.at(-1))
+    && combinedOptions.at(-1).length >= 40
+  ) {
+    combinedOptions.pop();
+  }
+
+  if (!isAcceptableOptionCount(combinedOptions.length, optionCount) || !looksLikeRealQuestion(cleanQuestionText, combinedOptions)) {
+    return null;
+  }
+
+  return {
+    questionText: cleanQuestionText,
+    options: combinedOptions,
   };
 }
 
