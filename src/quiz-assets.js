@@ -937,6 +937,16 @@ function renderCorrectionPanel() {
   }
 }
 
+function readCorrectionSourceOptionIndex(input) {
+  const rawValue = input?.dataset?.sourceOptionIndex;
+  if (rawValue === '' || rawValue === null || rawValue === undefined) {
+    return null;
+  }
+
+  const numericValue = Number(rawValue);
+  return Number.isInteger(numericValue) && numericValue >= 0 ? numericValue : null;
+}
+
 function buildCorrectionPayload() {
   const { visibleIndex, sourceQuestionIndex, question } = getCurrentQuestionContext();
   if (!question || !Array.isArray(question.options)) {
@@ -957,12 +967,12 @@ function buildCorrectionPayload() {
 
   const editedOptionsSourceOrder = Array(question.options.length).fill('');
   const visibleOptionSourceOrder = optionInputs.map((input) => {
-    const sourceOptionIndex = Number(input.dataset.sourceOptionIndex);
+    const sourceOptionIndex = readCorrectionSourceOptionIndex(input);
     return Number.isInteger(sourceOptionIndex) ? sourceOptionIndex + 1 : null;
   });
   let hasFullSourceOrder = true;
   optionInputs.forEach((input, visibleOptionIndex) => {
-    const sourceOptionIndex = Number(input.dataset.sourceOptionIndex);
+    const sourceOptionIndex = readCorrectionSourceOptionIndex(input);
     if (Number.isInteger(sourceOptionIndex) && sourceOptionIndex >= 0 && sourceOptionIndex < editedOptionsSourceOrder.length) {
       editedOptionsSourceOrder[sourceOptionIndex] = editedOptionsVisibleOrder[visibleOptionIndex];
       return;
@@ -984,7 +994,7 @@ function buildCorrectionPayload() {
       ? editedOptionsSourceOrder
       : null,
     originalOptionsVisibleOrder: optionInputs.map((input, visibleOptionIndex) => {
-      const sourceOptionIndex = Number(input.dataset.sourceOptionIndex);
+      const sourceOptionIndex = readCorrectionSourceOptionIndex(input);
       return Number.isInteger(sourceOptionIndex) ? (question.options[sourceOptionIndex] || '') : '';
     }),
     editedOptionsVisibleOrder,
