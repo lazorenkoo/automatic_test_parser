@@ -25,6 +25,7 @@ import {
   getUploadReportById,
   inspectAccessCode,
   listAccessCodesByClient,
+  listActiveAiAccessCodes,
   listAiDeviceBans,
   listAiRequestLogs,
   listQuizCorrections,
@@ -84,6 +85,7 @@ export function startTelegramBot() {
     '/aimode <single|double>',
     '/aicode <on|off>',
     '/ailimit <N|off>',
+    '/aicodes [limit]',
     '/ailogs <count>',
     '/ainovisit [limit]',
     '/aiban <browserId> [reason]',
@@ -130,6 +132,7 @@ export function startTelegramBot() {
     { command: 'aimode', description: 'Set AI mode single/double' },
     { command: 'aicode', description: 'Require code for AI on/off' },
     { command: 'ailimit', description: 'Set AI daily limit' },
+    { command: 'aicodes', description: 'List active AI codes' },
     { command: 'ailogs', description: 'Export AI request logs' },
     { command: 'ainovisit', description: 'AI sites with no visits' },
     { command: 'aiban', description: 'Ban AI device by browserId' },
@@ -537,6 +540,15 @@ export function startTelegramBot() {
       `AI daily limit: ${settings.dailyLimit > 0 ? settings.dailyLimit : 'OFF'}`,
       formatAiRuntimeStatus(),
     ].join('\n\n'));
+  });
+
+  bot.onText(/^\/aicodes(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const limit = normalizeOptionalLimit(match?.[1], 20, 100);
+    await bot.sendMessage(msg.chat.id, formatActiveAiCodes(limit));
   });
 
   bot.onText(/^\/ailogs(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -2133,6 +2145,26 @@ function formatAiRuntimeStatus() {
     `Remaining today: ${usage.remainingToday == null ? 'unlimited' : usage.remainingToday}`,
     `Reset: ${formatDateTime(usage.nextResetAt)}`,
   ].join('\n');
+}
+
+function formatActiveAiCodes(limit) {
+  const codes = listActiveAiAccessCodes(limit);
+  if (!codes.length) {
+    return 'No active AI codes.';
+  }
+
+  return [
+    `Active AI codes: ${codes.length}`,
+    '',
+    ...codes.map((code, index) => [
+      `${index + 1}. ${code.label || `Code #${code.id}`}`,
+      `Owner: ${code.clientTgUsername || '-'}${code.clientTgUserId ? ` (${code.clientTgUserId})` : ''}`,
+      `Remaining: ${code.remainingQuestionCount ?? 'unlimited'}`,
+      `Credited: ${code.expectedQuestionCount ?? 'unlimited'}`,
+      `Consumed: ${code.consumedQuestionCount || 0}`,
+      `Created: ${formatDateTime(code.createdAt)}`,
+    ].join('\n')),
+  ].join('\n\n');
 }
 
 function formatAiLogsText(limit) {

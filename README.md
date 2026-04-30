@@ -65,6 +65,7 @@ Admin side:
 - top up codes;
 - inspect codes;
 - manage AI settings;
+- list active AI codes and their owners;
 - ban/unban quizzes or AI devices;
 - inspect reports;
 - view accounting info.

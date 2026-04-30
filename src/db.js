@@ -577,6 +577,34 @@ const listAccessCodesByOwnerStmt = db.prepare(`
   ORDER BY created_at DESC, id DESC
 `);
 
+const listActiveAiAccessCodesStmt = db.prepare(`
+  SELECT
+    id,
+    label,
+    site_type AS siteType,
+    client_tg_user_id AS clientTgUserId,
+    client_tg_username AS clientTgUsername,
+    expected_question_count AS expectedQuestionCount,
+    remaining_question_count AS remainingQuestionCount,
+    consumed_question_count AS consumedQuestionCount,
+    price,
+    is_reusable AS isReusable,
+    revoked_at AS revokedAt,
+    used_at AS usedAt,
+    used_by_quiz_id AS usedByQuizId,
+    created_at AS createdAt
+  FROM access_codes
+  WHERE revoked_at IS NULL
+    AND site_type IS NULL
+    AND code_hash != ?
+    AND (
+      remaining_question_count IS NULL
+      OR remaining_question_count > 0
+    )
+  ORDER BY created_at DESC, id DESC
+  LIMIT ?
+`);
+
 const getLatestPaymentSessionByUserStmt = db.prepare(`
   SELECT
     id,
@@ -1587,6 +1615,13 @@ export function listAccessCodesByClient({ clientTgUserId = null, clientTgUsernam
     .map(mapAccessCodeRow);
 }
 
+export function listActiveAiAccessCodes(limit = 20) {
+  const normalizedLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  return listActiveAiAccessCodesStmt
+    .all(hashCode(internalAiFreeCode), normalizedLimit)
+    .map(mapAccessCodeRow);
+}
+
 export function getPaymentCooldownState({ tgUserId, cooldownMs = 60 * 60 * 1000, now = nowMs() }) {
   const normalizedUserId = normalizeTelegramUserId(tgUserId);
   if (!normalizedUserId) {
@@ -2570,6 +2605,7 @@ function mapAccessCodeRow(row) {
     revokedAt: row.revokedAt ? Number(row.revokedAt) : null,
     usedAt: row.usedAt ? Number(row.usedAt) : null,
     usedByQuizId: row.usedByQuizId ? Number(row.usedByQuizId) : null,
+    createdAt: row.createdAt ? Number(row.createdAt) : null,
   };
 }
 
