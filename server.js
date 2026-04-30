@@ -746,10 +746,14 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
   const draft = inspectQuizDraft(draftToken);
   const isAiDraft = Boolean(draft?.rawModel?.aiPrimaryModel)
     || String(draft?.rawModel?.answerMode || '').startsWith('openai-');
-  const accessCode = isAiDraft ? '' : resolveFinalizeAccessCode(providedAccessCode);
-  const reservation = isAiDraft
-    ? reserveInternalAiAccessCode()
-    : reserveFinalizeAccess(accessCode);
+  const aiDraftRequiresCode = isAiDraft && Boolean(draft?.rawModel?.aiRequireCode);
+  if (aiDraftRequiresCode && !providedAccessCode) {
+    return res.status(400).json({ error: 'Enter an access code.' });
+  }
+  const accessCode = aiDraftRequiresCode
+    ? providedAccessCode
+    : (isAiDraft ? '' : resolveFinalizeAccessCode(providedAccessCode));
+  const reservation = reserveFinalizeAccess(accessCode);
   if (!reservation) {
     return res.status(403).json({ error: 'Код недійсний, уже використаний або зараз обробляється.' });
   }

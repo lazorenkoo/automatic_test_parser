@@ -2035,11 +2035,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
       codeRow.id,
     );
 
-    if (Number(codeRow.isReusable || 0) === 1) {
-      releaseReusableCodeStmt.run(codeRow.id);
-    } else {
-      markCodeUsedStmt.run(createdAt, quizInsert.lastInsertRowid, codeRow.id);
-    }
+    markCodeUsedStmt.run(createdAt, quizInsert.lastInsertRowid, codeRow.id);
     deleteDraftByTokenStmt.run(draftToken);
 
     return {
