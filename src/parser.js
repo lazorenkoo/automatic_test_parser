@@ -209,6 +209,7 @@ export async function parseQuizFromFile({
 
 export const __test__ = {
   rebuildPdfPageTextForReadingOrder,
+  repairEmbeddedQuestionLeaks,
   normalizeParsedQuestionsForOutput,
 };
 
@@ -516,10 +517,23 @@ function buildPdfTextFromPages(pages, fallbackText = '') {
   }
 
   const normalizedPages = pages
-    .map((page) => rebuildPdfPageTextForReadingOrder(page?.text || ''))
+    .map((page) => stripLeadingPdfPageNumber(rebuildPdfPageTextForReadingOrder(page?.text || '')))
     .filter(Boolean);
 
-  return normalizedPages.length ? normalizedPages.join('\n\n') : String(fallbackText || '');
+  return normalizedPages.length ? normalizedPages.join('\n') : String(fallbackText || '');
+}
+
+function stripLeadingPdfPageNumber(pageText) {
+  const lines = String(pageText || '')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => cleanupLine(line));
+
+  while (lines.length && /^\d{1,3}$/.test(lines[0])) {
+    lines.shift();
+  }
+
+  return lines.filter(Boolean).join('\n').trim();
 }
 
 function rebuildPdfPageTextForReadingOrder(pageText) {
@@ -544,7 +558,11 @@ function rebuildPdfPageTextForReadingOrder(pageText) {
   for (let index = 0; index < lines.length; index += 1) {
     const questionMatch = matchQuestionStart(lines[index]);
     const questionNumber = extractLeadingQuestionNumber(lines[index]);
-    if (questionMatch && Number.isInteger(questionNumber)) {
+    if (
+      questionMatch
+      && Number.isInteger(questionNumber)
+      && !looksLikeHyphenatedReorderArtifact(lines, index)
+    ) {
       blockStarts.push({ index, number: questionNumber });
     }
   }
@@ -580,6 +598,17 @@ function rebuildPdfPageTextForReadingOrder(pageText) {
     ...prefix,
     ...sortedBlocks.flatMap((block) => block.lines),
   ].join('\n');
+}
+
+function looksLikeHyphenatedReorderArtifact(lines, index) {
+  const inlineMatch = matchStrictInlineQuestionStart(lines[index] || '');
+  if (!inlineMatch) {
+    return false;
+  }
+
+  const previousLine = findPreviousMeaningfulRawLine(lines, index - 1);
+  const nextLine = findNextMeaningfulRawLine(lines, index + 1);
+  return looksLikeHyphenatedQuestionContinuation({ lines: [previousLine] }, inlineMatch, nextLine);
 }
 
 function normalizeParsedQuestionsForOutput(questions, optionCount, answerIndex) {
@@ -857,6 +886,22 @@ function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, 
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    const embeddedStart = current ? splitEmbeddedRawQuestionStart(line, current.number) : null;
+    if (embeddedStart) {
+      if (embeddedStart.prefix) {
+        current.lines.push(embeddedStart.prefix);
+      }
+
+      if (embeddedStart.text) {
+        current.lines.push(embeddedStart.text);
+        current.embeddedSuccessor = {
+          number: embeddedStart.number,
+          text: embeddedStart.text,
+        };
+      }
+      continue;
+    }
+
     const inlineMatch = matchStrictInlineQuestionStart(line);
     const standaloneMatch = inlineMatch ? null : matchStandaloneQuestionStart(line);
     const nextLine = findNextMeaningfulRawLine(lines, index + 1);
@@ -865,6 +910,11 @@ function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, 
       if (current) {
         current.lines.push(line);
       }
+      continue;
+    }
+
+    if (inlineMatch && looksLikeHyphenatedQuestionContinuation(current, inlineMatch, nextLine)) {
+      current.lines[current.lines.length - 1] = joinFragments(current.lines.at(-1), `${inlineMatch.number}. ${inlineMatch.text}`);
       continue;
     }
 
@@ -886,7 +936,20 @@ function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, 
       };
 
       const rest = sanitizeText(inlineMatch ? inlineMatch.text : '');
-      if (rest) {
+      const embeddedStartInRest = rest ? splitEmbeddedRawQuestionStart(rest, current.number) : null;
+      if (embeddedStartInRest) {
+        if (embeddedStartInRest.prefix) {
+          current.lines.push(embeddedStartInRest.prefix);
+        }
+
+        if (embeddedStartInRest.text) {
+          current.lines.push(embeddedStartInRest.text);
+          current.embeddedSuccessor = {
+            number: embeddedStartInRest.number,
+            text: embeddedStartInRest.text,
+          };
+        }
+      } else if (rest) {
         current.lines.push(rest);
       }
       continue;
@@ -919,6 +982,11 @@ function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, 
       correctIndex: resolveQuestionCorrectIndex(answerIndex, parsedBlock.options.length),
     });
 
+    const embeddedSuccessorQuestion = buildEmbeddedSuccessorQuestion(block, parsedBlock, optionCount, answerIndex);
+    if (embeddedSuccessorQuestion) {
+      questions.push(embeddedSuccessorQuestion);
+    }
+
     if (questions.length >= limit) {
       break;
     }
@@ -937,6 +1005,91 @@ function parseQuestionsFromRawExplicitNumbers(linesInput, { answerIndex, limit, 
     reviewBlocks,
     droppedBlocks,
     qualityScore: questions.length * 30 - droppedBlocks,
+  };
+}
+
+function splitEmbeddedRawQuestionStart(line, currentNumber) {
+  const text = sanitizeText(line);
+  const current = Number(currentNumber);
+  if (!text || !Number.isInteger(current)) {
+    return null;
+  }
+
+  const pattern = /^(.*?\S)\s+(\d{1,3})[.)]\s+(.+)$/u;
+  const match = text.match(pattern);
+  if (!match) {
+    return null;
+  }
+
+  const nextNumber = Number(match[2]);
+  const prefix = sanitizeText(match[1]);
+  const nextText = sanitizeText(match[3]);
+  if (
+    !Number.isInteger(nextNumber)
+    || nextNumber !== current + 1
+    || !prefix
+    || !nextText
+    || (!looksLikePromptSentence(nextText) && !looksLikeQuestionTail(nextText) && !/[?]$/.test(nextText))
+    || /[-–—]$/.test(prefix)
+  ) {
+    return null;
+  }
+
+  return {
+    prefix,
+    number: nextNumber,
+    text: nextText,
+  };
+}
+
+function looksLikeHyphenatedQuestionContinuation(current, inlineMatch, nextLine = '') {
+  const lastLine = sanitizeText(current?.lines?.at(-1));
+  const text = sanitizeText(inlineMatch?.text);
+  const following = sanitizeText(nextLine);
+  const number = Number(inlineMatch?.number);
+  if (!lastLine || !text || !Number.isInteger(number)) {
+    return false;
+  }
+
+  const combined = sanitizeText([text, following].filter(Boolean).join(' '));
+
+  return /[-–—]$/.test(lastLine)
+    && number >= 1
+    && number <= 9
+    && (
+      looksLikePromptSentence(text)
+      || looksLikeQuestionTail(text)
+      || /[?]$/.test(text)
+      || (combined && (looksLikePromptSentence(combined) || looksLikeQuestionTail(combined) || /[?]$/.test(combined)))
+    );
+}
+
+function buildEmbeddedSuccessorQuestion(block, parsedBlock, optionCount, answerIndex) {
+  if (!block?.embeddedSuccessor?.text || !Number.isInteger(Number(block.embeddedSuccessor.number))) {
+    return null;
+  }
+
+  const cleanLines = normalizeBlockLines(block.lines);
+  const splitIndex = findExplicitQuestionOptionBoundary(cleanLines, optionCount);
+  if (splitIndex < 0) {
+    return null;
+  }
+
+  const questionLines = cleanLines.slice(0, splitIndex + 1);
+  const startIndex = questionLines.findIndex((line) => sanitizeText(line) === sanitizeText(block.embeddedSuccessor.text));
+  if (startIndex < 0) {
+    return null;
+  }
+
+  const questionText = sanitizeText(questionLines.slice(startIndex).join(' '));
+  if (!questionText) {
+    return null;
+  }
+
+  return {
+    q: `${block.embeddedSuccessor.number}. ${questionText}`,
+    options: [...parsedBlock.options],
+    correctIndex: resolveQuestionCorrectIndex(answerIndex, parsedBlock.options.length),
   };
 }
 
@@ -1856,7 +2009,7 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
     if (embedded) {
       repairedQuestions.push({
         ...question,
-        q: embedded.questionText,
+        q: stripEmbeddedPromptNumberMarkers(embedded.questionText),
         options: embedded.options,
         correctIndex: Math.max(0, Math.min(embedded.options.length - 1, Number(question?.correctIndex) || 0)),
       });
@@ -1868,9 +2021,21 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
     if (leakedPromptOptions) {
       repairedQuestions.push({
         ...question,
-        q: leakedPromptOptions.questionText,
+        q: stripEmbeddedPromptNumberMarkers(leakedPromptOptions.questionText),
         options: leakedPromptOptions.options,
         correctIndex: Math.max(0, Math.min(leakedPromptOptions.options.length - 1, Number(question?.correctIndex) || 0)),
+      });
+      repairedCount += 1;
+      continue;
+    }
+
+    const trailingOptions = extractTrailingOptionsFromQuestion(question, optionCount);
+    if (trailingOptions) {
+      repairedQuestions.push({
+        ...question,
+        q: stripEmbeddedPromptNumberMarkers(trailingOptions.questionText),
+        options: trailingOptions.options,
+        correctIndex: Math.max(0, Math.min(trailingOptions.options.length - 1, Number(question?.correctIndex) || 0)),
       });
       repairedCount += 1;
       continue;
@@ -1880,7 +2045,7 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
     if (inlineLeak) {
       repairedQuestions.push({
         ...question,
-        q: inlineLeak.questionText,
+        q: stripEmbeddedPromptNumberMarkers(inlineLeak.questionText),
         options: inlineLeak.options,
         correctIndex: Math.max(0, Math.min(inlineLeak.options.length - 1, Number(question?.correctIndex) || 0)),
       });
@@ -1888,7 +2053,10 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
       continue;
     }
 
-    repairedQuestions.push(question);
+    repairedQuestions.push({
+      ...question,
+      q: stripEmbeddedPromptNumberMarkers(question?.q),
+    });
   }
 
   const notes = [];
@@ -1900,6 +2068,90 @@ function repairEmbeddedQuestionLeaks(questions, optionCount) {
     questions: repairedQuestions,
     notes,
   };
+}
+
+function stripEmbeddedPromptNumberMarkers(questionText) {
+  const text = sanitizeText(questionText);
+  if (!text) {
+    return '';
+  }
+
+  return sanitizeText(text.replace(/\s+\d{1,3}[.)]\s+(.+)$/u, (match, tail) => {
+    const normalizedTail = sanitizeText(tail);
+    return normalizedTail && looksLikePromptSentence(normalizedTail) ? ` ${normalizedTail}` : match;
+  }));
+}
+
+function extractTrailingOptionsFromQuestion(question, optionCount) {
+  const questionText = sanitizeText(question?.q);
+  const existingOptions = Array.isArray(question?.options)
+    ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+    : [];
+  const minOptionCount = minimumAllowedOptionCount(optionCount);
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+
+  if (!questionText || existingOptions.length < Math.max(1, minOptionCount - 1) || expectedOptionCount < 2) {
+    return null;
+  }
+
+  const boundaryIndexes = findPromptBoundaryCandidates(questionText);
+  for (const boundaryIndex of boundaryIndexes) {
+    const cleanQuestionText = sanitizeText(questionText.slice(0, boundaryIndex + 1));
+    const leakedTail = sanitizeText(questionText.slice(boundaryIndex + 1));
+    if (!cleanQuestionText || !leakedTail || !looksLikeRealQuestion(cleanQuestionText, existingOptions)) {
+      continue;
+    }
+
+    const leakedOptions = collectStandaloneTailOptions(leakedTail, expectedOptionCount - existingOptions.length);
+    if (!leakedOptions.length) {
+      continue;
+    }
+
+    const combinedOptions = [...leakedOptions, ...existingOptions];
+    if (!isAcceptableOptionCount(combinedOptions.length, optionCount)) {
+      continue;
+    }
+
+    return {
+      questionText: cleanQuestionText,
+      options: combinedOptions,
+    };
+  }
+
+  return null;
+}
+
+function findPromptBoundaryCandidates(text) {
+  const value = String(text || '');
+  const indexes = [];
+
+  for (let index = 0; index < value.length - 1; index += 1) {
+    if (!/[?.:]/.test(value[index])) {
+      continue;
+    }
+
+    if (!/\s/.test(value[index + 1])) {
+      continue;
+    }
+
+    indexes.push(index);
+  }
+
+  return indexes.reverse();
+}
+
+function collectStandaloneTailOptions(text, maxOptions) {
+  const safeMaxOptions = Math.max(1, Number(maxOptions) || 0);
+  const direct = sanitizeText(text);
+  if (direct && looksLikeStandaloneOptionLine(direct)) {
+    return [direct];
+  }
+
+  return splitLeadingTitlePhrases(text, safeMaxOptions)
+    .map((option) => sanitizeText(option))
+    .filter(Boolean)
+    .filter((option) => looksLikeStandaloneOptionLine(option))
+    .slice(0, safeMaxOptions);
 }
 
 function repairShiftedQuestionLines(questions, optionCount) {
@@ -2606,6 +2858,12 @@ function scoreExplicitQuestionBoundary(questionLines, optionLines, questionText,
     score += 8;
   }
 
+  const firstOption = sanitizeText(optionLines[0]);
+  const firstTwoOptions = sanitizeText(optionLines.slice(0, 2).join(' '));
+  if (looksLikePromptSentence(firstOption) || (firstTwoOptions && looksLikePromptSentence(firstTwoOptions) && /[?.:]$/.test(firstTwoOptions))) {
+    score -= 30;
+  }
+
   if (rawOptionLines[0] && /^\p{Ll}/u.test(rawOptionLines[0])) {
     score -= 25;
   }
@@ -2636,8 +2894,8 @@ function collectSequentialOptions(lines, startIndex, optionCount) {
     return collectSequentialOptionsAuto(lines, startIndex);
   }
 
-  return collectSequentialOptionsStrict(lines, startIndex, optionCount)
-    || collectSequentialOptionsFlexible(lines, startIndex, optionCount)
+  return collectSequentialOptionsFlexible(lines, startIndex, optionCount)
+    || collectSequentialOptionsStrict(lines, startIndex, optionCount)
     || recoverSequentialOptionsWindow(lines, startIndex, optionCount);
 }
 
@@ -3097,18 +3355,60 @@ function normalizeOptionLines(lines, optionCount) {
       continue;
     }
 
-    if (normalized.includes(line)) {
+    if (normalized.at(-1) === line) {
       continue;
     }
 
     normalized.push(line);
   }
 
-  if (!isAutoOptionCount(optionCount) && normalized.length > optionCount) {
-    return normalized.slice(0, optionCount);
+  const merged = mergeWrappedOptionLines(normalized, optionCount);
+
+  if (!isAutoOptionCount(optionCount) && merged.length > optionCount) {
+    return merged.slice(0, optionCount);
   }
 
-  return normalized;
+  return merged;
+}
+
+function mergeWrappedOptionLines(lines, optionCount) {
+  const entries = Array.isArray(lines) ? lines.filter(Boolean) : [];
+  const expectedOptionCount = Number(optionCount);
+  if (!Number.isInteger(expectedOptionCount) || expectedOptionCount < 2 || entries.length <= expectedOptionCount) {
+    return entries;
+  }
+
+  const merged = [];
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const line = sanitizeText(entries[index]);
+    if (!line) {
+      continue;
+    }
+
+    if (!merged.length) {
+      merged.push(line);
+      continue;
+    }
+
+    const previous = merged.at(-1);
+    const remainingRawIncludingCurrent = entries.length - index;
+    const remainingSlots = Math.max(1, expectedOptionCount - merged.length);
+    const shouldMerge = shouldContinueOptionText(previous, line)
+      || (
+        remainingRawIncludingCurrent > remainingSlots
+        && /^[\p{Ll}\p{Lo}\d(]/u.test(line)
+      );
+
+    if (shouldMerge) {
+      merged[merged.length - 1] = joinFragments(previous, line);
+      continue;
+    }
+
+    merged.push(line);
+  }
+
+  return merged;
 }
 
 function looksLikeRealQuestion(questionText, options) {
@@ -3545,6 +3845,18 @@ function findNextMeaningfulRawLine(lines, startIndex) {
   return '';
 }
 
+function findPreviousMeaningfulRawLine(lines, startIndex) {
+  for (let index = startIndex; index >= 0; index -= 1) {
+    const line = cleanupLine(lines[index]);
+    if (!line || shouldIgnoreLine(line)) {
+      continue;
+    }
+    return line;
+  }
+
+  return '';
+}
+
 function looksLikeRawNumericOptionLine(line, current, nextLine) {
   const value = sanitizeText(line);
   if (!value || !current) {
@@ -3639,6 +3951,9 @@ function joinFragments(left, right) {
   }
 
   if (new RegExp(`[${DASH_CHARS}]$`).test(a)) {
+    if (/^\d/.test(b)) {
+      return `${a}${b}`;
+    }
     return `${a.slice(0, -1)}${b}`;
   }
 
