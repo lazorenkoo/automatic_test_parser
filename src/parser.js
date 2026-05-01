@@ -133,6 +133,7 @@ export async function parseQuizFromFile({
     exactParagraphCandidate,
     parseQuestionsFromRawExplicitNumbers(rawLines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
     parseQuestionsFromExplicitNumbers(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
+    parseQuestionsBySequentialBlocks(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
     parseQuestionsByDynamicScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
     parseQuestionsByForwardScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
     parseQuestionsFromText(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: normalizedOptionCount }),
@@ -147,6 +148,7 @@ export async function parseQuizFromFile({
     candidates.push(
       parseQuestionsFromRawExplicitNumbers(rawLines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: docxFixedOptionCount }),
       parseQuestionsFromExplicitNumbers(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: docxFixedOptionCount }),
+      parseQuestionsBySequentialBlocks(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: docxFixedOptionCount }),
       parseQuestionsByDynamicScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: docxFixedOptionCount }),
       parseQuestionsByForwardScan(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: docxFixedOptionCount }),
       parseQuestionsFromText(lines, { answerIndex: safeAnswerIndex, limit: effectiveLimit, optionCount: docxFixedOptionCount }),
@@ -211,6 +213,7 @@ export const __test__ = {
   rebuildPdfPageTextForReadingOrder,
   repairEmbeddedQuestionLeaks,
   normalizeParsedQuestionsForOutput,
+  parseQuestionsBySequentialBlocks,
 };
 
 function parseQuizFromJsonFile({
@@ -1165,6 +1168,86 @@ function parseQuestionsByForwardScan(linesInput, { answerIndex, limit, optionCou
     notes,
     droppedBlocks,
     qualityScore: questions.length * 18 - droppedBlocks,
+  };
+}
+
+function parseQuestionsBySequentialBlocks(linesInput, { answerIndex, limit, optionCount }) {
+  const lines = Array.isArray(linesInput) ? linesInput : splitIntoLines(linesInput);
+  const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : Number.MAX_SAFE_INTEGER;
+  const questions = [];
+  const reviewBlocks = [];
+  let droppedBlocks = 0;
+
+  for (let index = 0; index < lines.length && questions.length < safeLimit; index += 1) {
+    const line = sanitizeText(lines[index]);
+    if (!line || shouldIgnoreLine(line) || isLikelyStandaloneMetaHeading(line)) {
+      continue;
+    }
+
+    let matchedCandidate = null;
+
+    for (let offset = 0; offset <= 18; offset += 1) {
+      const endIndex = index + offset;
+      if (endIndex >= lines.length) {
+        break;
+      }
+
+      const chunk = lines.slice(index, endIndex + 1).filter(Boolean);
+      if (!chunk.length) {
+        continue;
+      }
+
+      const tailLine = sanitizeText(chunk.at(-1));
+      const questionText = backfillQuestionLeadIn(lines, index, buildQuestionText(chunk));
+      const questionLooksClosed = looksLikeQuestionTail(tailLine)
+        || (/[.?:]$/.test(tailLine) && looksLikePromptSentence(questionText));
+      if (!questionText || !questionLooksClosed) {
+        continue;
+      }
+
+      const optionBlock = collectSequentialOptions(lines, endIndex + 1, optionCount);
+      if (!optionBlock || !looksLikeRealQuestion(questionText, optionBlock.options)) {
+        continue;
+      }
+
+      matchedCandidate = {
+        questionText,
+        options: optionBlock.options,
+        nextIndex: optionBlock.nextIndex,
+      };
+      break;
+    }
+
+    if (!matchedCandidate) {
+      continue;
+    }
+
+    questions.push({
+      q: matchedCandidate.questionText,
+      options: matchedCandidate.options,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, matchedCandidate.options.length),
+    });
+
+    index = matchedCandidate.nextIndex - 1;
+  }
+
+  if (!questions.length) {
+    droppedBlocks += 1;
+  }
+
+  const notes = [];
+  if (droppedBlocks > 0 && questions.length === 0) {
+    notes.push(`Skipped malformed sequential blocks: ${droppedBlocks}.`);
+  }
+  notes.push(...buildLimitNote(questions.length, safeLimit));
+
+  return {
+    parser: 'sequential-blocks',
+    questions,
+    notes,
+    reviewBlocks,
+    droppedBlocks,
+    qualityScore: questions.length * 22 - droppedBlocks,
   };
 }
 
@@ -3038,6 +3121,16 @@ function collectSequentialOptionsFlexible(lines, startIndex, optionCount) {
       continue;
     }
 
+    if (
+      !optionMatch
+      && currentOption
+      && options.length + 1 >= optionCount
+      && !shouldContinueOptionText(currentOption, optionText)
+    ) {
+      options.push(currentOption);
+      break;
+    }
+
     const looksLikeNextQuestion = looksLikeQuestionTail(optionText) && looksLikePromptSentence(optionText);
     if (looksLikeNextQuestion) {
       break;
@@ -3441,7 +3534,54 @@ function looksLikeRealQuestion(questionText, options) {
 
 function buildQuestionText(lines) {
   const trimmedLines = trimLeadingHeadingLines(lines);
-  return sanitizeText(trimmedLines.join(' '));
+  return sanitizeText(
+    sanitizeText(trimmedLines.join(' '))
+      .replace(/^ЗМ\s*\d+(?:\s*-\s*\d+)?\.?\s*/iu, '')
+      .replace(/([-\u2013\u2014])\s+(\d)/gu, '$1$2'),
+  );
+}
+
+function backfillQuestionLeadIn(lines, startIndex, questionText) {
+  let text = sanitizeText(questionText);
+  if (!text || !Array.isArray(lines) || startIndex <= 0) {
+    return text;
+  }
+
+  const shouldBackfill = /^[\p{Ll}\p{Lo}]/u.test(text) || text.length < 80;
+  if (!shouldBackfill) {
+    return text;
+  }
+
+  for (let index = startIndex - 1; index >= Math.max(0, startIndex - 3); index -= 1) {
+    const candidateLine = sanitizeText(lines[index]);
+    if (!candidateLine || shouldIgnoreLine(candidateLine) || isLikelyTopicHeading(candidateLine) || isLikelyStandaloneMetaHeading(candidateLine)) {
+      continue;
+    }
+
+    if (looksLikeProbableAnswerLine(candidateLine)) {
+      break;
+    }
+
+    text = buildQuestionText([candidateLine, text]);
+    if (text.length >= 100 && !/^[\p{Ll}\p{Lo}]/u.test(text)) {
+      break;
+    }
+  }
+
+  return text;
+}
+
+function looksLikeProbableAnswerLine(line) {
+  const text = sanitizeText(line);
+  if (!text) {
+    return false;
+  }
+
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  return looksLikeStandaloneOptionLine(text)
+    && wordCount <= 6
+    && text.length <= 60
+    && !/[,\-–—]$/.test(text);
 }
 
 function trimLeadingHeadingLines(linesInput) {
@@ -3488,7 +3628,7 @@ function buildForwardCandidates(lines, index, optionCount) {
     }
 
     const tailLine = chunk.at(-1);
-    const questionText = buildQuestionText(chunk);
+    const questionText = backfillQuestionLeadIn(lines, index, buildQuestionText(chunk));
     const questionLooksClosed = looksLikeQuestionTail(tailLine) || (/[.?:]$/.test(tailLine) && looksLikePromptSentence(questionText));
     if (!questionLooksClosed) {
       continue;
@@ -3713,11 +3853,19 @@ function isLikelyStandaloneMetaHeading(line) {
 }
 
 function isLikelyHeadingContinuation(line) {
-  if (!line) {
+  const text = sanitizeText(line);
+  if (!text) {
     return false;
   }
 
-  return /^[a-zа-яіїєґ]/u.test(line) && !looksLikeQuestionTail(line);
+  if (!/^[a-zа-яіїєґ]/u.test(text) || looksLikeQuestionTail(text)) {
+    return false;
+  }
+
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  return wordCount <= 5
+    && text.length <= 40
+    && !/[.,;]$/.test(text);
 }
 
 function looksLikePromptSentence(text) {

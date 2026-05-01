@@ -23,6 +23,39 @@ test('pads a missing fixed answer option with an empty string', async () => {
   assert.equal(result.questions[0].correctIndex, 4);
 });
 
+test('keeps lowercase continuation lines inside the next unnumbered question block', async () => {
+  const sourceText = [
+    'First question about a bronchodilator:',
+    'Option A',
+    'Option B',
+    'Option C',
+    'Option D',
+    'Option E',
+    'In the pulmonology ward the patient with obstructive bronchitis and spasmodic',
+    'component was prescribed a bronchodilator whose therapeutic effect is caused by',
+    'stimulation of beta2-adrenoceptors in the smooth muscles of the bronchi. Determine this',
+    'drug:',
+    'Salbutamol',
+    'Cromolyn sodium',
+    'Euphyllin',
+    'Metacin',
+    'Prednisolone',
+  ].join('\n');
+
+  const result = await parseQuizFromFile({
+    buffer: Buffer.from(sourceText, 'utf8'),
+    filename: 'sequential-lowercase-continuation.txt',
+    answerIndex: 1,
+    optionCount: 5,
+  });
+
+  assert.equal(result.questions.length, 2);
+  assert.equal(
+    result.questions[1].q,
+    'In the pulmonology ward the patient with obstructive bronchitis and spasmodic component was prescribed a bronchodilator whose therapeutic effect is caused by stimulation of beta2-adrenoceptors in the smooth muscles of the bronchi. Determine this drug:',
+  );
+});
+
 test('reorders interleaved PDF question blocks back into numeric reading order', () => {
   const pageText = [
     '17. Left column question',
@@ -217,5 +250,46 @@ test('splits an embedded next question number into a separate numbered block', a
   assert.equal(
     result.questions[2].q,
     '491. Біотин бере участь у якому типі реакцій?',
+  );
+});
+
+test('parses sequential unnumbered question blocks across page-style breaks', async () => {
+  const sourceText = [
+    'ЗМ 1-4.',
+    'Хворому з артритом призначено протизапальний засіб з групи селективних інгібіторів',
+    'ЦОГ-2. Вказати обраний препарат:',
+    'Целекоксиб',
+    'Анальгін',
+    'Індометацин',
+    'Бутадіон',
+    'Димексид',
+    'У зв\'язку з вираженим больовим синдромом хворому призначений наркотичний',
+    'анальгетик. Вказати обраний препарат:',
+    'Морфін',
+    'Індометацин',
+    'Анальгін',
+    'Димексид',
+    'Німесулід',
+  ].join('\n');
+
+  const result = await parseQuizFromFile({
+    buffer: Buffer.from(sourceText, 'utf8'),
+    filename: 'sequential-unnumbered.txt',
+    answerIndex: 1,
+    optionCount: 5,
+  });
+
+  assert.equal(result.questions.length, 2);
+  assert.equal(
+    result.questions[0].q,
+    'Хворому з артритом призначено протизапальний засіб з групи селективних інгібіторів ЦОГ-2. Вказати обраний препарат:',
+  );
+  assert.deepEqual(
+    result.questions[0].options,
+    ['Целекоксиб', 'Анальгін', 'Індометацин', 'Бутадіон', 'Димексид'],
+  );
+  assert.equal(
+    result.questions[1].q,
+    'У зв\'язку з вираженим больовим синдромом хворому призначений наркотичний анальгетик. Вказати обраний препарат:',
   );
 });
