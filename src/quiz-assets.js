@@ -231,6 +231,34 @@ h1{
   font-size:18px;
   font-weight:700;
 }
+.results-toolbar{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-top:14px;
+}
+.segmented{
+  display:inline-flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.segmented .btn{
+  padding:10px 14px;
+}
+.segmented .btn.active{
+  background:linear-gradient(135deg, #bb4d00, #d97706);
+  color:#fff;
+}
+.results-empty{
+  margin-top:14px;
+  padding:14px 16px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:#fffaf6;
+  color:var(--muted);
+}
 .report-fab{
   position:fixed;
   right:18px;
@@ -494,6 +522,9 @@ const i18n = {
   results: 'Результати',
   restart: 'Почати знову',
   summary: 'Підсумок: {correct} / {answered} · {time}',
+  resultsFilterAll: 'Усі відповіді',
+  resultsFilterWrong: 'Лише помилки',
+  resultsEmptyWrong: 'Усі відповіді правильні. Помилок немає.',
   correct: 'Правильно',
   wrong: 'Неправильно',
   minutes: 'хв',
@@ -516,6 +547,8 @@ const state = {
   shuffleQuestions: false,
   correctionOpen: false,
   configuredOptionCount,
+  resultsFilter: 'all',
+  resultsSnapshot: null,
 };
 
 const els = {
@@ -526,6 +559,9 @@ const els = {
   start: document.getElementById('start'),
   quiz: document.getElementById('quiz'),
   results: document.getElementById('results'),
+  resultsFilters: document.getElementById('resultsFilters'),
+  resultsFilterAllBtn: document.getElementById('resultsFilterAllBtn'),
+  resultsFilterWrongBtn: document.getElementById('resultsFilterWrongBtn'),
   qText: document.getElementById('qText'),
   options: document.getElementById('options'),
   next: document.getElementById('next'),
@@ -554,6 +590,7 @@ const els = {
   introText: document.getElementById('introText'),
   shuffleLabel: document.getElementById('shuffleLabel'),
   resultsTitle: document.getElementById('resultsTitle'),
+  resultsEmpty: document.getElementById('resultsEmpty'),
   countLabel: document.getElementById('countLabel'),
   reportBtn: document.getElementById('reportBtn'),
   reportToast: document.getElementById('reportToast'),
@@ -623,6 +660,15 @@ function applyLanguage() {
   if (els.resultsTitle) {
     els.resultsTitle.textContent = t('results');
   }
+  if (els.resultsFilterAllBtn) {
+    els.resultsFilterAllBtn.textContent = t('resultsFilterAll');
+  }
+  if (els.resultsFilterWrongBtn) {
+    els.resultsFilterWrongBtn.textContent = t('resultsFilterWrong');
+  }
+  if (els.resultsEmpty && !els.resultsEmpty.classList.contains('hidden')) {
+    els.resultsEmpty.textContent = t('resultsEmptyWrong');
+  }
   if (els.restartBtn) {
     els.restartBtn.textContent = t('restart');
   }
@@ -656,10 +702,16 @@ function applyLanguage() {
 }
 
 function show(node) {
+  if (!node) {
+    return;
+  }
   node.classList.remove('hidden');
 }
 
 function hide(node) {
+  if (!node) {
+    return;
+  }
   node.classList.add('hidden');
 }
 
@@ -715,6 +767,8 @@ function startQuiz() {
   state.cur = 0;
   state.startedAt = Date.now();
   state.correctionOpen = false;
+  state.resultsFilter = 'all';
+  state.resultsSnapshot = null;
 
   hide(els.start);
   hide(els.results);
@@ -1066,12 +1120,9 @@ function confirmFinishQuiz() {
   showResults();
 }
 
-function showResults() {
-  hide(els.quiz);
-  show(els.results);
-  els.list.innerHTML = '';
-
+function buildResultsSnapshot() {
   const answered = state.order.filter((questionIndex) => state.chosenAt[questionIndex] !== null);
+  const items = [];
   let correct = 0;
 
   answered.forEach((questionIndex) => {
@@ -1079,15 +1130,63 @@ function showResults() {
     const optionOrder = state.optsOrder[questionIndex];
     const chosenRenderedIndex = state.chosenAt[questionIndex];
     const correctRenderedIndex = optionOrder.findIndex((index) => index === question.correctIndex);
-    if (chosenRenderedIndex === correctRenderedIndex) {
+    const isCorrect = chosenRenderedIndex === correctRenderedIndex;
+    if (isCorrect) {
       correct += 1;
     }
+    items.push({
+      question,
+      optionOrder,
+      chosenRenderedIndex,
+      correctRenderedIndex,
+      isCorrect,
+    });
+  });
 
+  return {
+    answeredCount: answered.length,
+    correctCount: correct,
+    durationMs: Date.now() - (state.startedAt || Date.now()),
+    items,
+  };
+}
+
+function updateResultsFilterButtons() {
+  els.resultsFilterAllBtn?.classList.toggle('active', state.resultsFilter === 'all');
+  els.resultsFilterWrongBtn?.classList.toggle('active', state.resultsFilter === 'wrong');
+}
+
+function renderResultsList() {
+  if (!els.list) {
+    return;
+  }
+
+  const snapshot = state.resultsSnapshot;
+  els.list.innerHTML = '';
+  hide(els.resultsEmpty);
+
+  if (!snapshot) {
+    return;
+  }
+
+  const visibleItems = state.resultsFilter === 'wrong'
+    ? snapshot.items.filter((item) => !item.isCorrect)
+    : snapshot.items;
+
+  if (!visibleItems.length) {
+    if (els.resultsEmpty) {
+      els.resultsEmpty.textContent = t('resultsEmptyWrong');
+      show(els.resultsEmpty);
+    }
+    return;
+  }
+
+  visibleItems.forEach(({ question, optionOrder, chosenRenderedIndex, correctRenderedIndex, isCorrect }) => {
     const block = document.createElement('div');
     block.className = 'result-item';
     block.innerHTML =
       '<div class="small">' +
-      (chosenRenderedIndex === correctRenderedIndex ? t('correct') : t('wrong')) +
+      (isCorrect ? t('correct') : t('wrong')) +
       '</div><div style="font-weight:700;margin:6px 0 10px">' +
       question.q +
       '</div>';
@@ -1099,7 +1198,7 @@ function showResults() {
       const option = document.createElement('div');
       option.className = 'option disabled';
       if (renderedOptionIndex === chosenRenderedIndex) {
-        option.classList.add(chosenRenderedIndex === correctRenderedIndex ? 'correct' : 'wrong');
+        option.classList.add(isCorrect ? 'correct' : 'wrong');
       }
       if (renderedOptionIndex !== chosenRenderedIndex && renderedOptionIndex === correctRenderedIndex) {
         option.classList.add('correct');
@@ -1111,16 +1210,38 @@ function showResults() {
     block.appendChild(group);
     els.list.appendChild(block);
   });
+}
 
+function showResults() {
+  hide(els.quiz);
+  show(els.results);
+  state.resultsSnapshot = buildResultsSnapshot();
+  state.resultsFilter = 'all';
+  updateResultsFilterButtons();
+  renderResultsList();
+
+  const snapshot = state.resultsSnapshot;
   els.sum.textContent = t('summary', {
-    correct,
-    answered: answered.length,
-    time: msToClock(Date.now() - (state.startedAt || Date.now())),
+    correct: snapshot.correctCount,
+    answered: snapshot.answeredCount,
+    time: msToClock(snapshot.durationMs),
   });
+}
+
+function setResultsFilter(filter) {
+  if (filter !== 'all' && filter !== 'wrong') {
+    return;
+  }
+
+  state.resultsFilter = filter;
+  updateResultsFilterButtons();
+  renderResultsList();
 }
 
 function resetQuiz() {
   state.correctionOpen = false;
+  state.resultsFilter = 'all';
+  state.resultsSnapshot = null;
   hide(els.quiz);
   hide(els.results);
   show(els.start);
@@ -1201,6 +1322,8 @@ document.addEventListener('DOMContentLoaded', () => {
       goToQuestion(els.jumpInput?.value);
     }
   });
+  els.resultsFilterAllBtn?.addEventListener('click', () => setResultsFilter('all'));
+  els.resultsFilterWrongBtn?.addEventListener('click', () => setResultsFilter('wrong'));
   els.restartBtn?.addEventListener('click', resetQuiz);
   els.reportBtn?.addEventListener('click', reportBrokenQuiz);
 });
@@ -1304,6 +1427,13 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     <section id="results" class="card hidden">
       <h2 id="resultsTitle" class="title">Результати</h2>
       <div id="sum" class="summary"></div>
+      <div id="resultsFilters" class="results-toolbar">
+        <div class="segmented">
+          <button id="resultsFilterAllBtn" class="btn secondary active" type="button">Усі відповіді</button>
+          <button id="resultsFilterWrongBtn" class="btn secondary" type="button">Лише помилки</button>
+        </div>
+      </div>
+      <div id="resultsEmpty" class="results-empty hidden"></div>
       <div id="resultsList" class="results-list"></div>
       <div class="controls">
         <div></div>
@@ -1395,6 +1525,13 @@ export function buildZipBundle(quiz) {
     <section id="results" class="card hidden">
       <h2 id="resultsTitle" class="title">Результати</h2>
       <div id="sum" class="summary"></div>
+      <div id="resultsFilters" class="results-toolbar">
+        <div class="segmented">
+          <button id="resultsFilterAllBtn" class="btn secondary active" type="button">Усі відповіді</button>
+          <button id="resultsFilterWrongBtn" class="btn secondary" type="button">Лише помилки</button>
+        </div>
+      </div>
+      <div id="resultsEmpty" class="results-empty hidden"></div>
       <div id="resultsList" class="results-list"></div>
       <div class="controls">
         <div></div>
