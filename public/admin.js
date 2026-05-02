@@ -10,10 +10,6 @@ const answerFileInput = document.getElementById('answerFile');
 const answerIndexSelect = document.getElementById('answerIndex');
 const optionCountInput = document.getElementById('optionCount');
 const optionCountAutoInput = document.getElementById('optionCountAuto');
-const questionModeSelect = document.getElementById('questionModeSelect');
-const questionLimitField = document.getElementById('questionLimitField');
-const questionLimitLabel = document.getElementById('questionLimitLabel');
-const questionLimitInput = document.getElementById('questionLimit');
 const answerModeSingleInput = document.getElementById('answerModeSingle');
 const answerModeFileInput = document.getElementById('answerModeFile');
 const singleAnswerField = document.getElementById('singleAnswerField');
@@ -41,13 +37,11 @@ loadStoredClientTgUsername();
 void loadRememberedClientTgUsername();
 syncOptionCountMode();
 syncAnswerIndexOptions();
-syncQuestionLimitMode();
 syncAnswerMode();
 syncReportButtonVisibility();
 
 optionCountInput.addEventListener('input', syncAnswerIndexOptions);
 optionCountAutoInput?.addEventListener('change', syncOptionCountMode);
-questionModeSelect?.addEventListener('change', syncQuestionLimitMode);
 answerModeSingleInput.addEventListener('change', syncAnswerMode);
 answerModeFileInput.addEventListener('change', syncAnswerMode);
 sourceFileInput.addEventListener('change', syncReportButtonVisibility);
@@ -91,7 +85,6 @@ quizForm.addEventListener('submit', async (event) => {
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
-    formData.append('questionMode', getQuestionMode());
     formData.append('answerMode', answerMode);
 
     if (answerMode === 'single') {
@@ -102,10 +95,6 @@ quizForm.addEventListener('submit', async (event) => {
         throw new Error('Потрібно завантажити окремий файл із відповідями.');
       }
       formData.append('answerFile', answerFile);
-    }
-
-    if (getQuestionMode() !== 'all') {
-      formData.append('questionLimit', String(questionLimitInput.value || ''));
     }
 
     const response = await fetch('/api/parse', {
@@ -384,11 +373,7 @@ async function prepareAiQuiz() {
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
-    formData.append('questionMode', getQuestionMode());
     formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
-    if (getQuestionMode() !== 'all') {
-      formData.append('questionLimit', String(questionLimitInput.value || ''));
-    }
 
     const response = await fetch('/api/ai-quizzes/inspect', {
       method: 'POST',
@@ -526,13 +511,9 @@ async function finalizeAiDraft() {
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
-    formData.append('questionMode', getQuestionMode());
     formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
     if (requiresCode && validatedAccessCode) {
       formData.append('accessCode', validatedAccessCode);
-    }
-    if (getQuestionMode() !== 'all') {
-      formData.append('questionLimit', String(questionLimitInput.value || ''));
     }
 
     const prepareResponse = await fetch('/api/ai-quizzes/prepare', {
@@ -1024,28 +1005,6 @@ function syncAnswerIndexOptions() {
     option.selected = index === selectedValue;
     answerIndexSelect.appendChild(option);
   }
-}
-
-function syncQuestionLimitMode() {
-  const mode = getQuestionMode();
-  const useAll = mode === 'all';
-  questionLimitField.classList.toggle('hidden', useAll);
-  questionLimitInput.disabled = useAll;
-  questionLimitInput.required = !useAll;
-  if (questionLimitLabel) {
-    questionLimitLabel.textContent = mode === 'random'
-      ? 'Скільки випадкових питань узяти'
-      : 'Скільки питань узяти';
-  }
-
-  if (!useAll && !questionLimitInput.value) {
-    questionLimitInput.value = '20';
-  }
-}
-
-function getQuestionMode() {
-  const normalized = String(questionModeSelect?.value || 'all').trim().toLowerCase();
-  return normalized === 'manual' || normalized === 'random' ? normalized : 'all';
 }
 
 function syncAnswerMode() {

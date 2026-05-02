@@ -530,6 +530,7 @@ const bootstrapData = typeof window !== 'undefined' && window.QUIZ_BOOTSTRAP
 const bootstrapQuestions = Array.isArray(bootstrapData.questions)
   ? bootstrapData.questions
   : (typeof QUESTIONS !== 'undefined' ? QUESTIONS : []);
+const sourceQuestions = bootstrapQuestions;
 const aiDisagreements = Array.isArray(bootstrapData.aiDisagreements)
   ? bootstrapData.aiDisagreements
   : [];
@@ -607,9 +608,16 @@ i18n.timerRemainingQuestion = '\u0417\u0430\u043B\u0438\u0448\u0438\u043B\u043E\
 i18n.timerRemainingTotal = '\u0417\u0430\u043B\u0438\u0448\u0438\u043B\u043E\u0441\u044C \u043D\u0430 \u0442\u0435\u0441\u0442: {time}';
 i18n.timerExpiredQuestion = '\u0427\u0430\u0441 \u043D\u0430 \u0446\u0435 \u043F\u0438\u0442\u0430\u043D\u043D\u044F \u0432\u0438\u0439\u0448\u043E\u0432.';
 i18n.timerExpiredTotal = '\u0427\u0430\u0441 \u043D\u0430 \u0442\u0435\u0441\u0442 \u0432\u0438\u0439\u0448\u043E\u0432.';
+i18n.selectionTitle = '\u041A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u043F\u0438\u0442\u0430\u043D\u044C';
+i18n.selectionMode = '\u0420\u0435\u0436\u0438\u043C \u0432\u0438\u0431\u043E\u0440\u0443';
+i18n.selectionAll = '\u0423\u0441\u0456 \u043F\u0438\u0442\u0430\u043D\u043D\u044F';
+i18n.selectionManual = '\u041F\u0435\u0440\u0448\u0456 N \u043F\u0438\u0442\u0430\u043D\u044C';
+i18n.selectionRandom = '\u0412\u0438\u043F\u0430\u0434\u043A\u043E\u0432\u0456 N \u043F\u0438\u0442\u0430\u043D\u043D\u044F';
+i18n.selectionLimit = '\u0421\u043A\u0456\u043B\u044C\u043A\u0438 \u043F\u0438\u0442\u0430\u043D\u044C \u0443\u0437\u044F\u0442\u0438';
+i18n.selectionRandomLimit = '\u0421\u043A\u0456\u043B\u044C\u043A\u0438 \u0432\u0438\u043F\u0430\u0434\u043A\u043E\u0432\u0438\u0445 \u043F\u0438\u0442\u0430\u043D\u044C \u0443\u0437\u044F\u0442\u0438';
 
 const state = {
-  questions: bootstrapQuestions,
+  questions: sourceQuestions,
   order: [],
   optsOrder: [],
   chosenAt: [],
@@ -649,6 +657,10 @@ const els = {
   explanationPanel: document.getElementById('explanationPanel'),
   correctionPanel: document.getElementById('correctionPanel'),
   timerModeSelect: document.getElementById('timerModeSelect'),
+  questionModeSelect: document.getElementById('questionModeSelect'),
+  questionLimitField: document.getElementById('questionLimitField'),
+  questionLimitLabel: document.getElementById('questionLimitLabel'),
+  questionLimitInput: document.getElementById('questionLimitInput'),
   timerPerQuestionField: document.getElementById('timerPerQuestionField'),
   timerPerQuestionInput: document.getElementById('timerPerQuestionInput'),
   timerTotalField: document.getElementById('timerTotalField'),
@@ -903,6 +915,85 @@ function ensureTimerUi() {
   syncTimerConfigUi();
 }
 
+function ensureQuestionSelectionUi() {
+  if (els.questionModeSelect && els.questionLimitField && els.questionLimitInput) {
+    return;
+  }
+
+  const startSection = document.getElementById('start');
+  const startControls = startSection?.querySelector('.controls');
+  if (!startSection || !startControls) {
+    return;
+  }
+
+  const panel = document.createElement('div');
+  panel.className = 'timer-panel';
+  panel.innerHTML =
+    '<div class="timer-grid">' +
+    '<div class="small">' + t('selectionTitle') + '</div>' +
+    '<label class="field">' +
+    '<span>' + t('selectionMode') + '</span>' +
+    '<select id="questionModeSelect">' +
+    '<option value="all">' + t('selectionAll') + '</option>' +
+    '<option value="manual">' + t('selectionManual') + '</option>' +
+    '<option value="random">' + t('selectionRandom') + '</option>' +
+    '</select>' +
+    '</label>' +
+    '<label id="questionLimitField" class="field hidden">' +
+    '<span id="questionLimitLabel">' + t('selectionLimit') + '</span>' +
+    '<input id="questionLimitInput" type="number" min="1" step="1" value="20" />' +
+    '</label>' +
+    '</div>';
+
+  startSection.insertBefore(panel, startControls);
+  els.questionModeSelect = document.getElementById('questionModeSelect');
+  els.questionLimitField = document.getElementById('questionLimitField');
+  els.questionLimitLabel = document.getElementById('questionLimitLabel');
+  els.questionLimitInput = document.getElementById('questionLimitInput');
+
+  els.questionModeSelect?.addEventListener('change', syncQuestionSelectionUi);
+  els.questionLimitInput?.addEventListener('input', syncQuestionSelectionUi);
+  syncQuestionSelectionUi();
+}
+
+function syncQuestionSelectionUi() {
+  const mode = getQuestionSelectionMode();
+  const useAll = mode === 'all';
+  const normalizedLimit = Math.max(1, Number(els.questionLimitInput?.value || 20) || 20);
+
+  if (els.questionLimitInput) {
+    els.questionLimitInput.value = String(normalizedLimit);
+  }
+  els.questionLimitField?.classList.toggle('hidden', useAll);
+
+  if (els.questionLimitLabel) {
+    els.questionLimitLabel.textContent = mode === 'random'
+      ? t('selectionRandomLimit')
+      : t('selectionLimit');
+  }
+}
+
+function getQuestionSelectionMode() {
+  const normalized = String(els.questionModeSelect?.value || 'all').trim().toLowerCase();
+  return normalized === 'manual' || normalized === 'random' ? normalized : 'all';
+}
+
+function buildQuestionSetForStart() {
+  const mode = getQuestionSelectionMode();
+  const baseQuestions = sourceQuestions.slice();
+  const requestedLimit = Math.max(1, Number(els.questionLimitInput?.value || 20) || 20);
+
+  if (mode === 'all' || requestedLimit >= baseQuestions.length) {
+    return baseQuestions;
+  }
+
+  if (mode === 'manual') {
+    return baseQuestions.slice(0, requestedLimit);
+  }
+
+  return shuffleArray(baseQuestions).slice(0, requestedLimit);
+}
+
 function syncTimerConfigUi() {
   const mode = String(els.timerModeSelect?.value || 'off');
   state.timerMode = mode === 'question' || mode === 'total' ? mode : 'off';
@@ -1071,6 +1162,7 @@ function getEditableOptionCount(question) {
 }
 
 function startQuiz() {
+  state.questions = buildQuestionSetForStart();
   const totalQuestions = state.questions.length;
   state.order = [...Array(totalQuestions).keys()];
   state.shuffleQuestions = Boolean(els.shuffle?.checked);
@@ -1692,6 +1784,7 @@ function resetQuiz() {
   state.resultsFilter = 'all';
   state.resultsSnapshot = null;
   state.explanationsByQuestion = {};
+  state.questions = sourceQuestions;
   hide(els.quiz);
   hide(els.results);
   show(els.start);
@@ -1762,6 +1855,7 @@ document.addEventListener('DOMContentLoaded', () => {
     els.quizLength.textContent = String(state.questions.length);
   }
 
+  ensureQuestionSelectionUi();
   ensureTimerUi();
   ensureExplanationUi();
   applyLanguage();
