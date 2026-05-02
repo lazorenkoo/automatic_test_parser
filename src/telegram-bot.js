@@ -2124,6 +2124,7 @@ function formatSiteDetails(quiz) {
     `Site ${quiz.id}`,
     `Title: ${quiz.title}`,
     `Course: ${quiz.courseNumber || '-'}`,
+    `Creator TG: ${quiz.clientTgUsername || '-'}`,
     `Slug: ${quiz.slug}`,
     `Question count: ${quiz.expectedQuestionCount || quiz.requestedCount || quiz.parsedCount || 0}`,
     `Parsed questions: ${quiz.parsedCount || 0}`,

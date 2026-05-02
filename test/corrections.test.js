@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import vm from 'node:vm';
 import { quizAppJs } from '../src/quiz-assets.js';
 
@@ -244,4 +245,73 @@ test('persists quiz corrections with an added answer option in sqlite', async ()
     ['Edited A', 'Edited B', 'Edited C', 'Edited D', 'Edited E', 'Edited F'],
   );
   assert.equal(rereadQuiz.questions[0].manuallyCorrected, true);
+});
+
+test('migrates legacy quiz_corrections schema before saving corrections', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pdmu-corrections-legacy-'));
+  process.env.DATA_DIR = dataDir;
+
+  const legacyDb = new DatabaseSync(path.join(dataDir, 'pdmu.sqlite'));
+  legacyDb.exec(`
+    CREATE TABLE quiz_corrections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      quiz_id INTEGER NOT NULL,
+      question_index INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  legacyDb.close();
+
+  const db = await import(`../src/db.js?correctionsLegacy=${Date.now()}`);
+  const code = db.createAccessCodes(1, 'correction-legacy-test')[0];
+  const draft = db.createQuizDraft({
+    title: 'Correction Legacy Migration',
+    courseNumber: 1,
+    sourceFilename: 'correction-legacy.txt',
+    answerIndex: 1,
+    requestedCount: 1,
+    questions: [
+      {
+        q: 'Original question?',
+        options: ['Original A', 'Original B', 'Original C', 'Original D', 'Original E'],
+        correctIndex: 0,
+      },
+    ],
+    reviewBlocks: [],
+    rawModelJson: { parser: 'test' },
+  });
+
+  const reservation = db.reserveAccessCode(code);
+  assert.ok(reservation?.reservationToken);
+
+  const savedQuiz = db.finalizeQuizFromDraftReservation({
+    reservationToken: reservation.reservationToken,
+    draftToken: draft.draftToken,
+  });
+
+  const updatedQuiz = db.applyQuizQuestionCorrection({
+    quizId: savedQuiz.id,
+    questionIndex: 1,
+    question: {
+      q: 'Edited question?',
+      options: ['Edited A', 'Edited B', 'Edited C', 'Edited D', 'Edited E'],
+      correctIndex: 0,
+      manuallyCorrected: true,
+    },
+    correction: {
+      sourceQuestionNumber: 1,
+      visibleQuestionNumber: 1,
+      configuredOptionCount: 5,
+      shuffleQuestions: false,
+      shuffledOptionOrder: [1, 2, 3, 4, 5],
+      visibleOptionSourceOrder: [1, 2, 3, 4, 5],
+      originalQuestionText: 'Original question?',
+      editedQuestionText: 'Edited question?',
+      originalOptionsSourceOrder: ['Original A', 'Original B', 'Original C', 'Original D', 'Original E'],
+      editedOptionsVisibleOrder: ['Edited A', 'Edited B', 'Edited C', 'Edited D', 'Edited E'],
+      editedOptionsSourceOrder: ['Edited A', 'Edited B', 'Edited C', 'Edited D', 'Edited E'],
+    },
+  });
+
+  assert.equal(updatedQuiz.questions[0].q, 'Edited question?');
 });

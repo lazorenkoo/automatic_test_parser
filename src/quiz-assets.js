@@ -1087,11 +1087,17 @@ async function submitCorrection() {
       body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      throw new Error('Correction failed');
+    let result = null;
+    try {
+      result = await response.json();
+    } catch {
+      result = null;
     }
 
-    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result?.error || t('correctionError'));
+    }
+
     if (!result?.question) {
       throw new Error('Correction response invalid');
     }
@@ -1104,8 +1110,8 @@ async function submitCorrection() {
     closeCorrectionPanel();
     renderQuestion();
     showToast(t('correctionSuccess'));
-  } catch (_error) {
-    showToast(t('correctionError'));
+  } catch (error) {
+    showToast(error?.message || t('correctionError'));
   } finally {
     if (els.correctionSubmitBtn) {
       els.correctionSubmitBtn.disabled = false;
