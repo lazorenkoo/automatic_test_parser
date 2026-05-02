@@ -43,6 +43,7 @@ import {
   SUPPORTED_ANSWER_EXTENSIONS,
   SUPPORTED_UPLOAD_EXTENSIONS,
 } from './src/parser.js';
+import { createGeminiExplanation, isGeminiExplanationAvailable } from './src/gemini-explanations.js';
 import { solveQuizAnswersWithAI } from './src/openai-answering.js';
 import { startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
@@ -905,7 +906,57 @@ app.get('/quiz/:slug', (req, res) => {
     quizUrl: buildAbsoluteUrl(req, `/quiz/${quiz.slug}`),
     reportUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/report`),
     correctionUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/corrections`),
+    explanationUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/explanations`),
+    explanationsEnabled: isGeminiExplanationAvailable(),
   }));
+});
+
+app.post('/api/quizzes/:slug/explanations', async (req, res, next) => {
+  try {
+    const quiz = getQuizBySlug(req.params.slug);
+    if (!quiz) {
+      return res.status(404).json({ error: 'Quiz not found.' });
+    }
+
+    if (quiz.bannedAt) {
+      return res.status(410).json({ error: 'Quiz is blocked by administrator.' });
+    }
+
+    if (isQuizExpired(quiz)) {
+      return res.status(410).json({ error: 'Quiz link has expired.' });
+    }
+
+    const questionNumber = Number(req.body?.questionNumber);
+    const selectedOptionNumber = req.body?.selectedOptionNumber == null
+      ? null
+      : Number(req.body.selectedOptionNumber);
+
+    if (!Number.isInteger(questionNumber) || questionNumber < 1 || questionNumber > quiz.questions.length) {
+      return res.status(400).json({ error: 'Invalid question number.' });
+    }
+
+    const question = quiz.questions[questionNumber - 1];
+    const explanation = await createGeminiExplanation({
+      quizTitle: quiz.title,
+      questionNumber,
+      question,
+      selectedOptionNumber,
+      requestContext: {
+        sourceFilename: quiz.sourceFilename || null,
+        browserId: getBrowserIdentifier(req),
+        fingerprint: getBrowserFingerprint(req),
+        requestIp: getClientIp(req),
+        requestUserAgent: req.get('user-agent'),
+      },
+    });
+
+    return res.json({
+      questionNumber,
+      explanation,
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.post('/api/quizzes/:slug/corrections', (req, res, next) => {

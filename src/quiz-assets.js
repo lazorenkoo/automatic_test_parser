@@ -357,6 +357,22 @@ h1{
   gap:10px;
   margin-top:14px;
 }
+.explanation-panel{
+  margin-top:14px;
+  padding:14px 16px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:#fffaf3;
+  line-height:1.5;
+}
+.explanation-panel.loading{
+  color:var(--muted);
+}
+.explanation-panel.error{
+  border-color:#f2c28b;
+  background:#fff5e8;
+  color:#9a3412;
+}
 @media (hover:none){
   .option:hover,
   .btn:hover{transform:none}
@@ -488,6 +504,8 @@ const aiSuspiciousQuestions = Array.isArray(bootstrapData.aiSuspiciousQuestions)
 const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
 const correctionUrl = bootstrapData.correctionUrl || '';
+const explanationUrl = bootstrapData.explanationUrl || '';
+const explanationsEnabled = Boolean(bootstrapData.explanationsEnabled && explanationUrl);
 const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOptionCount))
   ? Math.max(0, Number(bootstrapData.configuredOptionCount))
   : 0;
@@ -538,6 +556,11 @@ const i18n = {
   warningTitle: 'Будь ласка, перевірте ще раз такі питання:',
 };
 
+i18n.explain = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F';
+i18n.explainLoading = '\u0413\u043E\u0442\u0443\u044E \u043A\u043E\u0440\u043E\u0442\u043A\u0435 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F...';
+i18n.explainUnavailable = '\u0417\u0430\u0440\u0430\u0437 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0435.';
+i18n.explainError = '\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u043F\u0456\u0437\u043D\u0456\u0448\u0435.';
+
 const state = {
   questions: bootstrapQuestions,
   order: [],
@@ -550,6 +573,7 @@ const state = {
   configuredOptionCount,
   resultsFilter: 'all',
   resultsSnapshot: null,
+  explanationsByQuestion: {},
 };
 
 const els = {
@@ -568,6 +592,8 @@ const els = {
   next: document.getElementById('next'),
   finish: document.getElementById('finish'),
   correctionOpenBtn: document.getElementById('correctionOpenBtn'),
+  explainBtn: document.getElementById('explainBtn'),
+  explanationPanel: document.getElementById('explanationPanel'),
   correctionPanel: document.getElementById('correctionPanel'),
   correctionTitle: document.getElementById('correctionTitle'),
   correctionIntro: document.getElementById('correctionIntro'),
@@ -630,6 +656,9 @@ function applyLanguage() {
   }
   if (els.correctionOpenBtn) {
     els.correctionOpenBtn.textContent = t('correctionOpen');
+  }
+  if (els.explainBtn) {
+    els.explainBtn.textContent = t('explain');
   }
   if (els.correctionTitle) {
     els.correctionTitle.textContent = t('correctionTitle');
@@ -716,6 +745,41 @@ function hide(node) {
   node.classList.add('hidden');
 }
 
+function ensureExplanationUi() {
+  if (els.explainBtn && els.explanationPanel) {
+    return;
+  }
+
+  const quizSection = document.getElementById('quiz');
+  const controls = quizSection?.querySelector('.controls');
+  if (!quizSection || !controls) {
+    return;
+  }
+
+  if (!els.explainBtn) {
+    const button = document.createElement('button');
+    button.id = 'explainBtn';
+    button.type = 'button';
+    button.className = 'btn secondary hidden';
+    button.textContent = t('explain');
+    controls.insertBefore(button, els.finish || controls.lastElementChild || null);
+    els.explainBtn = button;
+  }
+
+  if (!els.explanationPanel) {
+    const panel = document.createElement('div');
+    panel.id = 'explanationPanel';
+    panel.className = 'explanation-panel hidden';
+    const anchor = els.correctionPanel || controls.nextElementSibling;
+    if (anchor && anchor.parentNode === quizSection) {
+      quizSection.insertBefore(panel, anchor);
+    } else {
+      quizSection.appendChild(panel);
+    }
+    els.explanationPanel = panel;
+  }
+}
+
 function shuffleArray(items) {
   const copy = [...items];
   for (let index = copy.length - 1; index > 0; index -= 1) {
@@ -770,6 +834,7 @@ function startQuiz() {
   state.correctionOpen = false;
   state.resultsFilter = 'all';
   state.resultsSnapshot = null;
+  state.explanationsByQuestion = {};
 
   hide(els.start);
   hide(els.results);
@@ -806,6 +871,7 @@ function renderQuestion() {
     colorize(questionIndex, state.chosenAt[questionIndex]);
   }
 
+  renderExplanationState(questionIndex);
   if (els.correctionDot) {
     els.correctionDot.classList.toggle('hidden', !question?.manuallyCorrected);
   }
@@ -821,6 +887,7 @@ function selectOption(questionIndex, renderedOptionIndex) {
 
   state.chosenAt[questionIndex] = renderedOptionIndex;
   colorize(questionIndex, renderedOptionIndex);
+  renderExplanationState(questionIndex);
 }
 
 function colorize(questionIndex, chosenRenderedIndex) {
@@ -839,6 +906,120 @@ function colorize(questionIndex, chosenRenderedIndex) {
     }
     node.classList.add('disabled');
   });
+}
+
+function renderExplanationState(questionIndex) {
+  if (els.explainBtn) {
+    els.explainBtn.classList.toggle('hidden', !explanationsEnabled);
+    els.explainBtn.disabled = state.chosenAt[questionIndex] === null;
+  }
+
+  if (!els.explanationPanel) {
+    return;
+  }
+
+  const entry = state.explanationsByQuestion[questionIndex];
+  const isAnswered = state.chosenAt[questionIndex] !== null;
+
+  els.explanationPanel.classList.remove('loading', 'error');
+
+  if (!isAnswered || !explanationsEnabled) {
+    els.explanationPanel.textContent = '';
+    hide(els.explanationPanel);
+    return;
+  }
+
+  if (!entry) {
+    els.explanationPanel.textContent = '';
+    hide(els.explanationPanel);
+    return;
+  }
+
+  if (entry.status === 'loading') {
+    els.explanationPanel.textContent = t('explainLoading');
+    els.explanationPanel.classList.add('loading');
+    show(els.explanationPanel);
+    return;
+  }
+
+  if (entry.status === 'error') {
+    els.explanationPanel.textContent = entry.message || t('explainError');
+    els.explanationPanel.classList.add('error');
+    show(els.explanationPanel);
+    return;
+  }
+
+  if (entry.status === 'ready' && entry.text) {
+    els.explanationPanel.textContent = entry.text;
+    show(els.explanationPanel);
+    return;
+  }
+
+  els.explanationPanel.textContent = '';
+  hide(els.explanationPanel);
+}
+
+async function requestExplanation() {
+  const { sourceQuestionIndex: questionIndex, optionOrder } = getCurrentQuestionContext();
+  if (!explanationsEnabled || !explanationUrl) {
+    showToast(t('explainUnavailable'));
+    return;
+  }
+
+  const chosenRenderedIndex = state.chosenAt[questionIndex];
+  if (chosenRenderedIndex === null) {
+    return;
+  }
+
+  const cached = state.explanationsByQuestion[questionIndex];
+  if (cached?.status === 'ready') {
+    renderExplanationState(questionIndex);
+    return;
+  }
+  if (cached?.status === 'loading') {
+    return;
+  }
+
+  const selectedSourceOptionIndex = optionOrder[chosenRenderedIndex];
+  state.explanationsByQuestion[questionIndex] = {
+    status: 'loading',
+    text: '',
+    message: '',
+  };
+  renderExplanationState(questionIndex);
+
+  try {
+    const response = await fetch(explanationUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        questionNumber: questionIndex + 1,
+        selectedOptionNumber: Number.isInteger(selectedSourceOptionIndex) ? selectedSourceOptionIndex + 1 : null,
+      }),
+    });
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result?.error || t('explainError'));
+    }
+
+    state.explanationsByQuestion[questionIndex] = {
+      status: 'ready',
+      text: String(result?.explanation || '').trim(),
+      message: '',
+    };
+  } catch (error) {
+    state.explanationsByQuestion[questionIndex] = {
+      status: 'error',
+      text: '',
+      message: error?.message || t('explainError'),
+    };
+  }
+
+  const currentContext = getCurrentQuestionContext();
+  renderExplanationState(currentContext.sourceQuestionIndex);
 }
 
 function nextQuestion() {
@@ -1249,6 +1430,7 @@ function resetQuiz() {
   state.correctionOpen = false;
   state.resultsFilter = 'all';
   state.resultsSnapshot = null;
+  state.explanationsByQuestion = {};
   hide(els.quiz);
   hide(els.results);
   show(els.start);
@@ -1319,12 +1501,14 @@ document.addEventListener('DOMContentLoaded', () => {
     els.quizLength.textContent = String(state.questions.length);
   }
 
+  ensureExplanationUi();
   applyLanguage();
 
   els.startBtn?.addEventListener('click', startQuiz);
   els.next?.addEventListener('click', nextQuestion);
   els.finish?.addEventListener('click', confirmFinishQuiz);
   els.correctionOpenBtn?.addEventListener('click', openCorrectionPanel);
+  els.explainBtn?.addEventListener('click', requestExplanation);
   els.correctionAddOptionBtn?.addEventListener('click', addCorrectionOption);
   els.correctionCancelBtn?.addEventListener('click', closeCorrectionPanel);
   els.correctionSubmitBtn?.addEventListener('click', submitCorrection);
@@ -1346,6 +1530,8 @@ export function renderHostedQuizHtml(quiz, options = {}) {
   const quizUrl = typeof options === 'string' ? options : options.quizUrl || null;
   const reportUrl = typeof options === 'object' && options ? options.reportUrl || '' : '';
   const correctionUrl = typeof options === 'object' && options ? options.correctionUrl || '' : '';
+  const explanationUrl = typeof options === 'object' && options ? options.explanationUrl || '' : '';
+  const explanationsEnabled = typeof options === 'object' && options ? Boolean(options.explanationsEnabled) : false;
   const title = htmlEscape(quiz.title);
   const displayUrl = htmlEscape(quizUrl || quiz.slug);
   const bootstrap = safeJsonForScript({
@@ -1353,6 +1539,8 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     quizUrl: quizUrl || '',
     reportUrl,
     correctionUrl,
+    explanationUrl,
+    explanationsEnabled,
     title: quiz.title,
     configuredOptionCount: Number.isInteger(Number(quiz.rawModelJson?.optionCount))
       ? Number(quiz.rawModelJson.optionCount)
