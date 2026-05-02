@@ -747,10 +747,6 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
     return res.status(400).json({ error: 'Немає чернетки. Спочатку передайте файл ще раз.' });
   }
 
-  if (!clientTgUsername) {
-    return res.status(400).json({ error: 'Enter your Telegram username so we can link this test to your account.' });
-  }
-
   const draft = inspectQuizDraft(draftToken);
   const isAiDraft = Boolean(draft?.rawModel?.aiPrimaryModel)
     || String(draft?.rawModel?.answerMode || '').startsWith('openai-');

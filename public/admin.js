@@ -83,10 +83,6 @@ quizForm.addEventListener('submit', async (event) => {
       throw new Error('Спочатку виберіть файл із тестами.');
     }
 
-    if (!clientTgUsername) {
-      throw new Error('Enter your Telegram username first.');
-    }
-
     persistClientTgUsername();
 
     const formData = new FormData();
@@ -376,11 +372,6 @@ async function prepareAiQuiz() {
   }
 
   const clientTgUsername = await ensureClientTgUsername();
-  if (!clientTgUsername) {
-    setStatus('error', 'Enter your Telegram username first.');
-    return;
-  }
-
   aiCreateBtn.disabled = true;
   submitBtn.disabled = true;
   clearResultState();
@@ -785,10 +776,6 @@ async function finalizeCurrentDraft(accessCode = '') {
   }
 
   const clientTgUsername = await ensureClientTgUsername();
-  if (!clientTgUsername) {
-    throw new Error('Enter your Telegram username first.');
-  }
-
   const response = await fetch('/api/quizzes/finalize', {
     method: 'POST',
     headers: {
