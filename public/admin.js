@@ -3,6 +3,7 @@ const submitBtn = document.getElementById('submitBtn');
 const statusBox = document.getElementById('statusBox');
 const resultBox = document.getElementById('resultBox');
 const clientTitleInput = document.getElementById('clientTitle');
+const clientTgUsernameInput = document.getElementById('clientTgUsername');
 const courseNumberInput = document.getElementById('courseNumber');
 const sourceFileInput = document.getElementById('sourceFile');
 const answerFileInput = document.getElementById('answerFile');
@@ -18,6 +19,11 @@ const singleAnswerField = document.getElementById('singleAnswerField');
 const answerFileField = document.getElementById('answerFileField');
 const aiCreateBtn = document.getElementById('aiCreateBtn');
 const reportIssueBtn = document.getElementById('reportIssueBtn');
+const myTestsBtn = document.getElementById('myTestsBtn');
+const myTestsPanel = document.getElementById('myTestsPanel');
+const myTestsStatus = document.getElementById('myTestsStatus');
+const myTestsList = document.getElementById('myTestsList');
+const closeMyTestsBtn = document.getElementById('closeMyTestsBtn');
 const siteNoticeCard = document.getElementById('siteNoticeCard');
 const siteNoticeText = document.getElementById('siteNoticeText');
 const siteNoticeTime = document.getElementById('siteNoticeTime');
@@ -27,8 +33,11 @@ let currentDraftPayload = null;
 let validatedAccessCode = '';
 let validatedCodePayload = null;
 let currentAiJobId = '';
+let rememberedClientTgUsernamePromise = null;
 
 loadSiteNotice();
+loadStoredClientTgUsername();
+void loadRememberedClientTgUsername();
 syncOptionCountMode();
 syncAnswerIndexOptions();
 syncQuestionLimitMode();
@@ -42,8 +51,11 @@ answerModeSingleInput.addEventListener('change', syncAnswerMode);
 answerModeFileInput.addEventListener('change', syncAnswerMode);
 sourceFileInput.addEventListener('change', syncReportButtonVisibility);
 answerFileInput.addEventListener('change', syncReportButtonVisibility);
+clientTgUsernameInput?.addEventListener('input', persistClientTgUsername);
 aiCreateBtn?.addEventListener('click', prepareAiQuiz);
 reportIssueBtn?.addEventListener('click', reportCurrentUploadIssue);
+myTestsBtn?.addEventListener('click', openMyTestsPanel);
+closeMyTestsBtn?.addEventListener('click', closeMyTestsPanel);
 
 quizForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -54,6 +66,7 @@ quizForm.addEventListener('submit', async (event) => {
 
   try {
     const clientTitle = String(clientTitleInput?.value || '').trim();
+    const clientTgUsername = await ensureClientTgUsername();
     const courseNumber = Number(courseNumberInput?.value || 0);
     const sourceFile = sourceFileInput.files?.[0];
     const answerMode = getAnswerMode();
@@ -69,6 +82,12 @@ quizForm.addEventListener('submit', async (event) => {
     if (!sourceFile) {
       throw new Error('Спочатку виберіть файл із тестами.');
     }
+
+    if (!clientTgUsername) {
+      throw new Error('Enter your Telegram username first.');
+    }
+
+    persistClientTgUsername();
 
     const formData = new FormData();
     formData.append('courseNumber', String(courseNumber));
@@ -129,6 +148,106 @@ function clearResultState() {
   resultBox.innerHTML = '';
 }
 
+function normalizeClientTgUsername(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/^@+/, '');
+  return normalized ? `@${normalized}` : '';
+}
+
+function loadStoredClientTgUsername() {
+  if (!clientTgUsernameInput) {
+    return;
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem('pdmu_client_tg_username');
+    if (storedValue && !clientTgUsernameInput.value) {
+      clientTgUsernameInput.value = storedValue;
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function persistClientTgUsername() {
+  const normalized = normalizeClientTgUsername(clientTgUsernameInput?.value || '');
+  try {
+    if (normalized) {
+      window.localStorage.setItem('pdmu_client_tg_username', normalized);
+    } else {
+      window.localStorage.removeItem('pdmu_client_tg_username');
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+async function resolveRememberedClientTgUsername(forceRefresh = false) {
+  if (!forceRefresh && rememberedClientTgUsernamePromise) {
+    return rememberedClientTgUsernamePromise;
+  }
+
+  rememberedClientTgUsernamePromise = (async () => {
+    try {
+      const response = await fetch('/api/client-binding', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          creatorProfile: await buildCreatorProfile(),
+        }),
+      });
+      const payload = await readJsonResponse(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Could not load the saved Telegram username for this device.');
+      }
+      return normalizeClientTgUsername(payload.clientTgUsername || '');
+    } catch {
+      return '';
+    }
+  })();
+
+  return rememberedClientTgUsernamePromise;
+}
+
+async function loadRememberedClientTgUsername() {
+  if (!clientTgUsernameInput) {
+    return '';
+  }
+
+  const rememberedUsername = await resolveRememberedClientTgUsername();
+  if (rememberedUsername && !normalizeClientTgUsername(clientTgUsernameInput.value)) {
+    clientTgUsernameInput.value = rememberedUsername;
+    persistClientTgUsername();
+  }
+
+  return rememberedUsername;
+}
+
+async function ensureClientTgUsername() {
+  const normalized = normalizeClientTgUsername(clientTgUsernameInput?.value || '');
+  if (normalized) {
+    persistClientTgUsername();
+    return normalized;
+  }
+
+  const rememberedUsername = await loadRememberedClientTgUsername();
+  if (rememberedUsername) {
+    return rememberedUsername;
+  }
+
+  return '';
+}
+
+function rememberResolvedClientTgUsername(value) {
+  const normalized = normalizeClientTgUsername(value || '');
+  rememberedClientTgUsernamePromise = Promise.resolve(normalized);
+  if (normalized && clientTgUsernameInput && !normalizeClientTgUsername(clientTgUsernameInput.value)) {
+    clientTgUsernameInput.value = normalized;
+    persistClientTgUsername();
+  }
+}
+
 async function loadSiteNotice() {
   if (!siteNoticeCard || !siteNoticeText || !siteNoticeTime) {
     return;
@@ -183,6 +302,59 @@ function syncReportButtonVisibility() {
   aiCreateBtn?.classList.toggle('hidden', !hasFile);
 }
 
+function closeMyTestsPanel() {
+  myTestsPanel?.classList.add('hidden');
+}
+
+async function openMyTestsPanel() {
+  if (!myTestsPanel || !myTestsStatus || !myTestsList) {
+    return;
+  }
+
+  myTestsPanel.classList.remove('hidden');
+  myTestsStatus.className = 'status loading';
+  myTestsStatus.textContent = 'Loading active tests from this device.';
+  myTestsList.classList.add('hidden');
+  myTestsList.innerHTML = '';
+
+  try {
+    const response = await fetch('/api/quizzes/mine', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        creatorProfile: await buildCreatorProfile(),
+      }),
+    });
+    const payload = await readJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(payload.error || 'Could not load your tests.');
+    }
+
+    const quizzes = Array.isArray(payload.quizzes) ? payload.quizzes : [];
+    if (!quizzes.length) {
+      myTestsStatus.className = 'status idle';
+      myTestsStatus.textContent = 'No active tests were found for this device.';
+      return;
+    }
+
+    myTestsStatus.className = 'status success';
+    myTestsStatus.textContent = `Found ${quizzes.length} active test${quizzes.length === 1 ? '' : 's'}.`;
+    myTestsList.innerHTML = quizzes.map((quiz) => `
+      <article class="my-test-item">
+        <div class="my-test-title">${escapeHtml(quiz.title || `Test ${quiz.id}`)}</div>
+        <a class="my-test-link" href="${escapeAttr(String(quiz.quizUrl || ''))}" target="_blank" rel="noreferrer">${escapeHtml(String(quiz.quizUrl || ''))}</a>
+        <div class="my-test-meta">Expires: ${escapeHtml(formatNoticeDateTime(quiz.expiresAt || 0))}</div>
+      </article>
+    `).join('');
+    myTestsList.classList.remove('hidden');
+  } catch (error) {
+    myTestsStatus.className = 'status error';
+    myTestsStatus.textContent = error.message || 'Could not load your tests.';
+  }
+}
+
 async function prepareAiQuiz() {
   const clientTitle = String(clientTitleInput?.value || '').trim();
   const courseNumber = Number(courseNumberInput?.value || 0);
@@ -203,9 +375,14 @@ async function prepareAiQuiz() {
     return;
   }
 
+  const clientTgUsername = await ensureClientTgUsername();
+  if (!clientTgUsername) {
+    setStatus('error', 'Enter your Telegram username first.');
+    return;
+  }
+
   aiCreateBtn.disabled = true;
   submitBtn.disabled = true;
-  reportIssueBtn.disabled = true;
   clearResultState();
   setStatus('loading', 'Запускаю локальний парсер перед AI.');
 
@@ -465,7 +642,17 @@ async function reportCurrentUploadIssue() {
     return;
   }
 
-  const note = window.prompt('Опишіть, що не так із файлом або чому тест не зібрався.', '') || '';
+  const note = window.prompt('Опишіть, що не так із файлом або чому тест не зібрався.', '');
+  if (note === null) {
+    return;
+  }
+
+  const normalizedNote = String(note || '').trim();
+  if (!normalizedNote) {
+    setStatus('error', 'Вкажіть причину репорту.');
+    return;
+  }
+
   reportIssueBtn.disabled = true;
   setStatus('loading', 'Надсилаю файл адміністратору на перевірку.');
 
@@ -474,9 +661,7 @@ async function reportCurrentUploadIssue() {
     if (title) {
       formData.append('title', title);
     }
-    if (note.trim()) {
-      formData.append('note', note.trim());
-    }
+    formData.append('note', normalizedNote);
     if (sourceFile) {
       formData.append('sourceFile', sourceFile);
     }
@@ -599,6 +784,11 @@ async function finalizeCurrentDraft(accessCode = '') {
     throw new Error('Чернетку не знайдено. Передайте файл ще раз.');
   }
 
+  const clientTgUsername = await ensureClientTgUsername();
+  if (!clientTgUsername) {
+    throw new Error('Enter your Telegram username first.');
+  }
+
   const response = await fetch('/api/quizzes/finalize', {
     method: 'POST',
     headers: {
@@ -607,6 +797,7 @@ async function finalizeCurrentDraft(accessCode = '') {
     body: JSON.stringify({
       draftToken: currentDraftToken,
       accessCode,
+      clientTgUsername,
       creatorProfile: await buildCreatorProfile(),
     }),
   });
@@ -620,6 +811,7 @@ async function finalizeCurrentDraft(accessCode = '') {
   currentDraftPayload = payload;
   validatedAccessCode = '';
   validatedCodePayload = null;
+  rememberResolvedClientTgUsername(payload.clientTgUsername || clientTgUsername);
   setStatus('success', 'Посилання готове.');
   renderFinalResult(payload);
   return payload;

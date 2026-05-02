@@ -531,6 +531,7 @@ const i18n = {
   seconds: 'с',
   report: 'Повідомити про помилку',
   reportPrompt: 'Опишіть, що саме не так у цьому тесті.',
+  reportRequired: 'Потрібно вказати причину репорту.',
   reportSuccess: 'Оригінальний файл надіслано адміністратору на перевірку.',
   reportError: 'Не вдалося надіслати повідомлення. Спробуйте ще раз пізніше.',
   reportUnavailable: 'Зараз цей тест не може надсилати повідомлення.',
@@ -1272,6 +1273,12 @@ async function reportBrokenQuiz() {
     return;
   }
 
+  const normalizedNote = String(note || '').trim();
+  if (!normalizedNote) {
+    showToast(t('reportRequired'));
+    return;
+  }
+
   try {
     const response = await fetch(reportUrl, {
       method: 'POST',
@@ -1279,7 +1286,7 @@ async function reportBrokenQuiz() {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        note,
+        note: normalizedNote,
         pageUrl: window.location.href,
         currentQuestion: state.cur + 1,
       }),

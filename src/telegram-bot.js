@@ -25,6 +25,7 @@ import {
   getUploadReportById,
   inspectAccessCode,
   listAccessCodesByClient,
+  listActiveQuizzesByClientUsername,
   listActiveAiAccessCodes,
   listAiDeviceBans,
   listAiRequestLogs,
@@ -115,6 +116,7 @@ export function startTelegramBot() {
     { command: 'start', description: 'Open menu' },
     { command: 'createcode', description: 'Create new code' },
     { command: 'mycodes', description: 'Show my codes' },
+    { command: 'mytests', description: 'Show my tests' },
     { command: 'topup', description: 'Top up code' },
     { command: 'cancel', description: 'Cancel current action' },
     { command: 'id', description: 'Show Telegram ID' },
@@ -195,6 +197,14 @@ export function startTelegramBot() {
     await sendClientCodes(bot, msg.chat.id, msg.from);
   });
 
+  bot.onText(/^\/mytests(?:@[\w_]+)?$/i, async (msg) => {
+    if (!isPrivateChat(msg) || Number(msg.from?.id || 0) === adminUserId) {
+      return;
+    }
+
+    await sendClientTests(bot, msg.chat.id, msg.from);
+  });
+
   bot.onText(/^\/topup(?:@[\w_]+)?$/i, async (msg) => {
     if (!isPrivateChat(msg) || Number(msg.from?.id || 0) === adminUserId) {
       return;
@@ -240,6 +250,12 @@ export function startTelegramBot() {
       if (data === 'client:refresh_codes') {
         await bot.answerCallbackQuery(query.id);
         await sendClientCodes(bot, msg.chat.id, query.from);
+        return;
+      }
+
+      if (data === 'client:refresh_tests') {
+        await bot.answerCallbackQuery(query.id);
+        await sendClientTests(bot, msg.chat.id, query.from);
       }
     } catch (error) {
       await bot.sendMessage(msg.chat.id, error.message || 'Не удалось обработать действие.');
@@ -268,6 +284,11 @@ export function startTelegramBot() {
 
     if (text === 'Мои коды') {
       await sendClientCodes(bot, msg.chat.id, msg.from);
+      return;
+    }
+
+    if (text === 'Мои тесты') {
+      await sendClientTests(bot, msg.chat.id, msg.from);
       return;
     }
 
@@ -1033,7 +1054,8 @@ function getClientMenuKeyboard() {
   return {
     keyboard: [
       [{ text: 'Создать код' }, { text: 'Пополнить код' }],
-      [{ text: 'Мои коды' }, { text: 'Отмена' }],
+      [{ text: 'Мои коды' }, { text: 'Мои тесты' }],
+      [{ text: 'Отмена' }],
     ],
     resize_keyboard: true,
     is_persistent: true,
@@ -1094,6 +1116,40 @@ async function sendClientCodes(bot, chatId, from) {
     reply_markup: {
       inline_keyboard: [[{ text: 'Обновить', callback_data: 'client:refresh_codes' }]],
     },
+  });
+}
+
+async function sendClientTests(bot, chatId, from) {
+  const username = normalizeClientUsername(from?.username);
+  if (!username) {
+    await bot.sendMessage(chatId, 'Set a Telegram username in Telegram settings first, then try /mytests again.', {
+      reply_markup: getClientMenuKeyboard(),
+    });
+    return;
+  }
+
+  const quizzes = listActiveQuizzesByClientUsername(username);
+  if (!quizzes.length) {
+    await bot.sendMessage(chatId, 'No active tests were found for your Telegram username.', {
+      reply_markup: getClientMenuKeyboard(),
+    });
+    return;
+  }
+
+  const lines = [
+    `Active tests for ${username}:`,
+    '',
+    ...quizzes.map((quiz, index) => [
+      `${index + 1}. ${quiz.title || `Test #${quiz.id}`}`,
+      buildPublicQuizUrl(quiz.slug),
+    ].join('\n')),
+  ];
+
+  await bot.sendMessage(chatId, lines.join('\n\n'), {
+    reply_markup: {
+      inline_keyboard: [[{ text: 'Refresh', callback_data: 'client:refresh_tests' }]],
+    },
+    disable_web_page_preview: true,
   });
 }
 
@@ -2635,6 +2691,16 @@ function formatPrice(value) {
   const numericValue = Number(value || 0);
   const normalized = Number.isFinite(numericValue) ? Math.round(numericValue * 100) / 100 : 0;
   return `${normalized.toFixed(2)} UAH`;
+}
+
+function buildPublicQuizUrl(slug) {
+  const baseUrl = String(
+    process.env.BASE_URL
+    || process.env.PUBLIC_BASE_URL
+    || process.env.APP_BASE_URL
+    || `http://127.0.0.1:${Number(process.env.PORT || 3000) || 3000}`,
+  ).trim().replace(/\/+$/, '');
+  return `${baseUrl}/quiz/${encodeURIComponent(String(slug || '').trim())}`;
 }
 
 function formatDateTime(value) {

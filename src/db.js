@@ -52,6 +52,7 @@ db.exec(`
     slug TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL,
     course_number INTEGER NOT NULL DEFAULT 0,
+    client_tg_username TEXT,
     source_filename TEXT NOT NULL,
     answer_index INTEGER NOT NULL,
     requested_count INTEGER NOT NULL,
@@ -174,6 +175,12 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS device_client_links (
+    browser_id TEXT PRIMARY KEY,
+    client_tg_username TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quizzes_slug ON quizzes(slug);
   CREATE INDEX IF NOT EXISTS idx_access_codes_reservation_token ON access_codes(reservation_token);
   CREATE INDEX IF NOT EXISTS idx_quiz_drafts_token ON quiz_drafts(draft_token);
@@ -187,6 +194,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ai_request_logs_created_at ON ai_request_logs(created_at);
   CREATE INDEX IF NOT EXISTS idx_payment_sessions_user_created_at ON payment_sessions(tg_user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_payment_sessions_status_expires_at ON payment_sessions(status, expires_at);
+  CREATE INDEX IF NOT EXISTS idx_device_client_links_updated_at ON device_client_links(updated_at DESC);
 `);
 
 ensureColumn('access_codes', 'site_type', 'TEXT');
@@ -203,6 +211,7 @@ ensureColumn('quiz_drafts', 'review_blocks_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('quizzes', 'expires_at', 'INTEGER');
 ensureColumn('quizzes', 'banned_at', 'INTEGER');
 ensureColumn('quizzes', 'course_number', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('quizzes', 'client_tg_username', 'TEXT');
 ensureColumn('quiz_drafts', 'course_number', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('quizzes', 'creator_snapshot_json', "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn('quizzes', 'source_upload_path', 'TEXT');
@@ -464,11 +473,32 @@ const listAiDeviceBansStmt = db.prepare(`
   LIMIT ?
 `);
 
+const upsertDeviceClientLinkStmt = db.prepare(`
+  INSERT INTO device_client_links (
+    browser_id,
+    client_tg_username,
+    updated_at
+  ) VALUES (?, ?, ?)
+  ON CONFLICT(browser_id) DO UPDATE SET
+    client_tg_username = excluded.client_tg_username,
+    updated_at = excluded.updated_at
+`);
+
+const getDeviceClientLinkStmt = db.prepare(`
+  SELECT
+    browser_id AS browserId,
+    client_tg_username AS clientTgUsername,
+    updated_at AS updatedAt
+  FROM device_client_links
+  WHERE browser_id = ?
+`);
+
 const insertQuizStmt = db.prepare(`
   INSERT INTO quizzes (
     slug,
     title,
     course_number,
+    client_tg_username,
     source_filename,
     answer_index,
     requested_count,
@@ -484,7 +514,7 @@ const insertQuizStmt = db.prepare(`
     created_at,
     expires_at,
     code_id
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const markCodeUsedStmt = db.prepare(`
@@ -738,7 +768,7 @@ const getQuizBySlugStmt = db.prepare(`
   SELECT
     q.*,
     c.site_type AS siteType,
-    c.client_tg_username AS clientTgUsername,
+    COALESCE(q.client_tg_username, c.client_tg_username) AS clientTgUsername,
     c.expected_question_count AS expectedQuestionCount,
     c.remaining_question_count AS remainingQuestionCount,
     c.consumed_question_count AS consumedQuestionCount,
@@ -753,7 +783,7 @@ const getQuizByIdStmt = db.prepare(`
   SELECT
     q.*,
     c.site_type AS siteType,
-    c.client_tg_username AS clientTgUsername,
+    COALESCE(q.client_tg_username, c.client_tg_username) AS clientTgUsername,
     c.expected_question_count AS expectedQuestionCount,
     c.remaining_question_count AS remainingQuestionCount,
     c.consumed_question_count AS consumedQuestionCount,
@@ -851,6 +881,7 @@ const listQuizzesForAdminStmt = db.prepare(`
     q.slug,
     q.title,
     q.course_number AS courseNumber,
+    q.creator_snapshot_json AS creatorSnapshotJson,
     q.source_filename AS sourceFilename,
     q.raw_model_json AS rawModelJson,
     q.parsed_count AS parsedCount,
@@ -860,7 +891,7 @@ const listQuizzesForAdminStmt = db.prepare(`
     q.banned_at AS bannedAt,
     c.label AS codeLabel,
     c.site_type AS siteType,
-    c.client_tg_username AS clientTgUsername,
+    COALESCE(q.client_tg_username, c.client_tg_username) AS clientTgUsername,
     c.expected_question_count AS expectedQuestionCount,
     c.remaining_question_count AS remainingQuestionCount,
     c.consumed_question_count AS consumedQuestionCount,
@@ -871,6 +902,23 @@ const listQuizzesForAdminStmt = db.prepare(`
   LEFT JOIN access_codes c ON c.id = q.code_id
   LEFT JOIN quiz_devices d ON d.quiz_id = q.id
   GROUP BY q.id
+  ORDER BY q.created_at DESC
+`);
+
+const listQuizLinksStmt = db.prepare(`
+  SELECT
+    q.id,
+    q.slug,
+    q.title,
+    q.course_number AS courseNumber,
+    q.client_tg_username AS quizClientTgUsername,
+    q.creator_snapshot_json AS creatorSnapshotJson,
+    q.created_at AS createdAt,
+    q.expires_at AS expiresAt,
+    q.banned_at AS bannedAt,
+    COALESCE(q.client_tg_username, c.client_tg_username) AS clientTgUsername
+  FROM quizzes q
+  LEFT JOIN access_codes c ON c.id = q.code_id
   ORDER BY q.created_at DESC
 `);
 
@@ -1977,11 +2025,18 @@ export function attachDraftUploads({
   );
 }
 
-export function finalizeQuizFromDraftReservation({ reservationToken, draftToken, creatorSnapshot = null }) {
+export function finalizeQuizFromDraftReservation({
+  reservationToken,
+  draftToken,
+  creatorSnapshot = null,
+  clientTgUsername = null,
+}) {
   const createdAt = nowMs();
   const expiresAt = quizPublicTtlMs > 0 ? createdAt + quizPublicTtlMs : null;
   const staleBefore = createdAt - draftTtlMs;
   const normalizedCreatorSnapshot = normalizeCreatorSnapshot(creatorSnapshot, createdAt);
+  const normalizedBrowserId = sanitizeNullableValue(normalizedCreatorSnapshot?.browserId);
+  const normalizedClientTgUsername = normalizeClientUsername(clientTgUsername);
 
   const tx = createTransaction(() => {
     clearExpiredDraftsStmt.run(staleBefore);
@@ -2009,6 +2064,14 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
       throw error;
     }
 
+    const rememberedDeviceClient = normalizedBrowserId
+      ? getDeviceClientLinkStmt.get(normalizedBrowserId)
+      : null;
+    const resolvedClientTgUsername = normalizedClientTgUsername
+      || normalizeClientUsername(rememberedDeviceClient?.clientTgUsername)
+      || codeRow.clientTgUsername
+      || null;
+
     let slug = generateSlug();
     while (getQuizBySlugStmt.get(slug)) {
       slug = generateSlug();
@@ -2018,6 +2081,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
       slug,
       draftRow.title,
       Number(draftRow.course_number || 0),
+      resolvedClientTgUsername,
       draftRow.source_filename,
       draftRow.answer_index,
       draftRow.requested_count,
@@ -2036,6 +2100,9 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
     );
 
     markCodeUsedStmt.run(createdAt, quizInsert.lastInsertRowid, codeRow.id);
+    if (normalizedBrowserId && resolvedClientTgUsername) {
+      upsertDeviceClientLinkStmt.run(normalizedBrowserId, resolvedClientTgUsername, createdAt);
+    }
     deleteDraftByTokenStmt.run(draftToken);
 
     return {
@@ -2043,7 +2110,7 @@ export function finalizeQuizFromDraftReservation({ reservationToken, draftToken,
       slug,
       courseNumber: Number(draftRow.course_number || 0),
       siteType: codeRow.siteType || null,
-      clientTgUsername: codeRow.clientTgUsername || null,
+      clientTgUsername: resolvedClientTgUsername,
       expectedQuestionCount,
       price: Number(codeRow.price || 0),
       codeLabel: codeRow.label || null,
@@ -2135,6 +2202,7 @@ export function listQuizzesForAdmin() {
     ...row,
     courseNumber: Number(row.courseNumber || 0),
     rawModelJson: parseJsonField(row.rawModelJson, {}),
+    creatorSnapshot: parseJsonField(row.creatorSnapshotJson, {}),
     createdAt: Number(row.createdAt || 0),
     expiresAt: row.expiresAt ? Number(row.expiresAt) : null,
     bannedAt: row.bannedAt ? Number(row.bannedAt) : null,
@@ -2148,6 +2216,39 @@ export function listQuizzesForAdmin() {
       lastSeenAt: Number(device.lastSeenAt || 0),
     })),
   }));
+}
+
+export function listActiveQuizzesByClientUsername(clientTgUsername, now = nowMs()) {
+  const normalizedUsername = normalizeClientUsername(clientTgUsername);
+  if (!normalizedUsername) {
+    return [];
+  }
+
+  const activeAt = Number(now || nowMs());
+  return listQuizLinksStmt.all()
+    .map(mapQuizLinkRow)
+    .filter((quiz) => quiz.clientTgUsername === normalizedUsername && isQuizLinkActiveAt(quiz, activeAt));
+}
+
+export function listActiveQuizzesByBrowserId(browserId, now = nowMs()) {
+  const normalizedBrowserId = sanitizeNullableValue(browserId);
+  if (!normalizedBrowserId) {
+    return [];
+  }
+
+  const activeAt = Number(now || nowMs());
+  return listQuizLinksStmt.all()
+    .map(mapQuizLinkRow)
+    .filter((quiz) => quiz.creatorSnapshot?.browserId === normalizedBrowserId && isQuizLinkActiveAt(quiz, activeAt));
+}
+
+export function getRememberedClientUsernameByBrowserId(browserId) {
+  const normalizedBrowserId = sanitizeNullableValue(browserId);
+  if (!normalizedBrowserId) {
+    return null;
+  }
+
+  return normalizeClientUsername(getDeviceClientLinkStmt.get(normalizedBrowserId)?.clientTgUsername) || null;
 }
 
 export function getAccountingSummary() {
@@ -2165,10 +2266,15 @@ export function createQuizReport({ quizId, note = null, reporterSnapshot = null 
     return null;
   }
 
+  const normalizedNote = sanitizeNullableValue(note);
+  if (!normalizedNote) {
+    return null;
+  }
+
   const createdAt = nowMs();
   const insert = insertQuizReportStmt.run(
     quiz.id,
-    sanitizeNullableValue(note),
+    normalizedNote,
     JSON.stringify(normalizeReporterSnapshot(reporterSnapshot, createdAt)),
     createdAt,
   );
@@ -2200,10 +2306,15 @@ export function createUploadReport({
   answerUploadName = null,
   reporterSnapshot = null,
 }) {
+  const normalizedNote = sanitizeNullableValue(note);
+  if (!normalizedNote) {
+    return null;
+  }
+
   const createdAt = nowMs();
   const insert = insertUploadReportStmt.run(
     sanitizeNullableValue(title),
-    sanitizeNullableValue(note),
+    normalizedNote,
     sanitizeNullableValue(sourceUploadPath),
     sanitizeNullableValue(sourceUploadName),
     sanitizeNullableValue(answerUploadPath),
@@ -2434,6 +2545,29 @@ function mapQuizRow(row) {
     price: Number(row.price || 0),
     codeLabel: row.codeLabel || null,
   };
+}
+
+function mapQuizLinkRow(row) {
+  return {
+    id: Number(row.id),
+    slug: row.slug,
+    title: row.title || '',
+    courseNumber: Number(row.courseNumber || 0),
+    clientTgUsername: row.clientTgUsername || null,
+    creatorSnapshot: parseJsonField(row.creatorSnapshotJson, {}),
+    createdAt: Number(row.createdAt || 0),
+    expiresAt: row.expiresAt ? Number(row.expiresAt) : null,
+    bannedAt: row.bannedAt ? Number(row.bannedAt) : null,
+  };
+}
+
+function isQuizLinkActiveAt(quiz, now = nowMs()) {
+  if (!quiz || quiz.bannedAt) {
+    return false;
+  }
+
+  const expiresAt = Number(quiz.expiresAt || 0);
+  return expiresAt <= 0 || expiresAt > Number(now || nowMs());
 }
 
 function mapQuizReportRow(row) {

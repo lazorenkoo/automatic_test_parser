@@ -76,6 +76,12 @@ body{
   padding:22px;
   box-shadow:var(--shadow);
 }
+.card-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
 .card-head h2{
   margin:0 0 6px;
   font-size:24px;
@@ -166,8 +172,20 @@ body{
   cursor:pointer;
   transition:transform .16s ease, opacity .16s ease;
 }
+.ghost-btn{
+  appearance:none;
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:10px 14px;
+  background:#fffaf3;
+  color:var(--text);
+  font:inherit;
+  font-weight:700;
+  cursor:pointer;
+}
 .primary-btn:hover,
-.secondary-btn:hover{transform:translateY(-1px)}
+.secondary-btn:hover,
+.ghost-btn:hover{transform:translateY(-1px)}
 .primary-btn{
   width:100%;
   background:linear-gradient(135deg, var(--accent), #d97706);
@@ -269,6 +287,37 @@ body{
 }
 .admin-contact strong{
   color:var(--text);
+}
+.my-tests-panel{
+  margin-top:16px;
+}
+.my-tests-list{
+  display:grid;
+  gap:12px;
+  margin-top:16px;
+}
+.my-test-item{
+  padding:14px;
+  border-radius:18px;
+  border:1px solid var(--line);
+  background:#fffaf3;
+}
+.my-test-title{
+  margin:0 0 8px;
+  font-weight:800;
+  color:var(--text);
+}
+.my-test-link{
+  display:block;
+  font-family:"IBM Plex Mono", monospace;
+  font-size:14px;
+  line-height:1.5;
+  word-break:break-all;
+}
+.my-test-meta{
+  margin-top:8px;
+  color:var(--muted);
+  font-size:13px;
 }
 #quizLinkBox{
   margin-top:8px;

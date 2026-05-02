@@ -19,6 +19,7 @@
     <section class="grid">
       <form id="quizForm" class="card form-card">
         <div class="card-head">
+          <button id="myTestsBtn" class="ghost-btn" type="button">My tests</button>
           <h2>Створити тест</h2>
         </div>
 
@@ -51,6 +52,17 @@
             />
           </label>
         </div>
+
+        <label class="field">
+          <span>Telegram username</span>
+          <input
+            id="clientTgUsername"
+            name="clientTgUsername"
+            type="text"
+            placeholder="@ivan"
+            autocomplete="username"
+          />
+        </label>
 
         <label class="field">
           <span>Файл із тестами</span>
@@ -134,6 +146,15 @@
         <div id="statusBox" class="status idle">Очікую на завантаження файла.</div>
         <div id="resultBox" class="result-box hidden"></div>
       </section>
+    </section>
+
+    <section id="myTestsPanel" class="card my-tests-panel hidden">
+      <div class="card-head">
+        <button id="closeMyTestsBtn" class="ghost-btn" type="button">Close</button>
+        <h2>My tests</h2>
+      </div>
+      <div id="myTestsStatus" class="status idle">Load active tests created from this device.</div>
+      <div id="myTestsList" class="my-tests-list hidden"></div>
     </section>
   </main>
 

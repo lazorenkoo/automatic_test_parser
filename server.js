@@ -18,7 +18,9 @@ import {
   getAiRuntimeSettings,
   getAiUsageStats,
   getDbMeta,
+  getRememberedClientUsernameByBrowserId,
   getHomepageNotice,
+  listActiveQuizzesByBrowserId,
   inspectAccessCode,
   inspectQuizDraft,
   getQuizById,
@@ -483,16 +485,6 @@ async function runAiPrepareJob(job) {
     throw error;
   }
 
-  if (job.aiRequireCode && job.code?.plainCode) {
-    const consumedCode = consumeAccessCodeQuestions(job.code.plainCode, parsedQuiz.questions.length);
-    if (!consumedCode) {
-      const error = new Error(`This code does not have enough questions left for ${parsedQuiz.questions.length} questions.`);
-      error.statusCode = 422;
-      throw error;
-    }
-    job.codeConsumption = consumedCode;
-  }
-
   updateAiPrepareJob(job, {
     progressPercent: 15,
     message: `Парсер знайшов ${parsedQuiz.questions.length} питань. Запускаю AI.`,
@@ -528,6 +520,16 @@ async function runAiPrepareJob(job) {
     progressPercent: 96,
     message: 'Зберігаю готовий AI-тест.',
   });
+
+  if (job.aiRequireCode && job.code?.plainCode) {
+    const consumedCode = consumeAccessCodeQuestions(job.code.plainCode, parsedQuiz.questions.length);
+    if (!consumedCode) {
+      const error = new Error(`This code does not have enough questions left for ${parsedQuiz.questions.length} questions.`);
+      error.statusCode = 422;
+      throw error;
+    }
+    job.codeConsumption = consumedCode;
+  }
 
   const requestedCount = job.questionMode === 'all'
     ? solved.questions.length
@@ -738,9 +740,15 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
   const draftToken = String(req.body.draftToken || '');
   const providedAccessCode = String(req.body.accessCode || '').trim();
   const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
+  const rememberedClientTgUsername = getRememberedClientUsernameByBrowserId(creatorSnapshot?.browserId);
+  const clientTgUsername = normalizeClientUsername(req.body.clientTgUsername) || rememberedClientTgUsername;
 
   if (!draftToken) {
     return res.status(400).json({ error: 'Немає чернетки. Спочатку передайте файл ще раз.' });
+  }
+
+  if (!clientTgUsername) {
+    return res.status(400).json({ error: 'Enter your Telegram username so we can link this test to your account.' });
   }
 
   const draft = inspectQuizDraft(draftToken);
@@ -763,6 +771,7 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
       reservationToken: reservation.reservationToken,
       draftToken,
       creatorSnapshot,
+      clientTgUsername,
     });
 
     const quiz = getQuizBySlug(savedQuiz.slug);
@@ -789,6 +798,49 @@ app.post('/api/quizzes/finalize', async (req, res, next) => {
     });
   } catch (error) {
     releaseReservation(reservation.reservationToken);
+    return next(error);
+  }
+});
+
+app.post('/api/client-binding', async (req, res, next) => {
+  try {
+    const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
+    const browserId = creatorSnapshot?.browserId || null;
+    return res.json({
+      ok: true,
+      browserId,
+      clientTgUsername: getRememberedClientUsernameByBrowserId(browserId),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/quizzes/mine', async (req, res, next) => {
+  try {
+    const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
+    const browserId = creatorSnapshot?.browserId || null;
+    if (!browserId) {
+      return res.status(400).json({ error: 'Could not identify the current device.' });
+    }
+
+    const quizzes = listActiveQuizzesByBrowserId(browserId).map((quiz) => ({
+      id: quiz.id,
+      slug: quiz.slug,
+      title: quiz.title,
+      courseNumber: quiz.courseNumber,
+      clientTgUsername: quiz.clientTgUsername,
+      createdAt: quiz.createdAt,
+      expiresAt: quiz.expiresAt,
+      quizUrl: buildAbsoluteUrl(req, `/quiz/${quiz.slug}`),
+    }));
+
+    return res.json({
+      ok: true,
+      browserId,
+      quizzes,
+    });
+  } catch (error) {
     return next(error);
   }
 });
@@ -906,9 +958,14 @@ app.post('/api/quizzes/:slug/report', (req, res, next) => {
       return res.status(404).json({ error: 'Ð¢ÐµÑÑ‚ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.' });
     }
 
+    const note = sanitizeText(req.body.note || '');
+    if (!note) {
+      return res.status(400).json({ error: 'Please describe the problem before sending a report.' });
+    }
+
     const report = createQuizReport({
       quizId: quiz.id,
-      note: sanitizeText(req.body.note || ''),
+      note,
       reporterSnapshot: buildReportSnapshot(req, req.body),
     });
 
@@ -938,10 +995,15 @@ app.post('/api/reports/upload', upload.fields([
       return res.status(400).json({ error: 'Please attach at least one file.' });
     }
 
+    const note = sanitizeText(req.body.note || '');
+    if (!note) {
+      return res.status(400).json({ error: 'Please describe the problem before sending a report.' });
+    }
+
     const savedUploads = saveUploadedQuizFiles({ sourceFile, answerFile });
     const report = createUploadReport({
       title: sanitizeText(req.body.title || ''),
-      note: sanitizeText(req.body.note || ''),
+      note,
       sourceUploadPath: savedUploads.sourceUploadPath,
       sourceUploadName: savedUploads.sourceUploadName,
       answerUploadPath: savedUploads.answerUploadPath,
@@ -1186,6 +1248,11 @@ function formatQuizTtlDays(ttlMs) {
 
 function normalizePublicUsername(value) {
   const normalized = String(value || '').trim().replace(/^@+/, '');
+  return normalized ? `@${normalized}` : '';
+}
+
+function normalizeClientUsername(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/^@+/, '');
   return normalized ? `@${normalized}` : '';
 }
 
