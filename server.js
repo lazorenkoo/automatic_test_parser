@@ -71,6 +71,10 @@ const aiPrepareJobs = new Map();
 
 fs.mkdirSync(uploadsDir, { recursive: true });
 
+const QUESTION_MODE_ALL = 'all';
+const QUESTION_MODE_MANUAL = 'manual';
+const QUESTION_MODE_RANDOM = 'random';
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -125,8 +129,8 @@ app.post('/api/parse', upload.fields([
   const answerMode = String(req.body.answerMode || 'single');
   const answerIndex = Number(req.body.answerIndex);
   const optionCount = readOptionCountSetting(req.body.optionCount);
-  const questionMode = String(req.body.questionMode || 'manual');
-  const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
+  const questionMode = normalizeQuestionMode(req.body.questionMode);
+  const questionLimit = questionMode === QUESTION_MODE_ALL ? null : Number(req.body.questionLimit);
   const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
   const sourceExtension = path.extname(originalFilename).toLowerCase();
 
@@ -177,7 +181,7 @@ app.post('/api/parse', upload.fields([
     }
   }
 
-  if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
+  if (questionMode !== QUESTION_MODE_ALL && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
     return res.status(400).json({ error: 'Кількість питань має бути більшою за 0.' });
   }
 
@@ -193,14 +197,17 @@ app.post('/api/parse', upload.fields([
       buffer: sourceFile.buffer,
       filename: originalFilename,
       answerIndex: answerMode === 'single' ? answerIndex : 1,
-      limit: questionMode === 'all' ? null : questionLimit,
+      limit: questionMode === QUESTION_MODE_MANUAL ? questionLimit : null,
       optionCount,
       answerKey: parsedAnswerKey,
     });
+    const selectedQuiz = selectQuizQuestions({
+      parsedQuiz,
+      questionMode,
+      questionLimit,
+    });
 
-    const requestedCount = questionMode === 'all'
-      ? parsedQuiz.questions.length
-      : questionLimit;
+    const requestedCount = selectedQuiz.questions.length;
     const savedUploads = saveUploadedQuizFiles({
       sourceFile,
       answerFile,
@@ -212,9 +219,9 @@ app.post('/api/parse', upload.fields([
       sourceFilename: buildStoredFilename(clientTitle),
       answerIndex: answerMode === 'single' ? answerIndex : 0,
       requestedCount,
-      questions: parsedQuiz.questions,
-      reviewBlocks: parsedQuiz.reviewBlocks,
-      rawModelJson: parsedQuiz.rawModelJson,
+      questions: selectedQuiz.questions,
+      reviewBlocks: selectedQuiz.reviewBlocks,
+      rawModelJson: selectedQuiz.rawModelJson,
       sourceUploadPath: savedUploads.sourceUploadPath,
       sourceUploadName: savedUploads.sourceUploadName,
       answerUploadPath: savedUploads.answerUploadPath,
@@ -225,11 +232,11 @@ app.post('/api/parse', upload.fields([
       draftToken: draft.draftToken,
       courseNumber,
       title: clientTitle,
-      parsedCount: parsedQuiz.questions.length,
+      parsedCount: selectedQuiz.questions.length,
       requestedCount,
       questionMode,
       answerMode,
-      notes: parsedQuiz.notes,
+      notes: selectedQuiz.notes,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
     });
   } catch (error) {
@@ -247,8 +254,8 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
   const creatorSnapshot = buildCreatorSnapshot(req, req.body.creatorProfile);
   const accessCode = String(req.body.accessCode || '').trim();
   const optionCount = readOptionCountSetting(req.body.optionCount);
-  const questionMode = String(req.body.questionMode || 'manual');
-  const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
+  const questionMode = normalizeQuestionMode(req.body.questionMode);
+  const questionLimit = questionMode === QUESTION_MODE_ALL ? null : Number(req.body.questionLimit);
   const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
   const sourceExtension = path.extname(originalFilename).toLowerCase();
 
@@ -274,7 +281,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
     return res.status(400).json({ error: `Option count must be between ${minOptionCount} and ${maxOptionCount} or AUTO.` });
   }
 
-  if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
+  if (questionMode !== QUESTION_MODE_ALL && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
     return res.status(400).json({ error: 'Question count must be greater than 0.' });
   }
 
@@ -475,25 +482,30 @@ async function runAiPrepareJob(job) {
     buffer: job.sourceFile.buffer,
     filename: job.originalFilename,
     answerIndex: 1,
-    limit: job.questionMode === 'all' ? null : job.questionLimit,
+    limit: job.questionMode === QUESTION_MODE_MANUAL ? job.questionLimit : null,
     optionCount: job.optionCount,
     answerKey: null,
   });
+  const selectedQuiz = selectQuizQuestions({
+    parsedQuiz,
+    questionMode: job.questionMode,
+    questionLimit: job.questionLimit,
+  });
 
-  if (job.code?.remainingQuestionCount != null && parsedQuiz.questions.length > job.code.remainingQuestionCount) {
-    const error = new Error(`This code has ${job.code.remainingQuestionCount} questions left, but ${parsedQuiz.questions.length} were found.`);
+  if (job.code?.remainingQuestionCount != null && selectedQuiz.questions.length > job.code.remainingQuestionCount) {
+    const error = new Error(`This code has ${job.code.remainingQuestionCount} questions left, but ${selectedQuiz.questions.length} were found.`);
     error.statusCode = 422;
     throw error;
   }
 
   updateAiPrepareJob(job, {
     progressPercent: 15,
-    message: `Парсер знайшов ${parsedQuiz.questions.length} питань. Запускаю AI.`,
+    message: `Парсер знайшов ${selectedQuiz.questions.length} питань. Запускаю AI.`,
   });
 
   const solved = await solveQuizAnswersWithAI({
     filename: job.originalFilename,
-    questions: parsedQuiz.questions,
+    questions: selectedQuiz.questions,
     optionCount: job.optionCount,
     mode: job.aiMode,
     requestContext: {
@@ -523,18 +535,16 @@ async function runAiPrepareJob(job) {
   });
 
   if (job.aiRequireCode && job.code?.plainCode) {
-    const consumedCode = consumeAccessCodeQuestions(job.code.plainCode, parsedQuiz.questions.length);
+    const consumedCode = consumeAccessCodeQuestions(job.code.plainCode, selectedQuiz.questions.length);
     if (!consumedCode) {
-      const error = new Error(`This code does not have enough questions left for ${parsedQuiz.questions.length} questions.`);
+      const error = new Error(`This code does not have enough questions left for ${selectedQuiz.questions.length} questions.`);
       error.statusCode = 422;
       throw error;
     }
     job.codeConsumption = consumedCode;
   }
 
-  const requestedCount = job.questionMode === 'all'
-    ? solved.questions.length
-    : job.questionLimit;
+  const requestedCount = solved.questions.length;
   const savedUploads = saveUploadedQuizFiles({ sourceFile: job.sourceFile, answerFile: null });
   const draft = createQuizDraft({
     courseNumber: job.courseNumber,
@@ -543,9 +553,9 @@ async function runAiPrepareJob(job) {
     answerIndex: 0,
     requestedCount,
     questions: solved.questions,
-    reviewBlocks: parsedQuiz.reviewBlocks,
+    reviewBlocks: selectedQuiz.reviewBlocks,
     rawModelJson: {
-      ...parsedQuiz.rawModelJson,
+      ...selectedQuiz.rawModelJson,
       answerMode: solved.mode === 'single' ? 'openai-single-review' : 'openai-double-check',
       aiMode: solved.mode,
       aiRequireCode: job.aiRequireCode,
@@ -633,8 +643,8 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
   const clientTitle = sanitizeText(req.body.clientTitle || '');
   const courseNumber = readCourseNumber(req.body.courseNumber);
   const optionCount = readOptionCountSetting(req.body.optionCount);
-  const questionMode = String(req.body.questionMode || 'manual');
-  const questionLimit = questionMode === 'all' ? null : Number(req.body.questionLimit);
+  const questionMode = normalizeQuestionMode(req.body.questionMode);
+  const questionLimit = questionMode === QUESTION_MODE_ALL ? null : Number(req.body.questionLimit);
   const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
   const sourceExtension = path.extname(originalFilename).toLowerCase();
 
@@ -660,7 +670,7 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
     return res.status(400).json({ error: `Option count must be between ${minOptionCount} and ${maxOptionCount} or AUTO.` });
   }
 
-  if (questionMode !== 'all' && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
+  if (questionMode !== QUESTION_MODE_ALL && (!Number.isInteger(questionLimit) || questionLimit < 1)) {
     return res.status(400).json({ error: 'Question count must be greater than 0.' });
   }
 
@@ -674,18 +684,23 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
       buffer: sourceFile.buffer,
       filename: originalFilename,
       answerIndex: 1,
-      limit: questionMode === 'all' ? null : questionLimit,
+      limit: questionMode === QUESTION_MODE_MANUAL ? questionLimit : null,
       optionCount,
       answerKey: null,
+    });
+    const selectedQuiz = selectQuizQuestions({
+      parsedQuiz,
+      questionMode,
+      questionLimit,
     });
 
     return res.json({
       title: clientTitle,
       courseNumber,
-      parsedCount: parsedQuiz.questions.length,
-      requestedCount: questionMode === 'all' ? parsedQuiz.questions.length : questionLimit,
+      parsedCount: selectedQuiz.questions.length,
+      requestedCount: selectedQuiz.questions.length,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
-      notes: parsedQuiz.notes,
+      notes: selectedQuiz.notes,
       aiMode: aiSettings.mode,
       aiRequireCode: aiSettings.requireCode,
       aiEnabled: aiSettings.enabled,
@@ -1353,6 +1368,81 @@ function saveUploadedQuizFiles({ sourceFile, answerFile }) {
     sourceUploadName: sourceUpload?.originalName || null,
     answerUploadPath: answerUpload?.filePath || null,
     answerUploadName: answerUpload?.originalName || null,
+  };
+}
+
+function normalizeQuestionMode(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === QUESTION_MODE_RANDOM) {
+    return QUESTION_MODE_RANDOM;
+  }
+  if (normalized === QUESTION_MODE_MANUAL) {
+    return QUESTION_MODE_MANUAL;
+  }
+  return QUESTION_MODE_ALL;
+}
+
+function selectQuizQuestions({
+  parsedQuiz,
+  questionMode = QUESTION_MODE_ALL,
+  questionLimit = null,
+}) {
+  const questions = Array.isArray(parsedQuiz?.questions) ? parsedQuiz.questions : [];
+  const reviewBlocks = Array.isArray(parsedQuiz?.reviewBlocks) ? parsedQuiz.reviewBlocks : [];
+  const rawModelJson = typeof parsedQuiz?.rawModelJson === 'object' && parsedQuiz.rawModelJson
+    ? { ...parsedQuiz.rawModelJson }
+    : {};
+  const notes = Array.isArray(parsedQuiz?.notes) ? [...parsedQuiz.notes] : [];
+
+  if (questionMode === QUESTION_MODE_ALL || !Number.isInteger(questionLimit) || questionLimit >= questions.length) {
+    return {
+      ...parsedQuiz,
+      questions,
+      reviewBlocks,
+      rawModelJson: {
+        ...rawModelJson,
+        questionMode,
+        selectedQuestionCount: questions.length,
+        sourceQuestionCount: questions.length,
+      },
+      notes,
+    };
+  }
+
+  if (questionMode === QUESTION_MODE_MANUAL) {
+    const selectedQuestions = questions.slice(0, questionLimit);
+    return {
+      ...parsedQuiz,
+      questions: selectedQuestions,
+      reviewBlocks,
+      rawModelJson: {
+        ...rawModelJson,
+        questionMode,
+        selectedQuestionCount: selectedQuestions.length,
+        sourceQuestionCount: questions.length,
+      },
+      notes,
+    };
+  }
+
+  const selectedQuestions = questions
+    .map((question, index) => ({ question, sortKey: Math.random(), index }))
+    .sort((left, right) => left.sortKey - right.sortKey || left.index - right.index)
+    .slice(0, questionLimit)
+    .map((item) => item.question);
+  notes.push(`Random selection: ${selectedQuestions.length} of ${questions.length} questions.`);
+
+  return {
+    ...parsedQuiz,
+    questions: selectedQuestions,
+    reviewBlocks: [],
+    rawModelJson: {
+      ...rawModelJson,
+      questionMode,
+      selectedQuestionCount: selectedQuestions.length,
+      sourceQuestionCount: questions.length,
+    },
+    notes,
   };
 }
 

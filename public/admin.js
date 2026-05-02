@@ -10,8 +10,9 @@ const answerFileInput = document.getElementById('answerFile');
 const answerIndexSelect = document.getElementById('answerIndex');
 const optionCountInput = document.getElementById('optionCount');
 const optionCountAutoInput = document.getElementById('optionCountAuto');
-const useAllQuestionsInput = document.getElementById('useAllQuestions');
+const questionModeSelect = document.getElementById('questionModeSelect');
 const questionLimitField = document.getElementById('questionLimitField');
+const questionLimitLabel = document.getElementById('questionLimitLabel');
 const questionLimitInput = document.getElementById('questionLimit');
 const answerModeSingleInput = document.getElementById('answerModeSingle');
 const answerModeFileInput = document.getElementById('answerModeFile');
@@ -46,7 +47,7 @@ syncReportButtonVisibility();
 
 optionCountInput.addEventListener('input', syncAnswerIndexOptions);
 optionCountAutoInput?.addEventListener('change', syncOptionCountMode);
-useAllQuestionsInput.addEventListener('change', syncQuestionLimitMode);
+questionModeSelect?.addEventListener('change', syncQuestionLimitMode);
 answerModeSingleInput.addEventListener('change', syncAnswerMode);
 answerModeFileInput.addEventListener('change', syncAnswerMode);
 sourceFileInput.addEventListener('change', syncReportButtonVisibility);
@@ -90,7 +91,7 @@ quizForm.addEventListener('submit', async (event) => {
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
-    formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
+    formData.append('questionMode', getQuestionMode());
     formData.append('answerMode', answerMode);
 
     if (answerMode === 'single') {
@@ -103,7 +104,7 @@ quizForm.addEventListener('submit', async (event) => {
       formData.append('answerFile', answerFile);
     }
 
-    if (!useAllQuestionsInput.checked) {
+    if (getQuestionMode() !== 'all') {
       formData.append('questionLimit', String(questionLimitInput.value || ''));
     }
 
@@ -383,9 +384,9 @@ async function prepareAiQuiz() {
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
-    formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
+    formData.append('questionMode', getQuestionMode());
     formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
-    if (!useAllQuestionsInput.checked) {
+    if (getQuestionMode() !== 'all') {
       formData.append('questionLimit', String(questionLimitInput.value || ''));
     }
 
@@ -525,12 +526,12 @@ async function finalizeAiDraft() {
     formData.append('clientTitle', clientTitle);
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
-    formData.append('questionMode', useAllQuestionsInput.checked ? 'all' : 'manual');
+    formData.append('questionMode', getQuestionMode());
     formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
     if (requiresCode && validatedAccessCode) {
       formData.append('accessCode', validatedAccessCode);
     }
-    if (!useAllQuestionsInput.checked) {
+    if (getQuestionMode() !== 'all') {
       formData.append('questionLimit', String(questionLimitInput.value || ''));
     }
 
@@ -1026,14 +1027,25 @@ function syncAnswerIndexOptions() {
 }
 
 function syncQuestionLimitMode() {
-  const useAll = useAllQuestionsInput.checked;
+  const mode = getQuestionMode();
+  const useAll = mode === 'all';
   questionLimitField.classList.toggle('hidden', useAll);
   questionLimitInput.disabled = useAll;
   questionLimitInput.required = !useAll;
+  if (questionLimitLabel) {
+    questionLimitLabel.textContent = mode === 'random'
+      ? 'Ð¡ÐºÑ–Ð»ÑŒÐºÐ¸ Ð²Ð¸Ð¿Ð°Ð´ÐºÐ¾Ð²Ð¸Ñ… Ð¿Ð¸Ñ‚Ð°Ð½ÑŒ ÑƒÐ·ÑÑ‚Ð¸'
+      : 'Ð¡ÐºÑ–Ð»ÑŒÐºÐ¸ Ð¿Ð¸Ñ‚Ð°Ð½ÑŒ ÑƒÐ·ÑÑ‚Ð¸';
+  }
 
   if (!useAll && !questionLimitInput.value) {
     questionLimitInput.value = '20';
   }
+}
+
+function getQuestionMode() {
+  const normalized = String(questionModeSelect?.value || 'all').trim().toLowerCase();
+  return normalized === 'manual' || normalized === 'random' ? normalized : 'all';
 }
 
 function syncAnswerMode() {

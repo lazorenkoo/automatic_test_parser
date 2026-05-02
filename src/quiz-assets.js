@@ -357,6 +357,38 @@ h1{
   gap:10px;
   margin-top:14px;
 }
+.timer-panel{
+  margin-top:18px;
+  padding:16px;
+  border:1px solid var(--line);
+  border-radius:20px;
+  background:#fffaf3;
+}
+.timer-grid{
+  display:grid;
+  gap:12px;
+}
+.timer-inline{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+.timer-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  margin:0 0 12px;
+  padding:10px 12px;
+  border-radius:999px;
+  border:1px solid var(--line);
+  background:#fffaf3;
+  font-weight:700;
+}
+.timer-badge.danger{
+  border-color:#f2c28b;
+  background:#fff5e8;
+  color:#9a3412;
+}
 .explanation-panel{
   margin-top:14px;
   padding:14px 16px;
@@ -460,6 +492,9 @@ h1{
     padding:14px;
     border-radius:16px;
   }
+  .timer-inline{
+    grid-template-columns:1fr;
+  }
   .correction-actions{
     flex-direction:column-reverse;
     align-items:stretch;
@@ -560,6 +595,18 @@ i18n.explain = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F';
 i18n.explainLoading = '\u0413\u043E\u0442\u0443\u044E \u043A\u043E\u0440\u043E\u0442\u043A\u0435 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F...';
 i18n.explainUnavailable = '\u0417\u0430\u0440\u0430\u0437 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0435.';
 i18n.explainError = '\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u043F\u0456\u0437\u043D\u0456\u0448\u0435.';
+i18n.timerTitle = '\u0422\u0430\u0439\u043C\u0435\u0440';
+i18n.timerMode = '\u0420\u0435\u0436\u0438\u043C \u0442\u0430\u0439\u043C\u0435\u0440\u0430';
+i18n.timerOff = '\u0411\u0435\u0437 \u0442\u0430\u0439\u043C\u0435\u0440\u0430';
+i18n.timerPerQuestion = '\u041D\u0430 1 \u043F\u0438\u0442\u0430\u043D\u043D\u044F';
+i18n.timerWholeTest = '\u041D\u0430 \u0432\u0435\u0441\u044C \u0442\u0435\u0441\u0442';
+i18n.timerSeconds = '\u0421\u0435\u043A\u0443\u043D\u0434 \u043D\u0430 \u043F\u0438\u0442\u0430\u043D\u043D\u044F';
+i18n.timerMinutes = '\u0425\u0432\u0438\u043B\u0438\u043D';
+i18n.timerWholeSeconds = '\u0421\u0435\u043A\u0443\u043D\u0434';
+i18n.timerRemainingQuestion = '\u0417\u0430\u043B\u0438\u0448\u0438\u043B\u043E\u0441\u044C \u043D\u0430 \u043F\u0438\u0442\u0430\u043D\u043D\u044F: {time}';
+i18n.timerRemainingTotal = '\u0417\u0430\u043B\u0438\u0448\u0438\u043B\u043E\u0441\u044C \u043D\u0430 \u0442\u0435\u0441\u0442: {time}';
+i18n.timerExpiredQuestion = '\u0427\u0430\u0441 \u043D\u0430 \u0446\u0435 \u043F\u0438\u0442\u0430\u043D\u043D\u044F \u0432\u0438\u0439\u0448\u043E\u0432.';
+i18n.timerExpiredTotal = '\u0427\u0430\u0441 \u043D\u0430 \u0442\u0435\u0441\u0442 \u0432\u0438\u0439\u0448\u043E\u0432.';
 
 const state = {
   questions: bootstrapQuestions,
@@ -574,6 +621,12 @@ const state = {
   resultsFilter: 'all',
   resultsSnapshot: null,
   explanationsByQuestion: {},
+  timerMode: 'off',
+  timerPerQuestionSeconds: 30,
+  timerTotalSeconds: 20 * 60,
+  timerIntervalId: null,
+  questionDeadlineAt: null,
+  totalDeadlineAt: null,
 };
 
 const els = {
@@ -595,6 +648,13 @@ const els = {
   explainBtn: document.getElementById('explainBtn'),
   explanationPanel: document.getElementById('explanationPanel'),
   correctionPanel: document.getElementById('correctionPanel'),
+  timerModeSelect: document.getElementById('timerModeSelect'),
+  timerPerQuestionField: document.getElementById('timerPerQuestionField'),
+  timerPerQuestionInput: document.getElementById('timerPerQuestionInput'),
+  timerTotalField: document.getElementById('timerTotalField'),
+  timerMinutesInput: document.getElementById('timerMinutesInput'),
+  timerSecondsInput: document.getElementById('timerSecondsInput'),
+  timerDisplay: document.getElementById('timerDisplay'),
   correctionTitle: document.getElementById('correctionTitle'),
   correctionIntro: document.getElementById('correctionIntro'),
   correctionQuestionLabel: document.getElementById('correctionQuestionLabel'),
@@ -780,6 +840,202 @@ function ensureExplanationUi() {
   }
 }
 
+function ensureTimerUi() {
+  if (!els.timerModeSelect || !els.timerDisplay) {
+    const startSection = document.getElementById('start');
+    const quizSection = document.getElementById('quiz');
+    const startControls = startSection?.querySelector('.controls');
+    const jumpNav = quizSection?.querySelector('.jump-nav');
+
+    if (startSection && startControls && !els.timerModeSelect) {
+      const panel = document.createElement('div');
+      panel.className = 'timer-panel';
+      panel.innerHTML =
+        '<div class="timer-grid">' +
+        '<div class="small">' + t('timerTitle') + '</div>' +
+        '<label class="field">' +
+        '<span>' + t('timerMode') + '</span>' +
+        '<select id="timerModeSelect">' +
+        '<option value="off">' + t('timerOff') + '</option>' +
+        '<option value="question">' + t('timerPerQuestion') + '</option>' +
+        '<option value="total">' + t('timerWholeTest') + '</option>' +
+        '</select>' +
+        '</label>' +
+        '<div id="timerPerQuestionField" class="timer-inline hidden">' +
+        '<label class="field">' +
+        '<span>' + t('timerSeconds') + '</span>' +
+        '<input id="timerPerQuestionInput" type="number" min="5" step="1" value="30" />' +
+        '</label>' +
+        '</div>' +
+        '<div id="timerTotalField" class="timer-inline hidden">' +
+        '<label class="field">' +
+        '<span>' + t('timerMinutes') + '</span>' +
+        '<input id="timerMinutesInput" type="number" min="0" step="1" value="20" />' +
+        '</label>' +
+        '<label class="field">' +
+        '<span>' + t('timerWholeSeconds') + '</span>' +
+        '<input id="timerSecondsInput" type="number" min="0" max="59" step="1" value="0" />' +
+        '</label>' +
+        '</div>' +
+        '</div>';
+      startSection.insertBefore(panel, startControls);
+      els.timerModeSelect = document.getElementById('timerModeSelect');
+      els.timerPerQuestionField = document.getElementById('timerPerQuestionField');
+      els.timerPerQuestionInput = document.getElementById('timerPerQuestionInput');
+      els.timerTotalField = document.getElementById('timerTotalField');
+      els.timerMinutesInput = document.getElementById('timerMinutesInput');
+      els.timerSecondsInput = document.getElementById('timerSecondsInput');
+    }
+
+    if (quizSection && jumpNav && !els.timerDisplay) {
+      const badge = document.createElement('div');
+      badge.id = 'timerDisplay';
+      badge.className = 'timer-badge hidden';
+      quizSection.insertBefore(badge, jumpNav);
+      els.timerDisplay = badge;
+    }
+  }
+
+  els.timerModeSelect?.addEventListener('change', syncTimerConfigUi);
+  els.timerPerQuestionInput?.addEventListener('input', syncTimerConfigUi);
+  els.timerMinutesInput?.addEventListener('input', syncTimerConfigUi);
+  els.timerSecondsInput?.addEventListener('input', syncTimerConfigUi);
+  syncTimerConfigUi();
+}
+
+function syncTimerConfigUi() {
+  const mode = String(els.timerModeSelect?.value || 'off');
+  state.timerMode = mode === 'question' || mode === 'total' ? mode : 'off';
+
+  const perQuestion = Math.max(5, Number(els.timerPerQuestionInput?.value || 30) || 30);
+  const totalMinutes = Math.max(0, Number(els.timerMinutesInput?.value || 20) || 0);
+  const totalSecondsPart = Math.max(0, Math.min(59, Number(els.timerSecondsInput?.value || 0) || 0));
+  const totalSeconds = totalMinutes * 60 + totalSecondsPart;
+
+  state.timerPerQuestionSeconds = perQuestion;
+  state.timerTotalSeconds = Math.max(5, totalSeconds || 0);
+
+  if (els.timerPerQuestionInput) {
+    els.timerPerQuestionInput.value = String(perQuestion);
+  }
+  if (els.timerMinutesInput) {
+    els.timerMinutesInput.value = String(totalMinutes);
+  }
+  if (els.timerSecondsInput) {
+    els.timerSecondsInput.value = String(totalSecondsPart);
+  }
+
+  els.timerPerQuestionField?.classList.toggle('hidden', state.timerMode !== 'question');
+  els.timerTotalField?.classList.toggle('hidden', state.timerMode !== 'total');
+  renderTimerDisplay();
+}
+
+function clearTimerState() {
+  if (state.timerIntervalId) {
+    window.clearInterval(state.timerIntervalId);
+  }
+  state.timerIntervalId = null;
+  state.questionDeadlineAt = null;
+  state.totalDeadlineAt = null;
+  renderTimerDisplay();
+}
+
+function startTimerFlow() {
+  clearTimerState();
+  if (state.timerMode === 'total') {
+    state.totalDeadlineAt = Date.now() + state.timerTotalSeconds * 1000;
+  }
+  if (state.timerMode === 'question') {
+    state.questionDeadlineAt = Date.now() + state.timerPerQuestionSeconds * 1000;
+  }
+  if (state.timerMode === 'off') {
+    renderTimerDisplay();
+    return;
+  }
+
+  state.timerIntervalId = window.setInterval(() => {
+    tickTimer();
+  }, 250);
+  renderTimerDisplay();
+}
+
+function resetQuestionTimerIfNeeded() {
+  if (state.timerMode === 'question') {
+    state.questionDeadlineAt = Date.now() + state.timerPerQuestionSeconds * 1000;
+  }
+  renderTimerDisplay();
+}
+
+function tickTimer() {
+  const now = Date.now();
+  if (state.timerMode === 'total' && state.totalDeadlineAt && now >= state.totalDeadlineAt) {
+    clearTimerState();
+    showToast(t('timerExpiredTotal'));
+    showResults();
+    return;
+  }
+  if (state.timerMode === 'question' && state.questionDeadlineAt && now >= state.questionDeadlineAt) {
+    handleQuestionTimerExpired();
+    return;
+  }
+  renderTimerDisplay();
+}
+
+function handleQuestionTimerExpired() {
+  const { sourceQuestionIndex } = getCurrentQuestionContext();
+  if (state.chosenAt[sourceQuestionIndex] === null) {
+    state.chosenAt[sourceQuestionIndex] = -1;
+  }
+  renderQuestion();
+  showToast(t('timerExpiredQuestion'));
+  if (state.cur < state.order.length - 1) {
+    state.cur += 1;
+    renderQuestion();
+    return;
+  }
+  clearTimerState();
+  showResults();
+}
+
+function renderTimerDisplay() {
+  if (!els.timerDisplay) {
+    return;
+  }
+
+  els.timerDisplay.classList.remove('danger');
+  if (state.timerMode === 'off') {
+    els.timerDisplay.textContent = '';
+    hide(els.timerDisplay);
+    return;
+  }
+
+  let remainingMs = 0;
+  let label = '';
+  if (state.timerMode === 'question' && state.questionDeadlineAt) {
+    remainingMs = Math.max(0, state.questionDeadlineAt - Date.now());
+    label = t('timerRemainingQuestion', { time: formatCountdown(remainingMs) });
+  } else if (state.timerMode === 'total' && state.totalDeadlineAt) {
+    remainingMs = Math.max(0, state.totalDeadlineAt - Date.now());
+    label = t('timerRemainingTotal', { time: formatCountdown(remainingMs) });
+  } else {
+    hide(els.timerDisplay);
+    return;
+  }
+
+  els.timerDisplay.textContent = label;
+  if (remainingMs <= 10000) {
+    els.timerDisplay.classList.add('danger');
+  }
+  show(els.timerDisplay);
+}
+
+function formatCountdown(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+}
+
 function shuffleArray(items) {
   const copy = [...items];
   for (let index = copy.length - 1; index > 0; index -= 1) {
@@ -839,6 +1095,7 @@ function startQuiz() {
   hide(els.start);
   hide(els.results);
   show(els.quiz);
+  startTimerFlow();
   renderQuestion();
 }
 
@@ -1025,6 +1282,7 @@ async function requestExplanation() {
 function nextQuestion() {
   if (state.cur < state.order.length - 1) {
     state.cur += 1;
+    resetQuestionTimerIfNeeded();
     renderQuestion();
   }
 }
@@ -1040,6 +1298,7 @@ function goToQuestion(rawValue) {
   }
 
   state.cur = numericValue - 1;
+  resetQuestionTimerIfNeeded();
   renderQuestion();
 }
 
@@ -1401,6 +1660,7 @@ function renderResultsList() {
 }
 
 function showResults() {
+  clearTimerState();
   hide(els.quiz);
   show(els.results);
   state.resultsSnapshot = buildResultsSnapshot();
@@ -1427,6 +1687,7 @@ function setResultsFilter(filter) {
 }
 
 function resetQuiz() {
+  clearTimerState();
   state.correctionOpen = false;
   state.resultsFilter = 'all';
   state.resultsSnapshot = null;
@@ -1501,6 +1762,7 @@ document.addEventListener('DOMContentLoaded', () => {
     els.quizLength.textContent = String(state.questions.length);
   }
 
+  ensureTimerUi();
   ensureExplanationUi();
   applyLanguage();
 
