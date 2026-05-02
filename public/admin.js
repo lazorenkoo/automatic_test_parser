@@ -1034,8 +1034,8 @@ function syncQuestionLimitMode() {
   questionLimitInput.required = !useAll;
   if (questionLimitLabel) {
     questionLimitLabel.textContent = mode === 'random'
-      ? 'Ð¡ÐºÑ–Ð»ÑŒÐºÐ¸ Ð²Ð¸Ð¿Ð°Ð´ÐºÐ¾Ð²Ð¸Ñ… Ð¿Ð¸Ñ‚Ð°Ð½ÑŒ ÑƒÐ·ÑÑ‚Ð¸'
-      : 'Ð¡ÐºÑ–Ð»ÑŒÐºÐ¸ Ð¿Ð¸Ñ‚Ð°Ð½ÑŒ ÑƒÐ·ÑÑ‚Ð¸';
+      ? 'Скільки випадкових питань узяти'
+      : 'Скільки питань узяти';
   }
 
   if (!useAll && !questionLimitInput.value) {

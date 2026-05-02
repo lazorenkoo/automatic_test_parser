@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ð¡Ñ‚Ð²Ð¾Ñ€Ð¸Ñ‚Ð¸ Ñ‚ÐµÑÑ‚</title>
+  <title>Створити тест</title>
   <link rel="stylesheet" href="/admin.css" />
 </head>
 <body>
   <main class="page">
     <section id="siteNoticeCard" class="card site-notice hidden" aria-live="polite">
       <div class="site-notice-head">
-        <p class="site-notice-kicker">ÐžÐ³Ð¾Ð»Ð¾ÑˆÐµÐ½Ð½Ñ</p>
+        <p class="site-notice-kicker">Оголошення</p>
         <p id="siteNoticeTime" class="site-notice-time"></p>
       </div>
       <div id="siteNoticeText" class="site-notice-text"></div>
@@ -20,14 +20,14 @@
       <form id="quizForm" class="card form-card">
         <div class="card-head">
           <button id="myTestsBtn" class="ghost-btn" type="button">My tests</button>
-          <h2>Ð¡Ñ‚Ð²Ð¾Ñ€Ð¸Ñ‚Ð¸ Ñ‚ÐµÑÑ‚</h2>
+          <h2>Створити тест</h2>
         </div>
 
         <div class="title-course-row">
           <label class="field">
-            <span>ÐšÑƒÑ€Ñ</span>
+            <span>Курс</span>
             <select id="courseNumber" name="courseNumber" required>
-              <option value="">ÐžÐ±ÐµÑ€Ñ–Ñ‚ÑŒ ÐºÑƒÑ€Ñ</option>
+              <option value="">Оберіть курс</option>
               <option value="1">1</option>
               <option value="2">2</option>
               <option value="3">3</option>
@@ -42,12 +42,12 @@
           </label>
 
           <label class="field">
-            <span>ÐÐ°Ð·Ð²Ð° Ñ‚ÐµÑÑ‚Ñƒ</span>
+            <span>Назва тесту</span>
             <input
               id="clientTitle"
               name="clientTitle"
               type="text"
-              placeholder="ÐÐ°Ð¿Ñ€Ð¸ÐºÐ»Ð°Ð´: Ð¢ÐµÑ€Ð°Ð¿Ñ–Ñ: ÐšÐ°Ñ€Ð´Ñ–Ð¾Ð»Ð¾Ð³Ñ–Ñ | ÐÐ‘"
+              placeholder="Наприклад: Терапія: Кардіологія | НБ"
               required
             />
           </label>
@@ -65,7 +65,7 @@
         </label>
 
         <label class="field">
-          <span>Ð¤Ð°Ð¹Ð» Ñ–Ð· Ñ‚ÐµÑÑ‚Ð°Ð¼Ð¸</span>
+          <span>Файл із тестами</span>
           <input
             id="sourceFile"
             name="sourceFile"
@@ -77,7 +77,7 @@
 
         <div class="split">
           <label class="field">
-            <span>Ð’Ð°Ñ€Ñ–Ð°Ð½Ñ‚Ñ–Ð² Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´Ñ– Ð² Ð¿Ð¸Ñ‚Ð°Ð½Ð½Ñ–</span>
+            <span>Варіантів відповіді в питанні</span>
             <div class="option-count-row">
               <input id="optionCount" name="optionCount" type="number" min="2" max="6" value="5" required />
               <label class="choice-row inline-choice">
@@ -88,27 +88,27 @@
           </label>
 
           <div class="field">
-            <span>Ð ÐµÐ¶Ð¸Ð¼ Ð¿Ñ€Ð°Ð²Ð¸Ð»ÑŒÐ½Ð¸Ñ… Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´ÐµÐ¹</span>
+            <span>Режим правильних відповідей</span>
             <div class="choice-stack">
               <label class="choice-row">
                 <input id="answerModeSingle" name="answerMode" type="radio" value="single" checked />
-                <span>ÐžÐ´Ð¸Ð½ Ñ– Ñ‚Ð¾Ð¹ ÑÐ°Ð¼Ð¸Ð¹ Ð²Ð°Ñ€Ñ–Ð°Ð½Ñ‚ Ð´Ð»Ñ Ð²ÑÑ–Ñ…</span>
+                <span>Один і той самий варіант для всіх</span>
               </label>
               <label class="choice-row">
                 <input id="answerModeFile" name="answerMode" type="radio" value="file" />
-                <span>ÐžÐºÑ€ÐµÐ¼Ð¸Ð¹ Ñ„Ð°Ð¹Ð» Ñ–Ð· Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´ÑÐ¼Ð¸</span>
+                <span>Окремий файл із відповідями</span>
               </label>
             </div>
           </div>
         </div>
 
         <div id="singleAnswerField" class="field">
-          <span>ÐŸÑ€Ð°Ð²Ð¸Ð»ÑŒÐ½Ð¸Ð¹ Ð²Ð°Ñ€Ñ–Ð°Ð½Ñ‚</span>
+          <span>Правильний варіант</span>
           <select id="answerIndex" name="answerIndex" required></select>
         </div>
 
         <label id="answerFileField" class="field hidden">
-          <span>Ð¤Ð°Ð¹Ð» Ñ–Ð· Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´ÑÐ¼Ð¸</span>
+          <span>Файл із відповідями</span>
           <input
             id="answerFile"
             name="answerFile"
@@ -118,36 +118,36 @@
         </label>
 
         <div class="field">
-          <span>ÐšÑ–Ð»ÑŒÐºÑ–ÑÑ‚ÑŒ Ð¿Ð¸Ñ‚Ð°Ð½ÑŒ</span>
+          <span>Кількість питань</span>
 
           <label class="field nested-field">
-            <span>Ð ÐµÐ¶Ð¸Ð¼ Ð²Ð¸Ð±Ð¾Ñ€Ñƒ</span>
+            <span>Режим вибору</span>
             <select id="questionModeSelect" name="questionMode">
-              <option value="all" selected>Ð£ÑÑ– Ð¿Ð¸Ñ‚Ð°Ð½Ð½Ñ</option>
-              <option value="manual">ÐŸÐµÑ€ÑˆÑ– N Ð¿Ð¸Ñ‚Ð°Ð½ÑŒ</option>
-              <option value="random">Ð’Ð¸Ð¿Ð°Ð´ÐºÐ¾Ð²Ñ– N Ð¿Ð¸Ñ‚Ð°Ð½Ð½Ñ</option>
+              <option value="all" selected>Усі питання</option>
+              <option value="manual">Перші N питань</option>
+              <option value="random">Випадкові N питань</option>
             </select>
           </label>
 
           <label id="questionLimitField" class="field nested-field hidden">
-            <span id="questionLimitLabel">Ð¡ÐºÑ–Ð»ÑŒÐºÐ¸ Ð¿Ð¸Ñ‚Ð°Ð½ÑŒ ÑƒÐ·ÑÑ‚Ð¸</span>
+            <span id="questionLimitLabel">Скільки питань узяти</span>
             <input id="questionLimit" name="questionLimit" type="number" min="1" value="20" />
           </label>
         </div>
 
         <div class="actions-row">
-          <button id="submitBtn" class="primary-btn" type="submit">ÐŸÐµÑ€ÐµÐ´Ð°Ñ‚Ð¸ Ñ„Ð°Ð¹Ð»</button>
-          <button id="aiCreateBtn" class="secondary-btn hidden" type="button">Ð—Ð½Ð°Ð¹Ñ‚Ð¸ Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´Ñ–</button>
-          <button id="reportIssueBtn" class="secondary-btn hidden" type="button">ÐŸÐ¾Ð²Ñ–Ð´Ð¾Ð¼Ð¸Ñ‚Ð¸ Ð¿Ñ€Ð¾ Ð¿Ð¾Ð¼Ð¸Ð»ÐºÑƒ</button>
+          <button id="submitBtn" class="primary-btn" type="submit">Передати файл</button>
+          <button id="aiCreateBtn" class="secondary-btn hidden" type="button">Знайти відповіді</button>
+          <button id="reportIssueBtn" class="secondary-btn hidden" type="button">Повідомити про помилку</button>
         </div>
       </form>
 
       <section class="card result-card">
         <div class="card-head">
-          <h2>Ð ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚</h2>
+          <h2>Результат</h2>
         </div>
 
-        <div id="statusBox" class="status idle">ÐžÑ‡Ñ–ÐºÑƒÑŽ Ð½Ð° Ð·Ð°Ð²Ð°Ð½Ñ‚Ð°Ð¶ÐµÐ½Ð½Ñ Ñ„Ð°Ð¹Ð»Ð°.</div>
+        <div id="statusBox" class="status idle">Очікую на завантаження файла.</div>
         <div id="resultBox" class="result-box hidden"></div>
       </section>
     </section>

@@ -1017,7 +1017,7 @@ app.post('/api/quizzes/:slug/report', (req, res, next) => {
   try {
     const quiz = getQuizBySlug(req.params.slug);
     if (!quiz) {
-      return res.status(404).json({ error: 'Ð¢ÐµÑÑ‚ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.' });
+      return res.status(404).json({ error: 'Тест не знайдено.' });
     }
 
     const note = sanitizeText(req.body.note || '');
@@ -1032,7 +1032,7 @@ app.post('/api/quizzes/:slug/report', (req, res, next) => {
     });
 
     if (!report) {
-      return res.status(400).json({ error: 'ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ ÑÑ‚Ð²Ð¾Ñ€Ð¸Ñ‚Ð¸ Ð·Ð²ÐµÑ€Ð½ÐµÐ½Ð½Ñ.' });
+      return res.status(400).json({ error: 'Не вдалося створити звернення.' });
     }
 
     return res.status(201).json({
