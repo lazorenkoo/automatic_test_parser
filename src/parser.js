@@ -189,7 +189,14 @@ export async function parseQuizFromFile({
   questions = shiftedRepair.questions;
   notes.push(...shiftedRepair.notes);
 
+  const tailRepair = repairQuestionTailOptionLeaks(questions, normalizedOptionCount);
+  questions = tailRepair.questions;
+  notes.push(...tailRepair.notes);
+
   questions = normalizeParsedQuestionsForOutput(questions, normalizedOptionCount, safeAnswerIndex);
+  const normalizedTailRepair = repairNormalizedQuestionTailOptionLeaks(questions, normalizedOptionCount);
+  questions = normalizedTailRepair.questions;
+  notes.push(...normalizedTailRepair.notes);
 
   if (answerKey) {
     const resolved = applyAnswerKeyToQuestions(questions, answerKey);
@@ -2201,6 +2208,22 @@ function extractTrailingOptionsFromQuestion(question, optionCount) {
     };
   }
 
+  const titleBoundaryIndex = findPromptTitleBoundary(questionText);
+  if (titleBoundaryIndex >= 0) {
+    const cleanQuestionText = sanitizeText(questionText.slice(0, titleBoundaryIndex + 1));
+    const leakedTail = sanitizeText(questionText.slice(titleBoundaryIndex + 1));
+    if (cleanQuestionText && leakedTail && cleanQuestionText.length >= 20) {
+      const leakedOptions = collectStandaloneTailOptions(leakedTail, expectedOptionCount - existingOptions.length);
+      const combinedOptions = [...leakedOptions, ...existingOptions];
+      if (leakedOptions.length && isAcceptableOptionCount(combinedOptions.length, optionCount)) {
+        return {
+          questionText: cleanQuestionText,
+          options: combinedOptions,
+        };
+      }
+    }
+  }
+
   return null;
 }
 
@@ -2226,7 +2249,7 @@ function findPromptBoundaryCandidates(text) {
 function collectStandaloneTailOptions(text, maxOptions) {
   const safeMaxOptions = Math.max(1, Number(maxOptions) || 0);
   const direct = sanitizeText(text);
-  if (direct && looksLikeStandaloneOptionLine(direct)) {
+  if (direct && (looksLikeStandaloneOptionLine(direct) || looksLikeLongStandaloneOptionText(direct))) {
     return [direct];
   }
 
@@ -2235,6 +2258,59 @@ function collectStandaloneTailOptions(text, maxOptions) {
     .filter(Boolean)
     .filter((option) => looksLikeStandaloneOptionLine(option))
     .slice(0, safeMaxOptions);
+}
+
+function findPromptTitleBoundary(text) {
+  const value = sanitizeText(text);
+  if (!value) {
+    return -1;
+  }
+
+  const lowerValue = value.toLowerCase();
+  const markers = [' до ', ' для ', ' при ', ' після ', ' перед ', ' щодо ', ' про ', ' за ', ' від '];
+  const titlePrefixes = ['дсанпін', 'дсту', 'дбн', 'закон', 'наказ', 'лист', 'санітарний', 'державні'];
+
+  let bestBoundaryIndex = -1;
+
+  for (const marker of markers) {
+    const markerIndex = lowerValue.lastIndexOf(marker);
+    if (markerIndex < 0) {
+      continue;
+    }
+
+    const tailStart = markerIndex + marker.length;
+    const tail = sanitizeText(value.slice(tailStart));
+    if (!tail) {
+      continue;
+    }
+
+    const lowerTail = tail.toLowerCase();
+    if (!titlePrefixes.some((prefix) => lowerTail.startsWith(prefix))) {
+      continue;
+    }
+
+    bestBoundaryIndex = Math.max(bestBoundaryIndex, markerIndex + marker.length - 2);
+  }
+
+  return bestBoundaryIndex;
+}
+
+function looksLikeLongStandaloneOptionText(text) {
+  const value = sanitizeText(text);
+  if (!value) {
+    return false;
+  }
+
+  if (looksLikeQuestionTail(value) && looksLikePromptSentence(value)) {
+    return false;
+  }
+
+  if (/[?:]$/.test(value)) {
+    return false;
+  }
+
+  const wordCount = value.split(/\s+/).filter(Boolean).length;
+  return wordCount >= 6 && value.length >= 45;
 }
 
 function repairShiftedQuestionLines(questions, optionCount) {
@@ -2256,10 +2332,14 @@ function repairShiftedQuestionLines(questions, optionCount) {
       continue;
     }
 
+    const firstOptionStartsLikeContinuation = /^[\p{Ll}\p{Lo}\d(]/u.test(firstOption)
+      || /^[,;:)\]-]/u.test(firstOption);
+
     if (
       question.options.length > minOptionCount
       && !looksLikeQuestionTail(questionText)
       && !/[?]$/.test(questionText)
+      && firstOptionStartsLikeContinuation
       && looksLikePromptSentence(firstOption)
       && (looksLikeQuestionTail(firstOption) || firstOption.length >= 55)
     ) {
@@ -2303,6 +2383,109 @@ function repairShiftedQuestionLines(questions, optionCount) {
 
   if (movedToNextQuestionCount > 0) {
     notes.push(`Repaired questions where the next prompt leaked into the last answer option: ${movedToNextQuestionCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function repairQuestionTailOptionLeaks(questions, optionCount) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+  let repairedCount = 0;
+
+  if (expectedOptionCount !== 5) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  for (const question of repairedQuestions) {
+    const questionText = sanitizeText(question?.q);
+    const options = Array.isArray(question?.options)
+      ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    if (!questionText || options.length !== 4) {
+      continue;
+    }
+
+    const titleBoundaryIndex = findPromptTitleBoundary(questionText);
+    if (titleBoundaryIndex < 0) {
+      continue;
+    }
+
+    const cleanQuestionText = sanitizeText(questionText.slice(0, titleBoundaryIndex + 1));
+    const leakedOption = sanitizeText(questionText.slice(titleBoundaryIndex + 1));
+    if (!cleanQuestionText || !looksLikeLongStandaloneOptionText(leakedOption)) {
+      continue;
+    }
+
+    question.q = cleanQuestionText;
+    question.options = [leakedOption, ...options];
+    question.correctIndex = Math.max(0, Math.min(question.options.length - 1, Number(question.correctIndex) + 1 || 0));
+    repairedCount += 1;
+  }
+
+  if (repairedCount > 0) {
+    notes.push(`Recovered leaked leading answer options from question tails: ${repairedCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function repairNormalizedQuestionTailOptionLeaks(questions, optionCount) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+  let repairedCount = 0;
+
+  if (expectedOptionCount !== 5) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  for (const question of repairedQuestions) {
+    const questionText = sanitizeText(question?.q);
+    const options = Array.isArray(question?.options)
+      ? question.options.map((option) => sanitizeText(option))
+      : [];
+    const nonEmptyOptions = options.filter(Boolean);
+    if (!questionText || nonEmptyOptions.length !== 4 || options.at(-1)) {
+      continue;
+    }
+
+    const titleBoundaryIndex = findPromptTitleBoundary(questionText);
+    if (titleBoundaryIndex < 0) {
+      continue;
+    }
+
+    const cleanQuestionText = sanitizeText(questionText.slice(0, titleBoundaryIndex + 1));
+    const leakedOption = sanitizeText(questionText.slice(titleBoundaryIndex + 1));
+    if (!cleanQuestionText || !looksLikeLongStandaloneOptionText(leakedOption)) {
+      continue;
+    }
+
+    question.q = cleanQuestionText;
+    question.options = [leakedOption, ...nonEmptyOptions].slice(0, expectedOptionCount);
+    question.correctIndex = Math.max(0, Math.min(question.options.length - 1, Number(question.correctIndex) + 1 || 0));
+    repairedCount += 1;
+  }
+
+  if (repairedCount > 0) {
+    notes.push(`Recovered leaked leading answer options after normalization: ${repairedCount}.`);
   }
 
   return {
@@ -2869,8 +3052,9 @@ function parseExplicitNumberBlock(lines, optionCount) {
     return null;
   }
 
-  const questionText = sanitizeText(cleanLines.slice(0, splitIndex + 1).join(' '));
-  const optionLines = normalizeOptionLines(cleanLines.slice(splitIndex + 1), optionCount);
+  const resolvedSplitIndex = refineExplicitQuestionOptionBoundary(cleanLines, splitIndex, optionCount);
+  const questionText = sanitizeText(cleanLines.slice(0, resolvedSplitIndex + 1).join(' '));
+  const optionLines = normalizeOptionLines(cleanLines.slice(resolvedSplitIndex + 1), optionCount);
 
   if (!questionText || !isAcceptableOptionCount(optionLines.length, optionCount)) {
     return null;
@@ -2880,6 +3064,47 @@ function parseExplicitNumberBlock(lines, optionCount) {
     q: questionText,
     options: optionLines,
   };
+}
+
+function refineExplicitQuestionOptionBoundary(lines, splitIndex, optionCount) {
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+  const minimumOptionCount = minimumAllowedOptionCount(optionCount);
+  if (expectedOptionCount !== 5 || minimumOptionCount !== 4) {
+    return splitIndex;
+  }
+
+  const currentRawOptionLines = lines.slice(splitIndex + 1);
+  const currentOptions = normalizeOptionLines(currentRawOptionLines, optionCount);
+  const currentMergedOptions = mergeWrappedOptionLines(currentRawOptionLines, optionCount);
+  const shouldRefine = currentOptions.length === minimumOptionCount || currentMergedOptions.length > expectedOptionCount;
+  if (!shouldRefine) {
+    return splitIndex;
+  }
+
+  let bestSplitIndex = splitIndex;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let candidateSplitIndex = Math.max(0, splitIndex - 3); candidateSplitIndex < splitIndex; candidateSplitIndex += 1) {
+    const questionLines = lines.slice(0, candidateSplitIndex + 1);
+    const rawOptionLines = lines.slice(candidateSplitIndex + 1);
+    const optionLines = normalizeOptionLines(rawOptionLines, optionCount);
+    const questionText = sanitizeText(questionLines.join(' '));
+    if (!questionText || optionLines.length !== expectedOptionCount) {
+      continue;
+    }
+
+    if (rawOptionLines[0] && /^[\p{Ll}\p{Lo}]/u.test(rawOptionLines[0])) {
+      continue;
+    }
+
+    const score = scoreExplicitQuestionBoundary(questionLines, optionLines, questionText, rawOptionLines, optionCount) + 25;
+    if (score > bestScore) {
+      bestScore = score;
+      bestSplitIndex = candidateSplitIndex;
+    }
+  }
+
+  return bestSplitIndex;
 }
 
 function findExplicitQuestionOptionBoundary(lines, optionCount) {
@@ -2949,6 +3174,12 @@ function scoreExplicitQuestionBoundary(questionLines, optionLines, questionText,
 
   if (rawOptionLines[0] && /^\p{Ll}/u.test(rawOptionLines[0])) {
     score -= 25;
+    if (!looksLikeQuestionTail(questionText)) {
+      score -= 30;
+    }
+    if (/[,:;]$/.test(sanitizeText(questionLines.at(-1)))) {
+      score -= 25;
+    }
   }
 
   if (optionLines.length === optionCount) {
@@ -3192,7 +3423,7 @@ function shouldContinueOptionText(currentOption, nextLine) {
     return true;
   }
 
-  if (/^[a-zа-яіїєґ]/u.test(next)) {
+  if (/^[\p{Ll}\p{Lo}]/u.test(next)) {
     return true;
   }
 
@@ -3458,6 +3689,11 @@ function normalizeOptionLines(lines, optionCount) {
   const merged = mergeWrappedOptionLines(normalized, optionCount);
 
   if (!isAutoOptionCount(optionCount) && merged.length > optionCount) {
+    const repartitioned = repartitionOverflowOptionLines(normalized, optionCount);
+    if (repartitioned) {
+      return repartitioned;
+    }
+
     return merged.slice(0, optionCount);
   }
 
@@ -3490,6 +3726,10 @@ function mergeWrappedOptionLines(lines, optionCount) {
     const shouldMerge = shouldContinueOptionText(previous, line)
       || (
         remainingRawIncludingCurrent > remainingSlots
+        && looksLikeOverflowOptionContinuation(previous, line)
+      )
+      || (
+        remainingRawIncludingCurrent > remainingSlots
         && /^[\p{Ll}\p{Lo}\d(]/u.test(line)
       );
 
@@ -3502,6 +3742,113 @@ function mergeWrappedOptionLines(lines, optionCount) {
   }
 
   return merged;
+}
+
+function repartitionOverflowOptionLines(lines, optionCount) {
+  const expectedOptionCount = Number(optionCount);
+  const entries = Array.isArray(lines)
+    ? lines.map((line) => sanitizeText(line)).filter(Boolean).map((line) => ({ line }))
+    : [];
+  if (!Number.isInteger(expectedOptionCount) || expectedOptionCount < 2 || entries.length <= expectedOptionCount) {
+    return null;
+  }
+
+  const memo = new Map();
+
+  function solve(position, groupsLeft) {
+    const key = `${position}:${groupsLeft}`;
+    if (memo.has(key)) {
+      return memo.get(key);
+    }
+
+    if (groupsLeft === 0) {
+      return position === entries.length ? [] : null;
+    }
+
+    const remaining = entries.length - position;
+    if (remaining < groupsLeft || remaining > groupsLeft * 3) {
+      return null;
+    }
+
+    for (let groupSize = 1; groupSize <= Math.min(3, remaining); groupSize += 1) {
+      const chunk = entries.slice(position, position + groupSize).map((entry) => entry.line);
+      if (!isValidOverflowOptionChunk(chunk)) {
+        continue;
+      }
+
+      const optionText = sanitizeText(chunk.join(' '));
+      if (!optionText || (looksLikeQuestionTail(optionText) && looksLikePromptSentence(optionText))) {
+        continue;
+      }
+
+      const tail = solve(position + groupSize, groupsLeft - 1);
+      if (tail) {
+        const resolved = [optionText, ...tail];
+        memo.set(key, resolved);
+        return resolved;
+      }
+    }
+
+    memo.set(key, null);
+    return null;
+  }
+
+  return solve(0, expectedOptionCount);
+}
+
+function isValidOverflowOptionChunk(chunk) {
+  if (!Array.isArray(chunk) || !chunk.length) {
+    return false;
+  }
+
+  if (chunk.length === 1) {
+    return looksLikeStandaloneOptionLine(chunk[0]);
+  }
+
+  for (let index = 1; index < chunk.length; index += 1) {
+    if (!shouldContinueOptionText(chunk[index - 1], chunk[index]) && !looksLikeOverflowOptionContinuation(chunk[index - 1], chunk[index])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function looksLikeOverflowOptionContinuation(currentOption, nextLine) {
+  const current = sanitizeText(currentOption);
+  const next = sanitizeText(nextLine);
+  if (!current || !next) {
+    return false;
+  }
+
+  if (/[.?!:;]$/.test(current)) {
+    return false;
+  }
+
+  if (looksLikeQuestionTail(current) && looksLikePromptSentence(current)) {
+    return false;
+  }
+
+  const currentWords = current.split(/\s+/).filter(Boolean).length;
+  const nextWords = next.split(/\s+/).filter(Boolean).length;
+  if (
+    currentWords === 1
+    && current.length <= 20
+    && nextWords >= 2
+    && /^[\p{Lu}\p{Lt}\p{Lo}"«(]/u.test(next)
+  ) {
+    return true;
+  }
+
+  if (
+    currentWords <= 2
+    && current.length <= 26
+    && /^(України|МОЗ|Міністерства|ДСанПіН|ДСТУ|ДБН|Санітарний|Державні)\b/u.test(next)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function looksLikeRealQuestion(questionText, options) {
