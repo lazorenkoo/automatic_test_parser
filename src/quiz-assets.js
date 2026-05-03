@@ -1593,6 +1593,18 @@ function extractPuterExplanationText(response) {
     return response.message.content.trim();
   }
 
+  if (typeof response?.content === 'string') {
+    return response.content.trim();
+  }
+
+  if (typeof response?.output === 'string') {
+    return response.output.trim();
+  }
+
+  if (typeof response?.result === 'string') {
+    return response.result.trim();
+  }
+
   if (Array.isArray(response?.message?.content)) {
     return response.message.content
       .map((part) => {
@@ -1625,6 +1637,35 @@ function extractPuterExplanationText(response) {
     }
   }
 
+  if (Array.isArray(response)) {
+    const arrayText = response
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item;
+        }
+        if (typeof item?.text === 'string') {
+          return item.text;
+        }
+        if (typeof item?.content === 'string') {
+          return item.content;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\\n')
+      .trim();
+    if (arrayText) {
+      return arrayText;
+    }
+  }
+
+  if (typeof response?.toString === 'function') {
+    const fallbackText = String(response).trim();
+    if (fallbackText && fallbackText !== '[object Object]') {
+      return fallbackText;
+    }
+  }
+
   return '';
 }
 
@@ -1640,6 +1681,8 @@ async function requestPuterExplanation(question, questionNumber) {
   const text = extractPuterExplanationText(response);
   console.log('[explanations-ui] puter response received', {
     questionNumber,
+    responseType: typeof response,
+    responseKeys: response && typeof response === 'object' ? Object.keys(response).slice(0, 12) : [],
     length: text.length,
     preview: text.slice(0, 160),
   });
@@ -1717,11 +1760,33 @@ function closeExplanationPanel() {
 }
 
 function isExplanationTextAcceptable(value) {
-  const normalized = String(value || '').trim();
-  if (normalized.length < 40) {
+  const normalized = String(value || '')
+    .replace(/\\r/g, '')
+    .trim();
+
+  if (normalized.length < 24) {
     return false;
   }
-  return normalized.includes('Суть:') && normalized.includes('Маркер:');
+
+  const lower = normalized.toLocaleLowerCase('uk-UA');
+  if (
+    lower.includes('не вдалося') ||
+    lower.includes('temporarily unavailable') ||
+    lower.includes('quota') ||
+    lower.includes('rate limit')
+  ) {
+    return false;
+  }
+
+  const hasStructuredMarkers =
+    normalized.includes('\u0421\u0443\u0442\u044c:') ||
+    normalized.includes('\u041c\u0430\u0440\u043a\u0435\u0440:');
+
+  if (hasStructuredMarkers) {
+    return true;
+  }
+
+  return normalized.length >= 80;
 }
 
 async function requestExplanation() {
