@@ -758,6 +758,8 @@ const state = {
   timerIntervalId: null,
   questionDeadlineAt: null,
   totalDeadlineAt: null,
+  explainCooldownUntil: 0,
+  explainCooldownTimerId: null,
 };
 
 const els = {
@@ -1321,6 +1323,7 @@ function startQuiz() {
   state.resultsFilter = 'all';
   state.resultsSnapshot = null;
   state.explanationsByQuestion = {};
+  clearExplainCooldown();
   closeExplanationPanel();
 
   hide(els.start);
@@ -1400,8 +1403,58 @@ function colorize(questionIndex, chosenRenderedIndex) {
 function renderExplanationState(questionIndex) {
   if (els.explainBtn) {
     els.explainBtn.classList.toggle('hidden', !explanationsEnabled);
-    els.explainBtn.disabled = state.chosenAt[questionIndex] === null;
+    const cooldownSeconds = getExplainCooldownRemainingSeconds();
+    els.explainBtn.disabled = state.chosenAt[questionIndex] === null || cooldownSeconds > 0;
+    els.explainBtn.textContent = cooldownSeconds > 0
+      ? t('explain') + ' (' + cooldownSeconds + ' c)'
+      : t('explain');
   }
+}
+
+function getExplainCooldownRemainingSeconds() {
+  const remainingMs = Math.max(0, Number(state.explainCooldownUntil || 0) - Date.now());
+  return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
+}
+
+function parseRetrySecondsFromExplainMessage(message) {
+  const match = String(message || '').match(/через\s+(\d+)\s*с/i);
+  if (!match) {
+    return 0;
+  }
+
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+}
+
+function clearExplainCooldown() {
+  state.explainCooldownUntil = 0;
+  if (state.explainCooldownTimerId) {
+    window.clearInterval(state.explainCooldownTimerId);
+  }
+  state.explainCooldownTimerId = null;
+}
+
+function startExplainCooldown(seconds) {
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  if (!safeSeconds) {
+    clearExplainCooldown();
+    renderExplanationState(state.order[state.cur] ?? 0);
+    return;
+  }
+
+  state.explainCooldownUntil = Date.now() + (safeSeconds + 5) * 1000;
+  if (state.explainCooldownTimerId) {
+    window.clearInterval(state.explainCooldownTimerId);
+  }
+  state.explainCooldownTimerId = window.setInterval(() => {
+    const currentQuestionIndex = state.order[state.cur] ?? 0;
+    renderExplanationState(currentQuestionIndex);
+    if (getExplainCooldownRemainingSeconds() <= 0) {
+      clearExplainCooldown();
+      renderExplanationState(currentQuestionIndex);
+    }
+  }, 250);
+  renderExplanationState(state.order[state.cur] ?? 0);
 }
 
 function buildExplanationModalText(answerText, explanationText) {
@@ -1569,6 +1622,17 @@ async function requestExplanation() {
     return;
   }
 
+  const cooldownSeconds = getExplainCooldownRemainingSeconds();
+  if (cooldownSeconds > 0) {
+    showExplanationPanel('error', {
+      questionText: question?.q || '',
+      answerText: question?.options?.[question?.correctIndex] || '',
+      message: 'Ліміт ШІ ще оновлюється. Спробуйте знову приблизно через ' + cooldownSeconds + ' с.',
+    });
+    renderExplanationState(questionIndex);
+    return;
+  }
+
   const cached = state.explanationsByQuestion[questionIndex];
   if (cached?.status === 'ready' && isExplanationTextAcceptable(cached.text)) {
     console.log('[explanations-ui] cache hit', {
@@ -1655,6 +1719,8 @@ async function requestExplanation() {
       throw new Error(t('explainError'));
     }
 
+    clearExplainCooldown();
+
     state.explanationsByQuestion[questionIndex] = {
       status: 'ready',
       text: explanationText,
@@ -1671,6 +1737,10 @@ async function requestExplanation() {
       message: error?.message || String(error),
       error,
     });
+    const retrySeconds = parseRetrySecondsFromExplainMessage(error?.message || '');
+    if (retrySeconds > 0) {
+      startExplainCooldown(retrySeconds);
+    }
     state.explanationsByQuestion[questionIndex] = {
       status: 'error',
       text: '',
@@ -2098,6 +2168,7 @@ function resetQuiz() {
   state.resultsSnapshot = null;
   state.explanationsByQuestion = {};
   state.questions = sourceQuestions;
+  clearExplainCooldown();
   closeExplanationPanel();
   hide(els.quiz);
   hide(els.results);
