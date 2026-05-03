@@ -285,15 +285,16 @@ h1{
 }
 .report-fab{
   position:fixed;
-  right:18px;
-  top:50%;
-  transform:translateY(-50%);
+  left:50%;
+  bottom:max(18px, calc(env(safe-area-inset-bottom) + 12px));
+  transform:translateX(-50%);
+  width:min(420px, calc(100vw - 36px));
   z-index:20;
 }
 .toast{
   position:fixed;
   right:18px;
-  bottom:18px;
+  bottom:max(92px, calc(env(safe-area-inset-bottom) + 86px));
   max-width:min(360px, calc(100vw - 32px));
   padding:12px 14px;
   border-radius:16px;
@@ -590,14 +591,15 @@ h1{
     border-radius:14px;
   }
   .report-fab{
-    right:12px;
-    top:auto;
-    bottom:12px;
-    transform:none;
+    left:50%;
+    right:auto;
+    bottom:max(12px, calc(env(safe-area-inset-bottom) + 8px));
+    transform:translateX(-50%);
+    width:min(420px, calc(100vw - 24px));
   }
   .toast{
     right:12px;
-    bottom:72px;
+    bottom:max(76px, calc(env(safe-area-inset-bottom) + 72px));
   }
   .correction-panel{
     padding:14px;
@@ -658,10 +660,9 @@ const aiSuspiciousQuestions = Array.isArray(bootstrapData.aiSuspiciousQuestions)
 const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
 const correctionUrl = bootstrapData.correctionUrl || '';
-const explanationUrl = bootstrapData.explanationUrl || '';
 const puterExplanationsEnabled = Boolean(bootstrapData.puterExplanationsEnabled);
-const puterExplanationModel = bootstrapData.puterExplanationModel || 'gemini-3.1-pro-preview';
-const explanationsEnabled = puterExplanationsEnabled || Boolean(explanationUrl);
+const puterExplanationModel = bootstrapData.puterExplanationModel || 'google/gemini-2.5-flash-lite';
+const explanationsEnabled = puterExplanationsEnabled;
 const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOptionCount))
   ? Math.max(0, Number(bootstrapData.configuredOptionCount))
   : 0;
@@ -1647,32 +1648,6 @@ async function requestPuterExplanation(question, questionNumber) {
   return text;
 }
 
-async function requestBackendExplanation(questionNumber, selectedOptionNumber) {
-  const response = await fetch(explanationUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      questionNumber,
-      selectedOptionNumber,
-    }),
-  });
-
-  const result = await response.json().catch(() => ({}));
-  console.log('[explanations-ui] response received', {
-    questionIndex: questionNumber - 1,
-    status: response.status,
-    ok: response.ok,
-    result,
-  });
-  if (!response.ok) {
-    throw new Error(result?.error || t('explainError'));
-  }
-
-  return String(result?.explanation || '').trim();
-}
-
 function buildExplanationPanelText(answerText, explanationText) {
   const normalizedAnswer = String(answerText || '').trim();
   const normalizedBody = normalizeExplanationPanelBody(explanationText);
@@ -1754,14 +1729,13 @@ function isExplanationTextAcceptable(value) {
 async function requestExplanation() {
   const { sourceQuestionIndex: questionIndex, optionOrder, question } = getCurrentQuestionContext();
   const canUsePuter = isPuterExplanationAvailable();
-  const canUseBackend = Boolean(explanationUrl);
 
-  if (!explanationsEnabled || (!canUsePuter && !canUseBackend)) {
+  if (!explanationsEnabled || !canUsePuter) {
     console.warn('[explanations-ui] unavailable', {
       explanationsEnabled,
       canUsePuter,
       puterExplanationsEnabled,
-      explanationUrl,
+      puterExplanationModel,
     });
     showExplanationPanel('error', {
       questionText: question?.q || '',
@@ -1841,31 +1815,20 @@ async function requestExplanation() {
       questionIndex,
       questionNumber: questionIndex + 1,
       selectedOptionNumber: Number.isInteger(selectedSourceOptionIndex) ? selectedSourceOptionIndex + 1 : null,
-      provider: canUsePuter ? 'puter' : 'backend',
-      explanationUrl,
+      provider: 'puter',
+      model: puterExplanationModel,
     });
 
     let explanationText = '';
 
-    if (canUsePuter) {
-      try {
-        explanationText = await requestPuterExplanation(question, questionIndex + 1);
-      } catch (puterError) {
-        console.warn('[explanations-ui] puter request failed', {
-          questionIndex,
-          message: puterError?.message || String(puterError || ''),
-        });
-        if (!canUseBackend) {
-          throw puterError;
-        }
-      }
-    }
-
-    if (!isExplanationTextAcceptable(explanationText) && canUseBackend) {
-      explanationText = await requestBackendExplanation(
-        questionIndex + 1,
-        Number.isInteger(selectedSourceOptionIndex) ? selectedSourceOptionIndex + 1 : null,
-      );
+    try {
+      explanationText = await requestPuterExplanation(question, questionIndex + 1);
+    } catch (puterError) {
+      console.warn('[explanations-ui] puter request failed', {
+        questionIndex,
+        message: puterError?.message || String(puterError || ''),
+      });
+      throw puterError;
     }
 
     if (!isExplanationTextAcceptable(explanationText)) {
@@ -2434,8 +2397,10 @@ export function renderHostedQuizHtml(quiz, options = {}) {
   const quizUrl = typeof options === 'string' ? options : options.quizUrl || null;
   const reportUrl = typeof options === 'object' && options ? options.reportUrl || '' : '';
   const correctionUrl = typeof options === 'object' && options ? options.correctionUrl || '' : '';
-  const explanationUrl = typeof options === 'object' && options ? options.explanationUrl || '' : '';
-  const explanationsEnabled = typeof options === 'object' && options ? Boolean(options.explanationsEnabled) : false;
+  const puterExplanationsEnabled = typeof options === 'object' && options ? Boolean(options.puterExplanationsEnabled) : true;
+  const puterExplanationModel = typeof options === 'object' && options && options.puterExplanationModel
+    ? String(options.puterExplanationModel)
+    : 'google/gemini-2.5-flash-lite';
   const title = htmlEscape(quiz.title);
   const displayUrl = htmlEscape(quizUrl || quiz.slug);
   const bootstrap = safeJsonForScript({
@@ -2443,10 +2408,8 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     quizUrl: quizUrl || '',
     reportUrl,
     correctionUrl,
-    explanationUrl,
-    explanationsEnabled,
-    puterExplanationsEnabled: true,
-    puterExplanationModel: 'gemini-3.1-pro-preview',
+    puterExplanationsEnabled,
+    puterExplanationModel,
     title: quiz.title,
     configuredOptionCount: Number.isInteger(Number(quiz.rawModelJson?.optionCount))
       ? Number(quiz.rawModelJson.optionCount)

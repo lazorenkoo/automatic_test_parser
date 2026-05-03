@@ -43,7 +43,7 @@ import {
   SUPPORTED_ANSWER_EXTENSIONS,
   SUPPORTED_UPLOAD_EXTENSIONS,
 } from './src/parser.js';
-import { createGeminiExplanation, isGeminiExplanationAvailable } from './src/gemini-explanations.js';
+import { createGeminiExplanation } from './src/gemini-explanations.js';
 import { solveQuizAnswersWithAI } from './src/openai-answering.js';
 import { startTelegramBot } from './src/telegram-bot.js';
 import { buildZipBundle, renderHostedQuizHtml } from './src/quiz-assets.js';
@@ -921,8 +921,8 @@ app.get('/quiz/:slug', (req, res) => {
     quizUrl: buildAbsoluteUrl(req, `/quiz/${quiz.slug}`),
     reportUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/report`),
     correctionUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/corrections`),
-    explanationUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/explanations`),
-    explanationsEnabled: isGeminiExplanationAvailable(),
+    puterExplanationsEnabled: String(process.env.PUTER_EXPLANATIONS_ENABLED || '1') !== '0',
+    puterExplanationModel: String(process.env.PUTER_EXPLANATION_MODEL || 'google/gemini-2.5-flash-lite').trim(),
   }));
 });
 
