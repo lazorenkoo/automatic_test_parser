@@ -18,13 +18,6 @@ export async function createGeminiExplanation({
     return buildMockExplanation({ question, selectedOptionNumber });
   }
 
-  const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
-  if (!apiKey) {
-    const error = new Error('Пояснення від ІІ тимчасово недоступне.');
-    error.statusCode = 503;
-    throw error;
-  }
-
   const normalizedQuestionNumber = Number(questionNumber);
   if (!Number.isInteger(normalizedQuestionNumber) || normalizedQuestionNumber < 1) {
     const error = new Error('Invalid question number.');
@@ -45,6 +38,16 @@ export async function createGeminiExplanation({
     throw error;
   }
 
+  const fallbackExplanation = buildFallbackExplanation({
+    question,
+    selectedOptionNumber,
+  });
+
+  const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    return fallbackExplanation;
+  }
+
   const model = String(process.env.GEMINI_MODEL || 'gemini-2.0-flash').trim();
   const prompt = buildExplanationPrompt({
     quizTitle,
@@ -53,33 +56,37 @@ export async function createGeminiExplanation({
     selectedOptionNumber,
   });
 
-  reserveAiRequestSlot({
-    requestKind: 'explanation',
-    model,
-    title: quizTitle || null,
-    sourceFilename: requestContext?.sourceFilename || null,
-    browserId: requestContext?.browserId || null,
-    fingerprint: requestContext?.fingerprint || null,
-    requestIp: requestContext?.requestIp || null,
-    requestUserAgent: requestContext?.requestUserAgent || null,
-  });
+  try {
+    reserveAiRequestSlot({
+      requestKind: 'explanation',
+      model,
+      title: quizTitle || null,
+      sourceFilename: requestContext?.sourceFilename || null,
+      browserId: requestContext?.browserId || null,
+      fingerprint: requestContext?.fingerprint || null,
+      requestIp: requestContext?.requestIp || null,
+      requestUserAgent: requestContext?.requestUserAgent || null,
+    });
+  } catch (_error) {
+    return fallbackExplanation;
+  }
 
   try {
-    const primaryExplanation = await requestGeminiExplanation({
+    const explanation = await requestGeminiExplanation({
       apiKey,
       model,
       prompt,
     });
 
-    if (!isExplanationTooShortOrIncomplete(primaryExplanation)) {
-      return primaryExplanation;
+    if (!isExplanationTooShortOrIncomplete(explanation)) {
+      return explanation;
     }
   } catch (_error) {
-    // If Gemini is temporarily unavailable or rate-limited, fall back to a local
-    // short explanation so the user still gets a useful answer.
+    // Fall back to a local explanation when Gemini is unavailable,
+    // rate-limited, quota-limited, or returns malformed content.
   }
 
-  return buildFallbackExplanation({ question, selectedOptionNumber });
+  return fallbackExplanation;
 }
 
 async function requestGeminiExplanation({
@@ -139,7 +146,7 @@ async function requestGeminiExplanation({
 }
 
 function buildSystemInstruction() {
-  const baseRules = [
+  return [
     'You explain medical multiple-choice quiz answers.',
     'Keep the explanation short, clear, and student-friendly.',
     'Focus on why the correct option is right.',
@@ -149,8 +156,7 @@ function buildSystemInstruction() {
     'Write exactly 2 complete sentences in Ukrainian.',
     'Do not write fragments, sentence starters, headings, bullets, or one-line stubs.',
     'Finish the thought completely.',
-  ];
-  return baseRules.join(' ');
+  ].join(' ');
 }
 
 function buildExplanationPrompt({
@@ -202,8 +208,8 @@ function extractGeminiText(payload) {
 function extractGeminiErrorMessage(payload, statusCode) {
   const rawMessage = sanitizeText(payload?.error?.message || payload?.promptFeedback?.blockReason || '');
   const normalized = rawMessage.toLowerCase();
-
   const retrySeconds = extractRetrySeconds(rawMessage);
+
   if (normalized.includes('quota exceeded') || normalized.includes('rate limit') || normalized.includes('resource exhausted')) {
     if (retrySeconds != null) {
       return `Ліміт ІІ тимчасово вичерпано. Спробуйте ще раз приблизно через ${retrySeconds} с.`;
