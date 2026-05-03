@@ -511,6 +511,7 @@ h1{
 }
 .explanation-panel .modal-body{
   padding:0;
+  white-space:pre-wrap;
 }
 @media (hover:none){
   .option:hover,

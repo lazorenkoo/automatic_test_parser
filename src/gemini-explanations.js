@@ -1,4 +1,3 @@
-import { reserveAiRequestSlot } from './db.js';
 import { sanitizeText } from './utils.js';
 
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -13,14 +12,13 @@ export async function createGeminiExplanation({
   questionNumber,
   question,
   selectedOptionNumber = null,
-  requestContext = null,
 }) {
   if (String(process.env.USE_MOCK_AI || '0') === '1') {
     logExplanation('using mock explanation', {
       questionNumber,
       selectedOptionNumber,
     });
-    return buildMockExplanation({ question, selectedOptionNumber });
+    return buildMockExplanation(question);
   }
 
   const normalizedQuestionNumber = Number(questionNumber);
@@ -43,21 +41,11 @@ export async function createGeminiExplanation({
     throw error;
   }
 
-  const fallbackExplanation = buildFallbackExplanation({ question });
-
-  logExplanation('create start', {
-    questionNumber: normalizedQuestionNumber,
-    selectedOptionNumber,
-    hasApiKey: Boolean(String(process.env.GEMINI_API_KEY || '').trim()),
-    model: String(process.env.GEMINI_MODEL || 'gemini-2.0-flash').trim(),
-  });
-
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
-    logExplanation('fallback: missing api key', {
-      questionNumber: normalizedQuestionNumber,
-    });
-    return fallbackExplanation;
+    const error = new Error('Пояснення від ШІ тимчасово недоступне.');
+    error.statusCode = 503;
+    throw error;
   }
 
   const model = String(process.env.GEMINI_MODEL || 'gemini-2.0-flash').trim();
@@ -65,62 +53,37 @@ export async function createGeminiExplanation({
     quizTitle,
     questionNumber: normalizedQuestionNumber,
     question,
-    selectedOptionNumber,
   });
 
-  try {
-    reserveAiRequestSlot({
-      requestKind: 'explanation',
-      model,
-      title: quizTitle || null,
-      sourceFilename: requestContext?.sourceFilename || null,
-      browserId: requestContext?.browserId || null,
-      fingerprint: requestContext?.fingerprint || null,
-      requestIp: requestContext?.requestIp || null,
-      requestUserAgent: requestContext?.requestUserAgent || null,
-    });
-  } catch (error) {
-    logExplanation('fallback: local ai slot rejected', {
-      questionNumber: normalizedQuestionNumber,
-      reason: error?.message || 'unknown',
-    });
-    return fallbackExplanation;
-  }
+  logExplanation('create start', {
+    questionNumber: normalizedQuestionNumber,
+    selectedOptionNumber,
+    model,
+  });
 
-  try {
-    const explanation = await requestGeminiExplanation({
-      apiKey,
-      model,
-      prompt,
-    });
+  const explanation = await requestGeminiExplanation({
+    apiKey,
+    model,
+    prompt,
+  });
 
-    if (!isExplanationTooShortOrIncomplete(explanation)) {
-      logExplanation('gemini success', {
-        questionNumber: normalizedQuestionNumber,
-        preview: previewText(explanation),
-        length: explanation.length,
-      });
-      return explanation;
-    }
-
-    logExplanation('fallback: gemini response too short', {
+  if (isExplanationTooShortOrIncomplete(explanation)) {
+    logExplanation('gemini response rejected as too weak', {
       questionNumber: normalizedQuestionNumber,
       preview: previewText(explanation),
       length: explanation.length,
     });
-  } catch (error) {
-    logExplanation('fallback: gemini request failed', {
-      questionNumber: normalizedQuestionNumber,
-      reason: error?.message || 'unknown',
-    });
+    const error = new Error('ШІ повернув надто коротке пояснення. Спробуйте ще раз.');
+    error.statusCode = 502;
+    throw error;
   }
 
-  logExplanation('returning fallback explanation', {
+  logExplanation('gemini success', {
     questionNumber: normalizedQuestionNumber,
-    preview: previewText(fallbackExplanation),
-    length: fallbackExplanation.length,
+    preview: previewText(explanation),
+    length: explanation.length,
   });
-  return fallbackExplanation;
+  return explanation;
 }
 
 async function requestGeminiExplanation({
@@ -154,9 +117,9 @@ async function requestGeminiExplanation({
           },
         ],
         generationConfig: {
-          temperature: 0.15,
-          topP: 0.9,
-          maxOutputTokens: 450,
+          temperature: 0.1,
+          topP: 0.85,
+          maxOutputTokens: 500,
         },
       }),
     },
@@ -178,7 +141,7 @@ async function requestGeminiExplanation({
 
   const explanation = sanitizeExplanation(extractGeminiText(payload));
   if (!explanation) {
-    const error = new Error('Не вдалося отримати пояснення від ІІ.');
+    const error = new Error('Не вдалося отримати пояснення від ШІ.');
     error.statusCode = 502;
     throw error;
   }
@@ -186,42 +149,22 @@ async function requestGeminiExplanation({
   return explanation;
 }
 
-function logExplanation(message, details = null) {
-  if (details && Object.keys(details).length > 0) {
-    console.log(EXPLANATION_LOG_PREFIX, message, details);
-    return;
-  }
-  console.log(EXPLANATION_LOG_PREFIX, message);
-}
-
-function previewText(value, maxLength = 160) {
-  const normalized = sanitizeText(value).replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return '';
-  }
-  return normalized.length > maxLength
-    ? `${normalized.slice(0, maxLength - 1)}…`
-    : normalized;
-}
-
 function buildSystemInstruction() {
   return [
-    'You explain medical multiple-choice quiz answers.',
-    'Write a concise but medically meaningful explanation, not a superficial restatement.',
-    'Focus only on why the correct option is right.',
-    'Do not explain why the wrong option is wrong.',
-    'Explain the medical basis of the correct answer: mechanism, pathophysiology, anatomy, pharmacology, physiology, diagnosis, microbiology, or clinical sign as appropriate.',
-    'Do not mention being an AI model.',
-    'Do not add warnings or generic disclaimers.',
-    'Write 2 or 3 complete sentences in Ukrainian.',
-    'Do not write fragments, headings, bullets, or one-line stubs.',
-    'Do not restate the full question because it will be shown separately in the UI.',
-    'Do not start with "Правильна відповідь" because the UI will show it separately.',
-    'Start immediately with the factual medical explanation.',
-    'Use concrete medical facts rather than generic phrases.',
-    'Name the exact mechanism, pathogen, anatomical structure, laboratory change, drug effect, disease process, or clinical sign that makes the answer correct.',
-    'If relevant, explain how that mechanism leads to the symptom, diagnosis, finding, or treatment effect described in the question.',
-    'Make the explanation easy to remember.',
+    'You explain medical multiple-choice test answers in Ukrainian.',
+    'Follow the exact output structure below.',
+    'First line: one short sentence naming the correct answer.',
+    'Then a blank line.',
+    'Then "Суть:" on its own line.',
+    'Then 2 short sentences with a concrete medical explanation.',
+    'Then a blank line.',
+    'Then "Маркер:" on its own line.',
+    'Then 1 short memorable sentence or formula.',
+    'Do not analyze wrong options.',
+    'Do not use vague phrases.',
+    'Do not repeat the full question.',
+    'Use specific facts: mechanism, hormone effect, pathogen trait, anatomy, pathophysiology, or clinical sign.',
+    'Make the answer easy to remember.',
   ].join(' ');
 }
 
@@ -229,36 +172,25 @@ function buildExplanationPrompt({
   quizTitle,
   questionNumber,
   question,
-  selectedOptionNumber,
 }) {
-  const optionLines = question.options.map((option, index) => {
-    const markers = [];
-    if (index === Number(question.correctIndex)) {
-      markers.push('correct');
-    }
-    if (Number.isInteger(Number(selectedOptionNumber)) && index + 1 === Number(selectedOptionNumber)) {
-      markers.push('selected');
-    }
-
-    const suffix = markers.length ? ` [${markers.join(', ')}]` : '';
-    return `${index + 1}. ${sanitizeText(option)}${suffix}`;
-  });
+  const correctAnswer = sanitizeText(question.options[Number(question.correctIndex)] || '');
 
   return [
     `Quiz: ${sanitizeText(quizTitle || 'Quiz')}`,
     `Question ${questionNumber}: ${sanitizeText(question.q)}`,
-    `Correct answer: ${sanitizeText(question.options[Number(question.correctIndex)] || '')}`,
-    'Options:',
-    ...optionLines,
+    `Correct answer: ${correctAnswer}`,
     '',
-    'Explain in Ukrainian why the correct answer is medically correct.',
-    'Do not discuss why the chosen wrong answer is wrong.',
-    'Do not restate the full question because it will be shown above the explanation in the UI.',
-    'Do not begin with "Правильна відповідь".',
-    'Start directly with the medical explanation.',
-    'Give a real medical explanation with the key mechanism, feature, definition, anatomical basis, physiological process, pathological process, microbiological basis, or pharmacological action.',
-    'Use concrete facts, not generic wording.',
-    'Make it easy to remember in 2 or 3 sentences.',
+    'Write the answer exactly in this format:',
+    `${correctAnswer} ...`,
+    '',
+    'Суть:',
+    '2 short medically specific sentences.',
+    '',
+    'Маркер:',
+    '1 short memorable sentence.',
+    '',
+    'The explanation must say why the correct answer is right in medical terms.',
+    'Do not discuss why other answers are wrong.',
   ].join('\n');
 }
 
@@ -275,8 +207,33 @@ function extractGeminiText(payload) {
       return text;
     }
   }
-
   return '';
+}
+
+function sanitizeExplanation(value) {
+  return String(value || '')
+    .replace(/\r/g, '')
+    .replace(/\*+/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function isExplanationTooShortOrIncomplete(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return true;
+  }
+
+  if (!normalized.includes('Суть:') || !normalized.includes('Маркер:')) {
+    return true;
+  }
+
+  if (normalized.length < 80) {
+    return true;
+  }
+
+  return false;
 }
 
 function extractGeminiErrorMessage(payload, statusCode) {
@@ -286,23 +243,23 @@ function extractGeminiErrorMessage(payload, statusCode) {
 
   if (normalized.includes('quota exceeded') || normalized.includes('rate limit') || normalized.includes('resource exhausted')) {
     if (retrySeconds != null) {
-      return `Ліміт ІІ тимчасово вичерпано. Спробуйте ще раз приблизно через ${retrySeconds} с.`;
+      return `Ліміт ШІ тимчасово вичерпано. Спробуйте ще раз приблизно через ${retrySeconds} с.`;
     }
-    return 'Ліміт ІІ тимчасово вичерпано. Спробуйте ще раз трохи пізніше.';
+    return 'Ліміт ШІ тимчасово вичерпано. Спробуйте ще раз трохи пізніше.';
   }
 
   if (statusCode === 429) {
     if (retrySeconds != null) {
-      return `Забагато запитів до ІІ. Спробуйте ще раз приблизно через ${retrySeconds} с.`;
+      return `Забагато запитів до ШІ. Спробуйте ще раз приблизно через ${retrySeconds} с.`;
     }
-    return 'Забагато запитів до ІІ. Спробуйте ще раз трохи пізніше.';
+    return 'Забагато запитів до ШІ. Спробуйте ще раз трохи пізніше.';
   }
 
   if (rawMessage) {
     return rawMessage;
   }
 
-  return 'Не вдалося отримати пояснення від ІІ.';
+  return 'Не вдалося отримати пояснення від ШІ.';
 }
 
 function extractRetrySeconds(message) {
@@ -319,54 +276,33 @@ function extractRetrySeconds(message) {
   return Math.max(1, Math.ceil(value));
 }
 
-function sanitizeExplanation(value) {
-  return sanitizeText(value)
-    .replace(/\*+/g, '')
-    .replace(/^Правильна відповідь\s*[—-]\s*[^.?!]+[.?!:]\s*/iu, '')
-    .replace(/^У\s+(?:завданні|запитанні)\s+йдеться\s+про\s+(?:таке:)?\s*/iu, '')
-    .trim();
-}
-
-function isExplanationTooShortOrIncomplete(value) {
-  const normalized = sanitizeText(value);
+function previewText(value, maxLength = 160) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
   if (!normalized) {
-    return true;
+    return '';
   }
-
-  if (normalized.length < 40) {
-    return true;
-  }
-
-  if (!/[.!?…]$/.test(normalized) && normalized.length < 80) {
-    return true;
-  }
-
-  const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length < 8) {
-    return true;
-  }
-
-  return false;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1)}…`
+    : normalized;
 }
 
-function buildFallbackExplanation({ question }) {
-  const correctOptionIndex = Number(question?.correctIndex);
-  const correctAnswer = Array.isArray(question?.options)
-    ? sanitizeText(question.options[correctOptionIndex] || '')
-    : '';
-
-  if (correctAnswer) {
-    return `цей варіант є правильним, бо саме він відповідає ключовому медичному критерію, який потрібно встановити. Його правильність визначається конкретним механізмом, клінічною ознакою, анатомічною структурою, збудником, лабораторною зміною або фармакологічною дією, що безпосередньо пов’язані з варіантом ${correctAnswer}.`;
-  }
-
-  return 'цей варіант є правильним, бо він відповідає конкретному медичному механізму або визначальній клінічній ознаці, яку потрібно встановити.';
+function buildMockExplanation(question) {
+  const correctAnswer = sanitizeText(question?.options?.[Number(question?.correctIndex)] || 'правильна відповідь');
+  return [
+    `${correctAnswer} є правильною відповіддю.`,
+    '',
+    'Суть:',
+    'Саме цей варіант відповідає ключовому медичному механізму або ознаці, яку перевіряє завдання. Правильність визначається конкретним фізіологічним, патологічним або фармакологічним змістом.',
+    '',
+    'Маркер:',
+    `${correctAnswer} = ключовий механізм або ознака з умови.`,
+  ].join('\n');
 }
 
-function buildMockExplanation({ question, selectedOptionNumber }) {
-  const correctOptionNumber = Number(question?.correctIndex) + 1;
-  if (Number(selectedOptionNumber) === correctOptionNumber) {
-    return 'саме цей варіант збігається з основною медичною ознакою або механізмом, який перевіряє завдання. Його правильність визначається конкретним патофізіологічним, анатомічним, мікробіологічним або фармакологічним змістом.';
+function logExplanation(message, details = null) {
+  if (details && Object.keys(details).length > 0) {
+    console.log(EXPLANATION_LOG_PREFIX, message, details);
+    return;
   }
-
-  return 'саме цей варіант відповідає ключовому медичному змісту завдання. Його правильність треба пояснювати через конкретний механізм, ознаку або процес, а не через загальні слова.';
+  console.log(EXPLANATION_LOG_PREFIX, message);
 }
