@@ -305,7 +305,7 @@ function buildBatchSourceSnippet(extractedText, startQuestionNumber, endQuestion
   return sourceText.slice(startIndex, endIndex).trim().slice(0, 12000);
 }
 
-function chunkQuestionsForRepair(questions, chunkSize = 20) {
+function chunkQuestionsForRepair(questions, chunkSize = 80) {
   const chunks = [];
   for (let index = 0; index < questions.length; index += chunkSize) {
     chunks.push(questions.slice(index, index + chunkSize));
