@@ -28,6 +28,8 @@ body{
 .shell{
   max-width:980px;
   margin:0 auto;
+  display:flex;
+  flex-direction:column;
   padding:32px 18px 48px;
   padding-left:max(18px, env(safe-area-inset-left));
   padding-right:max(18px, env(safe-area-inset-right));
@@ -284,12 +286,11 @@ h1{
   color:var(--muted);
 }
 .report-fab{
-  position:fixed;
-  left:50%;
-  bottom:max(18px, calc(env(safe-area-inset-bottom) + 12px));
-  transform:translateX(-50%);
+  display:block;
+  order:999;
+  align-self:center;
+  margin:18px auto 0;
   width:min(420px, calc(100vw - 36px));
-  z-index:20;
 }
 .toast{
   position:fixed;
@@ -591,10 +592,7 @@ h1{
     border-radius:14px;
   }
   .report-fab{
-    left:50%;
-    right:auto;
-    bottom:max(12px, calc(env(safe-area-inset-bottom) + 8px));
-    transform:translateX(-50%);
+    margin:14px auto 0;
     width:min(420px, calc(100vw - 24px));
   }
   .toast{
