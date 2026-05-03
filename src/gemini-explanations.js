@@ -64,6 +64,35 @@ export async function createGeminiExplanation({
     requestUserAgent: requestContext?.requestUserAgent || null,
   });
 
+  const primaryExplanation = await requestGeminiExplanation({
+    apiKey,
+    model,
+    prompt,
+    strictMode: false,
+  });
+
+  if (!isExplanationTooShortOrIncomplete(primaryExplanation)) {
+    return primaryExplanation;
+  }
+
+  const retryExplanation = await requestGeminiExplanation({
+    apiKey,
+    model,
+    prompt,
+    strictMode: true,
+  });
+
+  return isExplanationTooShortOrIncomplete(retryExplanation)
+    ? primaryExplanation
+    : retryExplanation;
+}
+
+async function requestGeminiExplanation({
+  apiKey,
+  model,
+  prompt,
+  strictMode = false,
+}) {
   const response = await fetch(
     `${GEMINI_API_BASE_URL}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
@@ -75,15 +104,7 @@ export async function createGeminiExplanation({
         systemInstruction: {
           parts: [
             {
-              text: [
-                'You explain medical multiple-choice quiz answers.',
-                'Keep the explanation short, clear, and student-friendly.',
-                'Use at most 3 short sentences.',
-                'Focus on why the correct option is right.',
-                'If the selected answer is wrong, briefly say why it is less suitable only when it helps.',
-                'Do not mention being an AI model.',
-                'Do not add warnings or generic disclaimers.',
-              ].join(' '),
+              text: buildSystemInstruction(strictMode),
             },
           ],
         },
@@ -98,9 +119,9 @@ export async function createGeminiExplanation({
           },
         ],
         generationConfig: {
-          temperature: 0.3,
+          temperature: strictMode ? 0.2 : 0.3,
           topP: 0.9,
-          maxOutputTokens: 180,
+          maxOutputTokens: strictMode ? 260 : 180,
         },
       }),
     },
@@ -121,6 +142,27 @@ export async function createGeminiExplanation({
   }
 
   return explanation;
+}
+
+function buildSystemInstruction(strictMode) {
+  const baseRules = [
+    'You explain medical multiple-choice quiz answers.',
+    'Keep the explanation short, clear, and student-friendly.',
+    'Focus on why the correct option is right.',
+    'If the selected answer is wrong, briefly say why it is less suitable only when it helps.',
+    'Do not mention being an AI model.',
+    'Do not add warnings or generic disclaimers.',
+  ];
+
+  if (!strictMode) {
+    baseRules.push('Use at most 3 short sentences.');
+    return baseRules.join(' ');
+  }
+
+  baseRules.push('Write exactly 2 complete sentences in Ukrainian.');
+  baseRules.push('Do not write fragments, sentence starters, headings, bullets, or one-line stubs.');
+  baseRules.push('Finish the thought completely.');
+  return baseRules.join(' ');
 }
 
 function buildExplanationPrompt({
@@ -212,6 +254,28 @@ function extractRetrySeconds(message) {
 function sanitizeExplanation(value) {
   const normalized = sanitizeText(value).replace(/\*+/g, '');
   return normalized.slice(0, 420);
+}
+
+function isExplanationTooShortOrIncomplete(value) {
+  const normalized = sanitizeText(value);
+  if (!normalized) {
+    return true;
+  }
+
+  if (normalized.length < 45) {
+    return true;
+  }
+
+  if (!/[.!?…]$/.test(normalized) && normalized.length < 120) {
+    return true;
+  }
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length < 6) {
+    return true;
+  }
+
+  return false;
 }
 
 function buildMockExplanation({ question, selectedOptionNumber }) {
