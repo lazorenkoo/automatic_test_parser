@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseQuizFromFile } from '../src/parser.js';
+import { parseQuizFromFile, __test__ } from '../src/parser.js';
 
 test('keeps overflowed multi-line answer options together in explicit numbered blocks', async () => {
   const sourceText = [
@@ -52,6 +52,52 @@ test('keeps overflowed multi-line answer options together in explicit numbered b
       'Санітарний регламент « Загальноосвітні навчальні заклади»',
       'ДСТУ 5.5.2.008-01 « Навчальні заклади. Вимоги до експлуатації»',
       'ДБН В.2.2-3-97 Будинки та споруди навчальних закладів',
+    ],
+  );
+});
+
+test('recovers numeric answer choices leaked into the next question after a PDF page break', () => {
+  const result = __test__.repairCrossQuestionLeadingOptionLeaks([
+    {
+      q: '28. На 1000 мешканців населеного пункту в дитячому дошкільному закладі планується:',
+      options: [
+        '10 – 20 місць',
+        '15 – 18 місць',
+      ],
+      correctIndex: 0,
+    },
+    {
+      q: '29. Площа озеленення ділянки дошкільного закладу повинна становити:',
+      options: [
+        'Не нормується 30 – 40 місць 70 – 90 місць 100 – 120 місць',
+        '23 – 40%',
+        '10 – 12%',
+        '50%',
+        'Не менше 80%.',
+      ],
+      correctIndex: 0,
+    },
+  ], 5);
+
+  assert.equal(result.questions.length, 2);
+  assert.deepEqual(
+    result.questions[0].options,
+    [
+      '30 – 40 місць',
+      '70 – 90 місць',
+      '100 – 120 місць',
+      '10 – 20 місць',
+      '15 – 18 місць',
+    ],
+  );
+  assert.deepEqual(
+    result.questions[1].options,
+    [
+      'Не нормується',
+      '23 – 40%',
+      '10 – 12%',
+      '50%',
+      'Не менше 80%.',
     ],
   );
 });

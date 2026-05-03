@@ -209,6 +209,19 @@ export async function parseQuizFromFile({
   questions = tailRepair.questions;
   notes.push(...tailRepair.notes);
 
+  const crossQuestionRepair = repairCrossQuestionLeadingOptionLeaks(questions, normalizedOptionCount);
+  questions = crossQuestionRepair.questions;
+  notes.push(...crossQuestionRepair.notes);
+
+  const reviewRecovery = repairMissingNumberedQuestionsFromReviewBlocks(
+    questions,
+    reviewBlocks,
+    normalizedOptionCount,
+    safeAnswerIndex,
+  );
+  questions = reviewRecovery.questions;
+  notes.push(...reviewRecovery.notes);
+
   questions = normalizeParsedQuestionsForOutput(questions, normalizedOptionCount, safeAnswerIndex);
   const normalizedTailRepair = repairNormalizedQuestionTailOptionLeaks(questions, normalizedOptionCount);
   questions = normalizedTailRepair.questions;
@@ -243,6 +256,8 @@ export async function parseQuizFromFile({
 export const __test__ = {
   rebuildPdfPageTextForReadingOrder,
   repairEmbeddedQuestionLeaks,
+  repairCrossQuestionLeadingOptionLeaks,
+  repairMissingNumberedQuestionsFromReviewBlocks,
   normalizeParsedQuestionsForOutput,
   parseQuestionsBySequentialBlocks,
 };
@@ -2714,6 +2729,252 @@ function repairQuestionTailOptionLeaks(questions, optionCount) {
     questions: repairedQuestions,
     notes,
   };
+}
+
+function repairCrossQuestionLeadingOptionLeaks(questions, optionCount) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+  let repairedCount = 0;
+
+  if (expectedOptionCount !== 5) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  for (let index = 1; index < repairedQuestions.length; index += 1) {
+    const previous = repairedQuestions[index - 1];
+    const current = repairedQuestions[index];
+    const previousOptions = Array.isArray(previous?.options)
+      ? previous.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    const currentOptions = Array.isArray(current?.options)
+      ? current.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    const missingCount = expectedOptionCount - previousOptions.length;
+
+    if (missingCount < 1 || missingCount > 3 || currentOptions.length !== expectedOptionCount) {
+      continue;
+    }
+
+    const splitLeak = splitLeadingOptionWithNumericFragments(currentOptions[0], missingCount);
+    if (!splitLeak) {
+      continue;
+    }
+
+    previous.options = [...splitLeak.leakedOptions, ...previousOptions].slice(0, expectedOptionCount);
+    current.options = [splitLeak.currentOption, ...currentOptions.slice(1)];
+    repairedCount += 1;
+  }
+
+  if (repairedCount > 0) {
+    notes.push(`Recovered leaked answer options from the next question: ${repairedCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function repairMissingNumberedQuestionsFromReviewBlocks(questions, reviewBlocks, optionCount, answerIndex) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+
+  if (expectedOptionCount !== 5 || !Array.isArray(reviewBlocks) || !reviewBlocks.length) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  const availableBlocks = reviewBlocks
+    .filter((block) => /raw-explicit-number-block|explicit-number-block/i.test(String(block?.reason || '')))
+    .map((block, index) => ({ ...block, __index: index }))
+    .filter((block) => sanitizeText(block?.text));
+  if (!availableBlocks.length) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  const consumedBlockIndexes = new Set();
+  let repairedCount = 0;
+
+  for (let index = 1; index < repairedQuestions.length; index += 1) {
+    const previous = repairedQuestions[index - 1];
+    const current = repairedQuestions[index];
+    const previousNumber = extractLeadingQuestionNumber(previous?.q);
+    const currentNumber = extractLeadingQuestionNumber(current?.q);
+
+    if (!Number.isInteger(previousNumber) || !Number.isInteger(currentNumber) || currentNumber !== previousNumber + 2) {
+      continue;
+    }
+
+    const missingNumber = previousNumber + 1;
+    const currentOptions = Array.isArray(current?.options)
+      ? current.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    if (currentOptions.length !== expectedOptionCount) {
+      continue;
+    }
+
+    let recovered = null;
+    let recoveredBlockIndex = -1;
+    for (const block of availableBlocks) {
+      if (consumedBlockIndexes.has(block.__index)) {
+        continue;
+      }
+
+      const candidate = recoverMissingQuestionFromReviewBlock(
+        block.text,
+        missingNumber,
+        currentOptions[0],
+        expectedOptionCount,
+        answerIndex,
+      );
+      if (candidate) {
+        recovered = candidate;
+        recoveredBlockIndex = block.__index;
+        break;
+      }
+    }
+
+    if (!recovered) {
+      continue;
+    }
+
+    consumedBlockIndexes.add(recoveredBlockIndex);
+    current.options = [recovered.currentFirstOption, ...currentOptions.slice(1)];
+    repairedQuestions.splice(index, 0, recovered.question);
+    repairedCount += 1;
+    index += 1;
+  }
+
+  if (repairedCount > 0) {
+    notes.push(`Recovered dropped numbered questions from review blocks: ${repairedCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function splitLeadingOptionWithNumericFragments(optionText, missingCount) {
+  const text = sanitizeText(optionText);
+  if (!text || !Number.isInteger(missingCount) || missingCount < 1) {
+    return null;
+  }
+
+  const matches = [];
+  const numericRangePattern = /\d+\s*[\u2010-\u2015\u2212-]\s*\d+(?:\s+[^\d]+?)(?=(?:\s+\d+\s*[\u2010-\u2015\u2212-]\s*\d+\b)|$)/gu;
+  let match;
+  while ((match = numericRangePattern.exec(text)) !== null) {
+    matches.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      value: sanitizeText(match[0]),
+    });
+  }
+
+  if (matches.length !== missingCount) {
+    return null;
+  }
+
+  const currentOption = sanitizeText(text.slice(0, matches[0].start));
+  if (!currentOption || !looksLikeStandaloneOptionLine(currentOption)) {
+    return null;
+  }
+
+  const leakedOptions = matches.map((item) => item.value).filter(Boolean);
+  if (leakedOptions.length !== missingCount || !leakedOptions.every((item) => looksLikeStandaloneOptionLine(item))) {
+    return null;
+  }
+
+  return {
+    currentOption,
+    leakedOptions,
+  };
+}
+
+function recoverMissingQuestionFromReviewBlock(reviewText, missingNumber, currentFirstOption, expectedOptionCount, answerIndex) {
+  const text = sanitizeText(reviewText);
+  if (!text || !Number.isInteger(missingNumber)) {
+    return null;
+  }
+
+  const questionBoundaryIndex = findReviewBlockQuestionBoundary(text);
+  if (questionBoundaryIndex < 0) {
+    return null;
+  }
+
+  const questionText = sanitizeText(text.slice(0, questionBoundaryIndex + 1));
+  const tailText = sanitizeText(text.slice(questionBoundaryIndex + 1));
+  const recoveredTailOptions = extractNumericRangeOptions(tailText);
+  if (!questionText || !recoveredTailOptions.length || recoveredTailOptions.length >= expectedOptionCount) {
+    return null;
+  }
+
+  const missingCount = expectedOptionCount - recoveredTailOptions.length;
+  const splitLeak = splitLeadingOptionWithNumericFragments(currentFirstOption, missingCount);
+  if (!splitLeak) {
+    return null;
+  }
+
+  const options = [...splitLeak.leakedOptions, ...recoveredTailOptions].slice(0, expectedOptionCount);
+  if (options.length !== expectedOptionCount) {
+    return null;
+  }
+
+  return {
+    currentFirstOption: splitLeak.currentOption,
+    question: {
+      q: `${missingNumber}. ${questionText}`,
+      options,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, expectedOptionCount),
+      sourceQuestionNumber: missingNumber,
+    },
+  };
+}
+
+function findReviewBlockQuestionBoundary(text) {
+  const value = sanitizeText(text);
+  if (!value) {
+    return -1;
+  }
+
+  const colonIndex = value.lastIndexOf(':');
+  if (colonIndex >= 0) {
+    return colonIndex;
+  }
+
+  const questionIndex = value.lastIndexOf('?');
+  return questionIndex >= 0 ? questionIndex : -1;
+}
+
+function extractNumericRangeOptions(text) {
+  const normalized = sanitizeText(text);
+  if (!normalized) {
+    return [];
+  }
+
+  const matches = [];
+  const numericRangePattern = /\d+\s*[\u2010-\u2015\u2212-]\s*\d+(?:\s+[^\d]+?)(?=(?:\s+\d+\s*[\u2010-\u2015\u2212-]\s*\d+\b)|$)/gu;
+  let match;
+  while ((match = numericRangePattern.exec(normalized)) !== null) {
+    const value = sanitizeText(String(match[0] || '').replace(/[\uE000-\uF8FF]+/gu, ' '));
+    if (value) {
+      matches.push(value);
+    }
+  }
+
+  return matches;
 }
 
 function repairNormalizedQuestionTailOptionLeaks(questions, optionCount) {
