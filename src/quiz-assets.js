@@ -426,20 +426,52 @@ h1{
   background:#fff5e8;
   color:#9a3412;
 }
-.explanation-panel{
-  margin-top:14px;
-  padding:14px 16px;
-  border:1px solid var(--line);
-  border-radius:18px;
-  background:#fffaf3;
-  line-height:1.5;
+.modal-backdrop{
+  position:fixed;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  background:rgba(31,41,55,.38);
+  backdrop-filter:blur(6px);
+  z-index:60;
 }
-.explanation-panel.loading{
+.modal-card{
+  width:min(560px, 100%);
+  border:1px solid var(--line);
+  border-radius:24px;
+  background:#fffdf9;
+  box-shadow:0 24px 80px rgba(31,41,55,.18);
+  overflow:hidden;
+}
+.modal-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:20px 22px 14px;
+  border-bottom:1px solid rgba(234,223,207,.8);
+}
+.modal-title{
+  margin:0;
+  font-size:22px;
+}
+.modal-close{
+  min-width:auto;
+  padding:8px 10px;
+  border-radius:12px;
+}
+.modal-body{
+  padding:18px 22px 22px;
+  line-height:1.6;
+  font-size:16px;
+  color:var(--ink);
+}
+.modal-body.loading{
   color:var(--muted);
 }
-.explanation-panel.error{
-  border-color:#f2c28b;
-  background:#fff5e8;
+.modal-body.error{
   color:#9a3412;
 }
 @media (hover:none){
@@ -532,6 +564,13 @@ h1{
     padding:14px;
     border-radius:16px;
   }
+  .modal-backdrop{
+    padding:12px;
+    align-items:flex-end;
+  }
+  .modal-card{
+    border-radius:20px 20px 0 0;
+  }
   .timer-inline{
     grid-template-columns:1fr;
   }
@@ -581,7 +620,7 @@ const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
 const correctionUrl = bootstrapData.correctionUrl || '';
 const explanationUrl = bootstrapData.explanationUrl || '';
-const explanationsEnabled = Boolean(bootstrapData.explanationsEnabled && explanationUrl);
+const explanationsEnabled = Boolean(explanationUrl);
 const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOptionCount))
   ? Math.max(0, Number(bootstrapData.configuredOptionCount))
   : 0;
@@ -636,6 +675,9 @@ i18n.explain = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F';
 i18n.explainLoading = '\u0413\u043E\u0442\u0443\u044E \u043A\u043E\u0440\u043E\u0442\u043A\u0435 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F...';
 i18n.explainUnavailable = '\u0417\u0430\u0440\u0430\u0437 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0435.';
 i18n.explainError = '\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u043F\u0456\u0437\u043D\u0456\u0448\u0435.';
+i18n.explainTitle = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F \u0432\u0456\u0434 \u0406\u0406';
+i18n.explainWaiting = '\u0417\u0430\u043F\u0438\u0442 \u0434\u043E \u0406\u0406 \u0439\u0434\u0435...';
+i18n.close = '\u0417\u0430\u043A\u0440\u0438\u0442\u0438';
 i18n.timerTitle = '\u0422\u0430\u0439\u043C\u0435\u0440';
 i18n.timerMode = '\u0420\u0435\u0436\u0438\u043C \u0442\u0430\u0439\u043C\u0435\u0440\u0430';
 i18n.timerOff = '\u0411\u0435\u0437 \u0442\u0430\u0439\u043C\u0435\u0440\u0430';
@@ -696,7 +738,9 @@ const els = {
   finish: document.getElementById('finish'),
   correctionOpenBtn: document.getElementById('correctionOpenBtn'),
   explainBtn: document.getElementById('explainBtn'),
-  explanationPanel: document.getElementById('explanationPanel'),
+  explanationModal: document.getElementById('explanationModal'),
+  explanationModalBody: document.getElementById('explanationModalBody'),
+  explanationModalCloseBtn: document.getElementById('explanationModalCloseBtn'),
   correctionPanel: document.getElementById('correctionPanel'),
   timerModeSelect: document.getElementById('timerModeSelect'),
   questionModeSelect: document.getElementById('questionModeSelect'),
@@ -860,7 +904,7 @@ function hide(node) {
 }
 
 function ensureExplanationUi() {
-  if (els.explainBtn && els.explanationPanel) {
+  if (els.explainBtn && els.explanationModal && els.explanationModalBody && els.explanationModalCloseBtn) {
     return;
   }
 
@@ -880,17 +924,28 @@ function ensureExplanationUi() {
     els.explainBtn = button;
   }
 
-  if (!els.explanationPanel) {
-    const panel = document.createElement('div');
-    panel.id = 'explanationPanel';
-    panel.className = 'explanation-panel hidden';
-    const anchor = els.correctionPanel || controls.nextElementSibling;
-    if (anchor && anchor.parentNode === quizSection) {
-      quizSection.insertBefore(panel, anchor);
-    } else {
-      quizSection.appendChild(panel);
-    }
-    els.explanationPanel = panel;
+  if (!els.explanationModal) {
+    const modal = document.createElement('div');
+    modal.id = 'explanationModal';
+    modal.className = 'modal-backdrop hidden';
+    modal.innerHTML =
+      '<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="explanationModalTitle">' +
+      '<div class="modal-head">' +
+      '<h3 id="explanationModalTitle" class="modal-title">' + t('explainTitle') + '</h3>' +
+      '<button id="explanationModalCloseBtn" class="btn secondary modal-close" type="button">' + t('close') + '</button>' +
+      '</div>' +
+      '<div id="explanationModalBody" class="modal-body"></div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    els.explanationModal = modal;
+    els.explanationModalBody = document.getElementById('explanationModalBody');
+    els.explanationModalCloseBtn = document.getElementById('explanationModalCloseBtn');
+    els.explanationModalCloseBtn?.addEventListener('click', closeExplanationModal);
+    els.explanationModal?.addEventListener('click', (event) => {
+      if (event.target === els.explanationModal) {
+        closeExplanationModal();
+      }
+    });
   }
 }
 
@@ -1229,6 +1284,7 @@ function startQuiz() {
   state.resultsFilter = 'all';
   state.resultsSnapshot = null;
   state.explanationsByQuestion = {};
+  closeExplanationModal();
 
   hide(els.start);
   hide(els.results);
@@ -1308,56 +1364,32 @@ function renderExplanationState(questionIndex) {
     els.explainBtn.classList.toggle('hidden', !explanationsEnabled);
     els.explainBtn.disabled = state.chosenAt[questionIndex] === null;
   }
+}
 
-  if (!els.explanationPanel) {
+function openExplanationModal(kind, message) {
+  if (!els.explanationModal || !els.explanationModalBody) {
     return;
   }
 
-  const entry = state.explanationsByQuestion[questionIndex];
-  const isAnswered = state.chosenAt[questionIndex] !== null;
-
-  els.explanationPanel.classList.remove('loading', 'error');
-
-  if (!isAnswered || !explanationsEnabled) {
-    els.explanationPanel.textContent = '';
-    hide(els.explanationPanel);
-    return;
+  els.explanationModalBody.classList.remove('loading', 'error');
+  if (kind === 'loading') {
+    els.explanationModalBody.classList.add('loading');
   }
-
-  if (!entry) {
-    els.explanationPanel.textContent = '';
-    hide(els.explanationPanel);
-    return;
+  if (kind === 'error') {
+    els.explanationModalBody.classList.add('error');
   }
+  els.explanationModalBody.textContent = String(message || '');
+  show(els.explanationModal);
+}
 
-  if (entry.status === 'loading') {
-    els.explanationPanel.textContent = t('explainLoading');
-    els.explanationPanel.classList.add('loading');
-    show(els.explanationPanel);
-    return;
-  }
-
-  if (entry.status === 'error') {
-    els.explanationPanel.textContent = entry.message || t('explainError');
-    els.explanationPanel.classList.add('error');
-    show(els.explanationPanel);
-    return;
-  }
-
-  if (entry.status === 'ready' && entry.text) {
-    els.explanationPanel.textContent = entry.text;
-    show(els.explanationPanel);
-    return;
-  }
-
-  els.explanationPanel.textContent = '';
-  hide(els.explanationPanel);
+function closeExplanationModal() {
+  hide(els.explanationModal);
 }
 
 async function requestExplanation() {
   const { sourceQuestionIndex: questionIndex, optionOrder } = getCurrentQuestionContext();
   if (!explanationsEnabled || !explanationUrl) {
-    showToast(t('explainUnavailable'));
+    openExplanationModal('error', t('explainUnavailable'));
     return;
   }
 
@@ -1368,10 +1400,11 @@ async function requestExplanation() {
 
   const cached = state.explanationsByQuestion[questionIndex];
   if (cached?.status === 'ready') {
-    renderExplanationState(questionIndex);
+    openExplanationModal('ready', cached.text);
     return;
   }
   if (cached?.status === 'loading') {
+    openExplanationModal('loading', t('explainWaiting'));
     return;
   }
 
@@ -1381,7 +1414,7 @@ async function requestExplanation() {
     text: '',
     message: '',
   };
-  renderExplanationState(questionIndex);
+  openExplanationModal('loading', t('explainWaiting'));
 
   try {
     const response = await fetch(explanationUrl, {
@@ -1405,16 +1438,15 @@ async function requestExplanation() {
       text: String(result?.explanation || '').trim(),
       message: '',
     };
+    openExplanationModal('ready', state.explanationsByQuestion[questionIndex].text);
   } catch (error) {
     state.explanationsByQuestion[questionIndex] = {
       status: 'error',
       text: '',
       message: error?.message || t('explainError'),
     };
+    openExplanationModal('error', state.explanationsByQuestion[questionIndex].message);
   }
-
-  const currentContext = getCurrentQuestionContext();
-  renderExplanationState(currentContext.sourceQuestionIndex);
 }
 
 function nextQuestion() {
@@ -1831,6 +1863,7 @@ function resetQuiz() {
   state.resultsSnapshot = null;
   state.explanationsByQuestion = {};
   state.questions = sourceQuestions;
+  closeExplanationModal();
   hide(els.quiz);
   hide(els.results);
   show(els.start);
@@ -1925,6 +1958,11 @@ document.addEventListener('DOMContentLoaded', () => {
   els.resultsFilterWrongBtn?.addEventListener('click', () => setResultsFilter('wrong'));
   els.restartBtn?.addEventListener('click', resetQuiz);
   els.reportBtn?.addEventListener('click', reportBrokenQuiz);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeExplanationModal();
+    }
+  });
 });
 `.trim();
 

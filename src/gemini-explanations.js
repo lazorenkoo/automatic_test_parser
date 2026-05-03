@@ -20,7 +20,7 @@ export async function createGeminiExplanation({
 
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
-    const error = new Error('GEMINI_API_KEY is not configured.');
+    const error = new Error('Пояснення від ІІ тимчасово недоступне.');
     error.statusCode = 503;
     throw error;
   }
@@ -80,7 +80,7 @@ export async function createGeminiExplanation({
                 'Keep the explanation short, clear, and student-friendly.',
                 'Use at most 3 short sentences.',
                 'Focus on why the correct option is right.',
-                'If the selected answer is wrong, briefly say why it is less suitable.',
+                'If the selected answer is wrong, briefly say why it is less suitable only when it helps.',
                 'Do not mention being an AI model.',
                 'Do not add warnings or generic disclaimers.',
               ].join(' '),
@@ -115,7 +115,7 @@ export async function createGeminiExplanation({
 
   const explanation = sanitizeExplanation(extractGeminiText(payload));
   if (!explanation) {
-    const error = new Error('Gemini returned an empty explanation.');
+    const error = new Error('Не вдалося отримати пояснення від ІІ.');
     error.statusCode = 502;
     throw error;
   }
@@ -181,7 +181,7 @@ function sanitizeExplanation(value) {
 function buildMockExplanation({ question, selectedOptionNumber }) {
   const correctOptionNumber = Number(question?.correctIndex) + 1;
   if (Number(selectedOptionNumber) === correctOptionNumber) {
-    return `Правильна відповідь ${correctOptionNumber}, бо вона найточніше відповідає змісту питання. Інші варіанти менш повні або не підходять за умовою.`;
+    return `Правильна відповідь ${correctOptionNumber}, бо саме вона найточніше відповідає змісту питання. Інші варіанти тут менш доречні.`;
   }
 
   return `Правильна відповідь ${correctOptionNumber}, бо саме вона відповідає ключовій ознаці в питанні. Обраний варіант не є найточнішим за змістом.`;
