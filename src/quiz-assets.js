@@ -1406,25 +1406,45 @@ function isExplanationTextAcceptable(value) {
 async function requestExplanation() {
   const { sourceQuestionIndex: questionIndex, optionOrder } = getCurrentQuestionContext();
   if (!explanationsEnabled || !explanationUrl) {
+    console.warn('[explanations-ui] unavailable', {
+      explanationsEnabled,
+      explanationUrl,
+    });
     openExplanationModal('error', t('explainUnavailable'));
     return;
   }
 
   const chosenRenderedIndex = state.chosenAt[questionIndex];
   if (chosenRenderedIndex === null) {
+    console.warn('[explanations-ui] no selected answer', {
+      questionIndex,
+    });
     return;
   }
 
   const cached = state.explanationsByQuestion[questionIndex];
   if (cached?.status === 'ready' && isExplanationTextAcceptable(cached.text)) {
+    console.log('[explanations-ui] cache hit', {
+      questionIndex,
+      preview: cached.text.slice(0, 120),
+      length: cached.text.length,
+    });
     openExplanationModal('ready', cached.text);
     return;
   }
   if (cached?.status === 'loading') {
+    console.log('[explanations-ui] already loading', {
+      questionIndex,
+    });
     openExplanationModal('loading', t('explainWaiting'));
     return;
   }
   if (cached?.status === 'ready') {
+    console.warn('[explanations-ui] dropped cached short explanation', {
+      questionIndex,
+      preview: String(cached.text || '').slice(0, 120),
+      length: String(cached.text || '').length,
+    });
     delete state.explanationsByQuestion[questionIndex];
   }
 
@@ -1437,6 +1457,13 @@ async function requestExplanation() {
   openExplanationModal('loading', t('explainWaiting'));
 
   try {
+    console.log('[explanations-ui] request start', {
+      questionIndex,
+      questionNumber: questionIndex + 1,
+      selectedOptionNumber: Number.isInteger(selectedSourceOptionIndex) ? selectedSourceOptionIndex + 1 : null,
+      explanationUrl,
+    });
+
     const response = await fetch(explanationUrl, {
       method: 'POST',
       headers: {
@@ -1449,12 +1476,23 @@ async function requestExplanation() {
     });
 
     const result = await response.json().catch(() => ({}));
+    console.log('[explanations-ui] response received', {
+      questionIndex,
+      status: response.status,
+      ok: response.ok,
+      result,
+    });
     if (!response.ok) {
       throw new Error(result?.error || t('explainError'));
     }
 
     const explanationText = String(result?.explanation || '').trim();
     if (!isExplanationTextAcceptable(explanationText)) {
+      console.warn('[explanations-ui] explanation rejected by client filter', {
+        questionIndex,
+        preview: explanationText.slice(0, 120),
+        length: explanationText.length,
+      });
       throw new Error(t('explainError'));
     }
 
@@ -1465,6 +1503,11 @@ async function requestExplanation() {
     };
     openExplanationModal('ready', state.explanationsByQuestion[questionIndex].text);
   } catch (error) {
+    console.error('[explanations-ui] request failed', {
+      questionIndex,
+      message: error?.message || String(error),
+      error,
+    });
     state.explanationsByQuestion[questionIndex] = {
       status: 'error',
       text: '',
