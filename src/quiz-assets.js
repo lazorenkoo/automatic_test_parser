@@ -1392,15 +1392,15 @@ function isExplanationTextAcceptable(value) {
     return false;
   }
 
-  if (normalized.length < 45) {
+  if (normalized.length < 12) {
     return false;
   }
 
-  if (!/[.!?…]$/.test(normalized) && normalized.length < 120) {
+  if (!/[.!?…]$/.test(normalized) && normalized.length < 24) {
     return false;
   }
 
-  return normalized.split(/\s+/).filter(Boolean).length >= 6;
+  return normalized.split(/\s+/).filter(Boolean).length >= 2;
 }
 
 async function requestExplanation() {
