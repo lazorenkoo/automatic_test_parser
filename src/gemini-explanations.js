@@ -108,7 +108,7 @@ export async function createGeminiExplanation({
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(extractGeminiErrorMessage(payload) || `Gemini request failed with status ${response.status}.`);
+    const error = new Error(extractGeminiErrorMessage(payload, response.status));
     error.statusCode = 502;
     throw error;
   }
@@ -169,8 +169,44 @@ function extractGeminiText(payload) {
   return '';
 }
 
-function extractGeminiErrorMessage(payload) {
-  return sanitizeText(payload?.error?.message || payload?.promptFeedback?.blockReason || '');
+function extractGeminiErrorMessage(payload, statusCode) {
+  const rawMessage = sanitizeText(payload?.error?.message || payload?.promptFeedback?.blockReason || '');
+  const normalized = rawMessage.toLowerCase();
+
+  const retrySeconds = extractRetrySeconds(rawMessage);
+  if (normalized.includes('quota exceeded') || normalized.includes('rate limit') || normalized.includes('resource exhausted')) {
+    if (retrySeconds != null) {
+      return `Ліміт ІІ тимчасово вичерпано. Спробуйте ще раз приблизно через ${retrySeconds} с.`;
+    }
+    return 'Ліміт ІІ тимчасово вичерпано. Спробуйте ще раз трохи пізніше.';
+  }
+
+  if (statusCode === 429) {
+    if (retrySeconds != null) {
+      return `Забагато запитів до ІІ. Спробуйте ще раз приблизно через ${retrySeconds} с.`;
+    }
+    return 'Забагато запитів до ІІ. Спробуйте ще раз трохи пізніше.';
+  }
+
+  if (rawMessage) {
+    return rawMessage;
+  }
+
+  return 'Не вдалося отримати пояснення від ІІ.';
+}
+
+function extractRetrySeconds(message) {
+  const match = String(message || '').match(/retry in\s+([0-9]+(?:\.[0-9]+)?)s/i);
+  if (!match) {
+    return null;
+  }
+
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return Math.max(1, Math.ceil(value));
 }
 
 function sanitizeExplanation(value) {
