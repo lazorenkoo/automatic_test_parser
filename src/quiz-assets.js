@@ -659,7 +659,9 @@ const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
 const correctionUrl = bootstrapData.correctionUrl || '';
 const explanationUrl = bootstrapData.explanationUrl || '';
-const explanationsEnabled = Boolean(explanationUrl);
+const puterExplanationsEnabled = Boolean(bootstrapData.puterExplanationsEnabled);
+const puterExplanationModel = bootstrapData.puterExplanationModel || 'gemini-3.1-pro-preview';
+const explanationsEnabled = puterExplanationsEnabled || Boolean(explanationUrl);
 const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOptionCount))
   ? Math.max(0, Number(bootstrapData.configuredOptionCount))
   : 0;
@@ -1417,7 +1419,7 @@ function getExplainCooldownRemainingSeconds() {
 }
 
 function parseRetrySecondsFromExplainMessage(message) {
-  const match = String(message || '').match(/через\s+(\d+)\s*с/i);
+  const match = String(message || '').match(/(\d{1,4})/);
   if (!match) {
     return 0;
   }
@@ -1524,6 +1526,153 @@ function closeExplanationModal() {
   hide(els.explanationModal);
 }
 
+function isPuterExplanationAvailable() {
+  return Boolean(
+    puterExplanationsEnabled &&
+    typeof window !== 'undefined' &&
+    window.puter &&
+    window.puter.ai &&
+    typeof window.puter.ai.chat === 'function'
+  );
+}
+
+function buildPuterExplanationMessages(question, questionNumber) {
+  const options = Array.isArray(question?.options) ? question.options : [];
+  const correctAnswer = String(options[Number(question?.correctIndex)] || '').trim();
+  const optionLines = options
+    .map((optionText, optionIndex) => String(optionIndex + 1) + '. ' + String(optionText || '').trim())
+    .join('\\n');
+
+  return [
+    {
+      role: 'system',
+      content: [
+        '\u0422\u0438 \u043F\u043E\u044F\u0441\u043D\u044E\u0454\u0448 \u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0443 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C \u0434\u043E \u043C\u0435\u0434\u0438\u0447\u043D\u043E\u0433\u043E \u0442\u0435\u0441\u0442\u0443 \u0443\u043A\u0440\u0430\u0457\u043D\u0441\u044C\u043A\u043E\u044E.',
+        '\u0414\u0430\u0439 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F \u0441\u0430\u043C\u0435 \u0442\u043E\u043C\u0443, \u0447\u043E\u043C\u0443 \u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0430 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C \u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0430 \u0437 \u043C\u0435\u0434\u0438\u0447\u043D\u043E\u0457 \u0442\u043E\u0447\u043A\u0438 \u0437\u043E\u0440\u0443.',
+        '\u041D\u0435 \u0440\u043E\u0437\u0431\u0438\u0440\u0430\u0439 \u043D\u0435\u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0456 \u0432\u0430\u0440\u0456\u0430\u043D\u0442\u0438 \u0456 \u043D\u0435 \u043F\u0438\u0448\u0438 \u0437\u0430\u0433\u0430\u043B\u044C\u043D\u0456 \u0444\u0440\u0430\u0437\u0438.',
+        '\u0412\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u043E\u0432\u0443\u0439 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u0456 \u0444\u0430\u043A\u0442\u0438: \u043C\u0435\u0445\u0430\u043D\u0456\u0437\u043C, \u043F\u0430\u0442\u043E\u0444\u0456\u0437\u0456\u043E\u043B\u043E\u0433\u0456\u044E, \u0430\u043D\u0430\u0442\u043E\u043C\u0456\u044E, \u043C\u0456\u043A\u0440\u043E\u0431\u0456\u043E\u043B\u043E\u0433\u0456\u044E, \u0444\u0430\u0440\u043C\u0430\u043A\u043E\u043B\u043E\u0433\u0456\u044E \u0430\u0431\u043E \u043A\u043B\u0456\u043D\u0456\u0447\u043D\u0438\u0439 \u043C\u0430\u0440\u043A\u0435\u0440.',
+        '\u041D\u0435 \u043F\u0435\u0440\u0435\u043A\u0430\u0437\u0443\u0439 \u043F\u0438\u0442\u0430\u043D\u043D\u044F \u043C\u0430\u0439\u0436\u0435 \u0434\u043E\u0441\u043B\u0456\u0432\u043D\u043E.',
+        '\u0422\u0440\u0438\u043C\u0430\u0439 \u0444\u043E\u0440\u043C\u0430\u0442 \u0440\u0456\u0432\u043D\u043E \u0442\u0430\u043A\u0438\u043C:',
+        '\u041F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0430 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C: ...',
+        '',
+        '\u0421\u0443\u0442\u044C:',
+        '2-3 \u0440\u0435\u0447\u0435\u043D\u043D\u044F \u0437 \u0447\u0456\u0442\u043A\u0438\u043C \u043C\u0435\u0434\u0438\u0447\u043D\u0438\u043C \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F\u043C.',
+        '',
+        '\u041C\u0430\u0440\u043A\u0435\u0440:',
+        '1 \u043A\u043E\u0440\u043E\u0442\u043A\u0438\u0439 \u0440\u044F\u0434\u043E\u043A, \u044F\u043A\u0438\u0439 \u043B\u0435\u0433\u043A\u043E \u0437\u0430\u043F\u0430\u043C\u02BC\u044F\u0442\u0430\u0442\u0438.',
+      ].join('\\n'),
+    },
+    {
+      role: 'user',
+      content: [
+        '\u0422\u0435\u0441\u0442: ' + titleText,
+        '\u041F\u0438\u0442\u0430\u043D\u043D\u044F ' + String(questionNumber) + ': ' + String(question?.q || '').trim(),
+        '',
+        '\u0412\u0430\u0440\u0456\u0430\u043D\u0442\u0438:',
+        optionLines,
+        '',
+        '\u041F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0438\u0439 \u0432\u0430\u0440\u0456\u0430\u043D\u0442: ' + correctAnswer,
+      ].join('\\n'),
+    },
+  ];
+}
+
+function extractPuterExplanationText(response) {
+  if (!response) {
+    return '';
+  }
+
+  if (typeof response === 'string') {
+    return response.trim();
+  }
+
+  if (typeof response?.text === 'string') {
+    return response.text.trim();
+  }
+
+  if (typeof response?.message?.content === 'string') {
+    return response.message.content.trim();
+  }
+
+  if (Array.isArray(response?.message?.content)) {
+    return response.message.content
+      .map((part) => {
+        if (typeof part === 'string') {
+          return part;
+        }
+        if (typeof part?.text === 'string') {
+          return part.text;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\\n')
+      .trim();
+  }
+
+  if (Array.isArray(response?.choices)) {
+    const choiceText = response.choices
+      .map((choice) => {
+        if (typeof choice?.message?.content === 'string') {
+          return choice.message.content;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\\n')
+      .trim();
+    if (choiceText) {
+      return choiceText;
+    }
+  }
+
+  return '';
+}
+
+async function requestPuterExplanation(question, questionNumber) {
+  const messages = buildPuterExplanationMessages(question, questionNumber);
+  console.log('[explanations-ui] puter request start', {
+    questionNumber,
+    model: puterExplanationModel,
+  });
+  const response = await window.puter.ai.chat(messages, {
+    model: puterExplanationModel,
+  });
+  const text = extractPuterExplanationText(response);
+  console.log('[explanations-ui] puter response received', {
+    questionNumber,
+    length: text.length,
+    preview: text.slice(0, 160),
+  });
+  return text;
+}
+
+async function requestBackendExplanation(questionNumber, selectedOptionNumber) {
+  const response = await fetch(explanationUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      questionNumber,
+      selectedOptionNumber,
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  console.log('[explanations-ui] response received', {
+    questionIndex: questionNumber - 1,
+    status: response.status,
+    ok: response.ok,
+    result,
+  });
+  if (!response.ok) {
+    throw new Error(result?.error || t('explainError'));
+  }
+
+  return String(result?.explanation || '').trim();
+}
+
 function buildExplanationPanelText(answerText, explanationText) {
   const normalizedAnswer = String(answerText || '').trim();
   const normalizedBody = normalizeExplanationPanelBody(explanationText);
@@ -1584,7 +1733,7 @@ function showExplanationPanel(kind, payload) {
     els.explanationPanelBody.classList.add('error');
   }
   els.explanationPanelBody.textContent = kind === 'ready'
-    ? buildExplanationPanelText(answerText, message)
+    ? message
     : message;
   show(els.explanationPanel);
   els.explanationPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1595,15 +1744,23 @@ function closeExplanationPanel() {
 }
 
 function isExplanationTextAcceptable(value) {
-  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
-  return normalized.length >= 8;
+  const normalized = String(value || '').trim();
+  if (normalized.length < 40) {
+    return false;
+  }
+  return normalized.includes('Суть:') && normalized.includes('Маркер:');
 }
 
 async function requestExplanation() {
   const { sourceQuestionIndex: questionIndex, optionOrder, question } = getCurrentQuestionContext();
-  if (!explanationsEnabled || !explanationUrl) {
+  const canUsePuter = isPuterExplanationAvailable();
+  const canUseBackend = Boolean(explanationUrl);
+
+  if (!explanationsEnabled || (!canUsePuter && !canUseBackend)) {
     console.warn('[explanations-ui] unavailable', {
       explanationsEnabled,
+      canUsePuter,
+      puterExplanationsEnabled,
       explanationUrl,
     });
     showExplanationPanel('error', {
@@ -1684,32 +1841,33 @@ async function requestExplanation() {
       questionIndex,
       questionNumber: questionIndex + 1,
       selectedOptionNumber: Number.isInteger(selectedSourceOptionIndex) ? selectedSourceOptionIndex + 1 : null,
+      provider: canUsePuter ? 'puter' : 'backend',
       explanationUrl,
     });
 
-    const response = await fetch(explanationUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        questionNumber: questionIndex + 1,
-        selectedOptionNumber: Number.isInteger(selectedSourceOptionIndex) ? selectedSourceOptionIndex + 1 : null,
-      }),
-    });
+    let explanationText = '';
 
-    const result = await response.json().catch(() => ({}));
-    console.log('[explanations-ui] response received', {
-      questionIndex,
-      status: response.status,
-      ok: response.ok,
-      result,
-    });
-    if (!response.ok) {
-      throw new Error(result?.error || t('explainError'));
+    if (canUsePuter) {
+      try {
+        explanationText = await requestPuterExplanation(question, questionIndex + 1);
+      } catch (puterError) {
+        console.warn('[explanations-ui] puter request failed', {
+          questionIndex,
+          message: puterError?.message || String(puterError || ''),
+        });
+        if (!canUseBackend) {
+          throw puterError;
+        }
+      }
     }
 
-    const explanationText = String(result?.explanation || '').trim();
+    if (!isExplanationTextAcceptable(explanationText) && canUseBackend) {
+      explanationText = await requestBackendExplanation(
+        questionIndex + 1,
+        Number.isInteger(selectedSourceOptionIndex) ? selectedSourceOptionIndex + 1 : null,
+      );
+    }
+
     if (!isExplanationTextAcceptable(explanationText)) {
       console.warn('[explanations-ui] explanation rejected by client filter', {
         questionIndex,
@@ -2287,6 +2445,8 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     correctionUrl,
     explanationUrl,
     explanationsEnabled,
+    puterExplanationsEnabled: true,
+    puterExplanationModel: 'gemini-3.1-pro-preview',
     title: quiz.title,
     configuredOptionCount: Number.isInteger(Number(quiz.rawModelJson?.optionCount))
       ? Number(quiz.rawModelJson.optionCount)
@@ -2390,6 +2550,7 @@ export function renderHostedQuizHtml(quiz, options = {}) {
   </div>
 
   <script>window.QUIZ_BOOTSTRAP = ${bootstrap};</script>
+  <script src="https://js.puter.com/v2/"></script>
   <script>${quizAppJs}</script>
 </body>
 </html>`;
