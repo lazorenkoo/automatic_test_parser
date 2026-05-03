@@ -946,6 +946,12 @@ app.post('/api/quizzes/:slug/explanations', async (req, res, next) => {
       ? null
       : Number(req.body.selectedOptionNumber);
 
+    console.log('[explanations] route request', {
+      slug: req.params.slug,
+      questionNumber,
+      selectedOptionNumber,
+    });
+
     if (!Number.isInteger(questionNumber) || questionNumber < 1 || questionNumber > quiz.questions.length) {
       return res.status(400).json({ error: 'Invalid question number.' });
     }
@@ -966,11 +972,23 @@ app.post('/api/quizzes/:slug/explanations', async (req, res, next) => {
       },
     });
 
+    console.log('[explanations] route response', {
+      slug: req.params.slug,
+      questionNumber,
+      preview: String(explanation || '').slice(0, 120),
+      length: String(explanation || '').length,
+    });
+
     return res.json({
       questionNumber,
       explanation,
     });
   } catch (error) {
+    console.error('[explanations] route error', {
+      slug: req.params.slug,
+      message: error?.message || String(error),
+      statusCode: error?.statusCode || 500,
+    });
     return next(error);
   }
 });

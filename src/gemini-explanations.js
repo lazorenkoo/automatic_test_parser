@@ -2,6 +2,7 @@ import { reserveAiRequestSlot } from './db.js';
 import { sanitizeText } from './utils.js';
 
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const EXPLANATION_LOG_PREFIX = '[explanations]';
 
 export function isGeminiExplanationAvailable() {
   return Boolean(String(process.env.GEMINI_API_KEY || '').trim());
@@ -15,6 +16,10 @@ export async function createGeminiExplanation({
   requestContext = null,
 }) {
   if (String(process.env.USE_MOCK_AI || '0') === '1') {
+    logExplanation('using mock explanation', {
+      questionNumber,
+      selectedOptionNumber,
+    });
     return buildMockExplanation({ question, selectedOptionNumber });
   }
 
@@ -43,8 +48,18 @@ export async function createGeminiExplanation({
     selectedOptionNumber,
   });
 
+  logExplanation('create start', {
+    questionNumber: normalizedQuestionNumber,
+    selectedOptionNumber,
+    hasApiKey: Boolean(String(process.env.GEMINI_API_KEY || '').trim()),
+    model: String(process.env.GEMINI_MODEL || 'gemini-2.0-flash').trim(),
+  });
+
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
+    logExplanation('fallback: missing api key', {
+      questionNumber: normalizedQuestionNumber,
+    });
     return fallbackExplanation;
   }
 
@@ -68,6 +83,10 @@ export async function createGeminiExplanation({
       requestUserAgent: requestContext?.requestUserAgent || null,
     });
   } catch (_error) {
+    logExplanation('fallback: local ai slot rejected', {
+      questionNumber: normalizedQuestionNumber,
+      reason: _error?.message || 'unknown',
+    });
     return fallbackExplanation;
   }
 
@@ -79,13 +98,32 @@ export async function createGeminiExplanation({
     });
 
     if (!isExplanationTooShortOrIncomplete(explanation)) {
+      logExplanation('gemini success', {
+        questionNumber: normalizedQuestionNumber,
+        preview: previewText(explanation),
+        length: explanation.length,
+      });
       return explanation;
     }
+    logExplanation('fallback: gemini response too short', {
+      questionNumber: normalizedQuestionNumber,
+      preview: previewText(explanation),
+      length: explanation.length,
+    });
   } catch (_error) {
+    logExplanation('fallback: gemini request failed', {
+      questionNumber: normalizedQuestionNumber,
+      reason: _error?.message || 'unknown',
+    });
     // Fall back to a local explanation when Gemini is unavailable,
     // rate-limited, quota-limited, or returns malformed content.
   }
 
+  logExplanation('returning fallback explanation', {
+    questionNumber: normalizedQuestionNumber,
+    preview: previewText(fallbackExplanation),
+    length: fallbackExplanation.length,
+  });
   return fallbackExplanation;
 }
 
@@ -129,6 +167,12 @@ async function requestGeminiExplanation({
   );
 
   const payload = await response.json().catch(() => ({}));
+  logExplanation('gemini http response', {
+    status: response.status,
+    ok: response.ok,
+    finishReason: payload?.candidates?.[0]?.finishReason || null,
+    promptBlocked: payload?.promptFeedback?.blockReason || null,
+  });
   if (!response.ok) {
     const error = new Error(extractGeminiErrorMessage(payload, response.status));
     error.statusCode = 502;
@@ -143,6 +187,24 @@ async function requestGeminiExplanation({
   }
 
   return explanation;
+}
+
+function logExplanation(message, details = null) {
+  if (details && Object.keys(details).length > 0) {
+    console.log(EXPLANATION_LOG_PREFIX, message, details);
+    return;
+  }
+  console.log(EXPLANATION_LOG_PREFIX, message);
+}
+
+function previewText(value, maxLength = 120) {
+  const normalized = sanitizeText(value).replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1)}…`
+    : normalized;
 }
 
 function buildSystemInstruction() {
