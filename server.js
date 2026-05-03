@@ -922,7 +922,7 @@ app.get('/quiz/:slug', (req, res) => {
     reportUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/report`),
     correctionUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/corrections`),
     puterExplanationsEnabled: String(process.env.PUTER_EXPLANATIONS_ENABLED || '1') !== '0',
-    puterExplanationModel: String(process.env.PUTER_EXPLANATION_MODEL || 'google/gemini-2.5-flash-lite').trim(),
+    puterExplanationModel: String(process.env.PUTER_EXPLANATION_MODEL || 'google/gemini-2.5-pro').trim(),
   }));
 });
 

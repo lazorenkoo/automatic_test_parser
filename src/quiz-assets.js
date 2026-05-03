@@ -659,7 +659,7 @@ const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
 const correctionUrl = bootstrapData.correctionUrl || '';
 const puterExplanationsEnabled = Boolean(bootstrapData.puterExplanationsEnabled);
-const puterExplanationModel = bootstrapData.puterExplanationModel || 'google/gemini-2.5-flash-lite';
+const puterExplanationModel = bootstrapData.puterExplanationModel || 'google/gemini-2.5-pro';
 const explanationsEnabled = puterExplanationsEnabled;
 const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOptionCount))
   ? Math.max(0, Number(bootstrapData.configuredOptionCount))
@@ -2463,7 +2463,7 @@ export function renderHostedQuizHtml(quiz, options = {}) {
   const puterExplanationsEnabled = typeof options === 'object' && options ? Boolean(options.puterExplanationsEnabled) : true;
   const puterExplanationModel = typeof options === 'object' && options && options.puterExplanationModel
     ? String(options.puterExplanationModel)
-    : 'google/gemini-2.5-flash-lite';
+    : 'google/gemini-2.5-pro';
   const title = htmlEscape(quiz.title);
   const displayUrl = htmlEscape(quizUrl || quiz.slug);
   const bootstrap = safeJsonForScript({
