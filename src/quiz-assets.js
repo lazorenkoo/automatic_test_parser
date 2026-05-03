@@ -197,6 +197,30 @@ h1{
   text-decoration:underline;
 }
 .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.field{
+  display:grid;
+  gap:8px;
+}
+.field span{
+  font-size:14px;
+  font-weight:700;
+  color:var(--accent-strong);
+}
+.control-input{
+  width:100%;
+  min-height:52px;
+  border:1px solid var(--line);
+  border-radius:16px;
+  padding:12px 14px;
+  background:#fff;
+  color:var(--ink);
+  font:inherit;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.5);
+}
+.control-input:focus{
+  outline:2px solid rgba(187,77,0,.18);
+  border-color:#d8bfa9;
+}
 .results-list{
   display:grid;
   gap:14px;
@@ -359,19 +383,29 @@ h1{
 }
 .timer-panel{
   margin-top:18px;
-  padding:16px;
+  padding:18px;
   border:1px solid var(--line);
-  border-radius:20px;
-  background:#fffaf3;
+  border-radius:24px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,248,239,.96));
+  box-shadow:0 14px 34px rgba(31,41,55,.05);
 }
 .timer-grid{
   display:grid;
-  gap:12px;
+  gap:14px;
 }
 .timer-inline{
   display:grid;
   grid-template-columns:repeat(2, minmax(0, 1fr));
   gap:12px;
+}
+.timer-panel .small{
+  color:var(--accent-strong);
+}
+.settings-note{
+  color:var(--muted);
+  font-size:14px;
+  line-height:1.45;
 }
 .timer-badge{
   display:inline-flex;
@@ -469,6 +503,9 @@ h1{
     padding:14px 16px;
     border-radius:14px;
     text-align:center;
+  }
+  .field span{
+    font-size:13px;
   }
   .summary{
     font-size:16px;
@@ -615,6 +652,8 @@ i18n.selectionManual = '\u041F\u0435\u0440\u0448\u0456 N \u043F\u0438\u0442\u043
 i18n.selectionRandom = '\u0412\u0438\u043F\u0430\u0434\u043A\u043E\u0432\u0456 N \u043F\u0438\u0442\u0430\u043D\u043D\u044F';
 i18n.selectionLimit = '\u0421\u043A\u0456\u043B\u044C\u043A\u0438 \u043F\u0438\u0442\u0430\u043D\u044C \u0443\u0437\u044F\u0442\u0438';
 i18n.selectionRandomLimit = '\u0421\u043A\u0456\u043B\u044C\u043A\u0438 \u0432\u0438\u043F\u0430\u0434\u043A\u043E\u0432\u0438\u0445 \u043F\u0438\u0442\u0430\u043D\u044C \u0443\u0437\u044F\u0442\u0438';
+i18n.selectionNote = '\u0412 \u0431\u0430\u043D\u043A\u0443: {count} \u043F\u0438\u0442\u0430\u043D\u044C. \u0412\u0438\u0431\u0456\u0440 \u0437\u0430\u0441\u0442\u043E\u0441\u0443\u0454\u0442\u044C\u0441\u044F \u043F\u0435\u0440\u0435\u0434 \u0441\u0442\u0430\u0440\u0442\u043E\u043C.';
+i18n.timerNote = '\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0437\u0440\u0443\u0447\u043D\u0438\u0439 \u0440\u0435\u0436\u0438\u043C: \u043D\u0430 \u043A\u043E\u0436\u043D\u0435 \u043F\u0438\u0442\u0430\u043D\u043D\u044F \u0430\u0431\u043E \u043D\u0430 \u0432\u0435\u0441\u044C \u0442\u0435\u0441\u0442.';
 
 const state = {
   questions: sourceQuestions,
@@ -865,9 +904,10 @@ function ensureTimerUi() {
       panel.innerHTML =
         '<div class="timer-grid">' +
         '<div class="small">' + t('timerTitle') + '</div>' +
+        '<div class="settings-note">' + t('timerNote') + '</div>' +
         '<label class="field">' +
         '<span>' + t('timerMode') + '</span>' +
-        '<select id="timerModeSelect">' +
+        '<select id="timerModeSelect" class="control-input">' +
         '<option value="off">' + t('timerOff') + '</option>' +
         '<option value="question">' + t('timerPerQuestion') + '</option>' +
         '<option value="total">' + t('timerWholeTest') + '</option>' +
@@ -876,17 +916,17 @@ function ensureTimerUi() {
         '<div id="timerPerQuestionField" class="timer-inline hidden">' +
         '<label class="field">' +
         '<span>' + t('timerSeconds') + '</span>' +
-        '<input id="timerPerQuestionInput" type="number" min="5" step="1" value="30" />' +
+        '<input id="timerPerQuestionInput" class="control-input" type="number" min="5" step="1" value="30" />' +
         '</label>' +
         '</div>' +
         '<div id="timerTotalField" class="timer-inline hidden">' +
         '<label class="field">' +
         '<span>' + t('timerMinutes') + '</span>' +
-        '<input id="timerMinutesInput" type="number" min="0" step="1" value="20" />' +
+        '<input id="timerMinutesInput" class="control-input" type="number" min="0" step="1" value="20" />' +
         '</label>' +
         '<label class="field">' +
         '<span>' + t('timerWholeSeconds') + '</span>' +
-        '<input id="timerSecondsInput" type="number" min="0" max="59" step="1" value="0" />' +
+        '<input id="timerSecondsInput" class="control-input" type="number" min="0" max="59" step="1" value="0" />' +
         '</label>' +
         '</div>' +
         '</div>';
@@ -931,9 +971,10 @@ function ensureQuestionSelectionUi() {
   panel.innerHTML =
     '<div class="timer-grid">' +
     '<div class="small">' + t('selectionTitle') + '</div>' +
+    '<div class="settings-note">' + t('selectionNote', { count: sourceQuestions.length }) + '</div>' +
     '<label class="field">' +
     '<span>' + t('selectionMode') + '</span>' +
-    '<select id="questionModeSelect">' +
+    '<select id="questionModeSelect" class="control-input">' +
     '<option value="all">' + t('selectionAll') + '</option>' +
     '<option value="manual">' + t('selectionManual') + '</option>' +
     '<option value="random">' + t('selectionRandom') + '</option>' +
@@ -941,7 +982,7 @@ function ensureQuestionSelectionUi() {
     '</label>' +
     '<label id="questionLimitField" class="field hidden">' +
     '<span id="questionLimitLabel">' + t('selectionLimit') + '</span>' +
-    '<input id="questionLimitInput" type="number" min="1" step="1" value="20" />' +
+    '<input id="questionLimitInput" class="control-input" type="number" min="1" step="1" value="20" />' +
     '</label>' +
     '</div>';
 
