@@ -349,7 +349,7 @@ async function maybeRepairParsedDraft(payload) {
   }
 
   setParserProgressStatus(55);
-  const chunks = chunkQuestionsForRepair(questions, 20);
+  const chunks = chunkQuestionsForRepair(questions, 80);
   const repairedQuestions = [];
   let usedRawText = false;
 
@@ -656,7 +656,7 @@ async function prepareAiQuiz() {
   aiCreateBtn.disabled = true;
   submitBtn.disabled = true;
   clearResultState();
-  setStatus('loading', 'Запускаю локальний парсер перед AI.');
+  setStatus('loading', 'Запускаю локальний парсер');
 
   try {
     const formData = new FormData();
