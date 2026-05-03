@@ -64,39 +64,28 @@ export async function createGeminiExplanation({
     requestUserAgent: requestContext?.requestUserAgent || null,
   });
 
-  const primaryExplanation = await requestGeminiExplanation({
-    apiKey,
-    model,
-    prompt,
-    strictMode: false,
-  });
+  try {
+    const primaryExplanation = await requestGeminiExplanation({
+      apiKey,
+      model,
+      prompt,
+    });
 
-  if (!isExplanationTooShortOrIncomplete(primaryExplanation)) {
-    return primaryExplanation;
+    if (!isExplanationTooShortOrIncomplete(primaryExplanation)) {
+      return primaryExplanation;
+    }
+  } catch (_error) {
+    // If Gemini is temporarily unavailable or rate-limited, fall back to a local
+    // short explanation so the user still gets a useful answer.
   }
 
-  const retryExplanation = await requestGeminiExplanation({
-    apiKey,
-    model,
-    prompt,
-    strictMode: true,
-  });
-
-  if (!isExplanationTooShortOrIncomplete(retryExplanation)) {
-    return retryExplanation;
-  }
-
-  return buildFallbackExplanation({
-    question,
-    selectedOptionNumber,
-  });
+  return buildFallbackExplanation({ question, selectedOptionNumber });
 }
 
 async function requestGeminiExplanation({
   apiKey,
   model,
   prompt,
-  strictMode = false,
 }) {
   const response = await fetch(
     `${GEMINI_API_BASE_URL}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
@@ -109,7 +98,7 @@ async function requestGeminiExplanation({
         systemInstruction: {
           parts: [
             {
-              text: buildSystemInstruction(strictMode),
+              text: buildSystemInstruction(),
             },
           ],
         },
@@ -124,9 +113,9 @@ async function requestGeminiExplanation({
           },
         ],
         generationConfig: {
-          temperature: strictMode ? 0.2 : 0.3,
+          temperature: 0.2,
           topP: 0.9,
-          maxOutputTokens: strictMode ? 260 : 180,
+          maxOutputTokens: 220,
         },
       }),
     },
@@ -149,7 +138,7 @@ async function requestGeminiExplanation({
   return explanation;
 }
 
-function buildSystemInstruction(strictMode) {
+function buildSystemInstruction() {
   const baseRules = [
     'You explain medical multiple-choice quiz answers.',
     'Keep the explanation short, clear, and student-friendly.',
@@ -157,16 +146,10 @@ function buildSystemInstruction(strictMode) {
     'If the selected answer is wrong, briefly say why it is less suitable only when it helps.',
     'Do not mention being an AI model.',
     'Do not add warnings or generic disclaimers.',
+    'Write exactly 2 complete sentences in Ukrainian.',
+    'Do not write fragments, sentence starters, headings, bullets, or one-line stubs.',
+    'Finish the thought completely.',
   ];
-
-  if (!strictMode) {
-    baseRules.push('Use at most 3 short sentences.');
-    return baseRules.join(' ');
-  }
-
-  baseRules.push('Write exactly 2 complete sentences in Ukrainian.');
-  baseRules.push('Do not write fragments, sentence starters, headings, bullets, or one-line stubs.');
-  baseRules.push('Finish the thought completely.');
   return baseRules.join(' ');
 }
 
