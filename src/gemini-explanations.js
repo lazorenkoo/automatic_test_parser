@@ -207,17 +207,20 @@ function previewText(value, maxLength = 160) {
 function buildSystemInstruction() {
   return [
     'You explain medical multiple-choice quiz answers.',
-    'Write a medically meaningful explanation, not a superficial restatement.',
+    'Write a detailed medically meaningful explanation, not a superficial restatement.',
     'Focus only on why the correct option is right.',
     'Do not explain why the wrong option is wrong.',
     'Explain the medical basis of the correct answer: mechanism, pathophysiology, anatomy, pharmacology, physiology, diagnosis, or clinical sign as appropriate.',
     'Do not mention being an AI model.',
     'Do not add warnings or generic disclaimers.',
-    'Write 3 to 6 complete sentences in Ukrainian.',
+    'Write 5 to 10 complete sentences in Ukrainian.',
     'Do not write fragments, headings, bullets, or one-line stubs.',
     'Explain the key medical mechanism or defining feature that makes the answer correct.',
     'If useful, connect the correct answer to the symptom, disease process, lab finding, anatomy, or drug action mentioned in the question.',
     'Avoid vague phrases like "fits the condition" without explaining why.',
+    'Do not say "у запитанні", "у цьому випадку", or other vague references when you can restate the concrete medical content directly.',
+    'Repeat the relevant disease, sign, mechanism, anatomical structure, pathogen, laboratory change, or pharmacological effect in the answer itself.',
+    'Do not stop after naming the correct answer; explain why it is correct in medical terms.',
   ].join(' ');
 }
 
@@ -250,6 +253,8 @@ function buildExplanationPrompt({
     'Do not discuss why the chosen wrong answer is wrong.',
     'Give a real medical explanation with the key mechanism, feature, definition, anatomical basis, physiological process, pathological process, or pharmacological action.',
     'Do not just paraphrase the option.',
+    'Restate the important part of the question in your own words instead of referring to it vaguely.',
+    'Be as detailed as needed to make the answer educational and clinically meaningful.',
   ].join('\n');
 }
 
@@ -341,12 +346,17 @@ function buildFallbackExplanation({ question }) {
   const correctAnswer = Array.isArray(question?.options)
     ? sanitizeText(question.options[correctOptionIndex] || '')
     : '';
+  const questionText = sanitizeText(question?.q || '');
 
-  if (correctAnswer) {
-    return `Правильна відповідь — ${correctAnswer}. Саме цей варіант відповідає ключовій медичній ознаці або механізму, про який ідеться в запитанні, тому для точного пояснення потрібен розбір основного патологічного, фізіологічного, анатомічного або фармакологічного змісту формулювання.`;
+  if (correctAnswer && questionText) {
+    return `Правильна відповідь — ${correctAnswer}. У завданні йдеться про таке: ${questionText} Саме тому правильність відповіді треба пояснювати через конкретний медичний механізм, клінічну ознаку, анатомічну основу, патофізіологічний процес або фармакологічну дію, які безпосередньо пов’язані з варіантом ${correctAnswer}.`;
   }
 
-  return 'Правильна відповідь визначається тим, що вона відповідає ключовій медичній ознаці або механізму, закладеному в запитанні.';
+  if (correctAnswer) {
+    return `Правильна відповідь — ${correctAnswer}. Її правильність визначається конкретною медичною ознакою, механізмом або визначенням, яке потрібно розібрати змістовно, а не лише назвати.`;
+  }
+
+  return 'Правильна відповідь визначається конкретною медичною ознакою, механізмом або визначенням, яке потрібно пояснювати змістовно.';
 }
 
 function buildMockExplanation({ question, selectedOptionNumber }) {
