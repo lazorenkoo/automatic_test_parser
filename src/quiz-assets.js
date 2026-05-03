@@ -1388,19 +1388,7 @@ function closeExplanationModal() {
 
 function isExplanationTextAcceptable(value) {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return false;
-  }
-
-  if (normalized.length < 12) {
-    return false;
-  }
-
-  if (!/[.!?…]$/.test(normalized) && normalized.length < 24) {
-    return false;
-  }
-
-  return normalized.split(/\s+/).filter(Boolean).length >= 2;
+  return normalized.length >= 8;
 }
 
 async function requestExplanation() {
