@@ -43,10 +43,7 @@ export async function createGeminiExplanation({
     throw error;
   }
 
-  const fallbackExplanation = buildFallbackExplanation({
-    question,
-    selectedOptionNumber,
-  });
+  const fallbackExplanation = buildFallbackExplanation({ question });
 
   logExplanation('create start', {
     questionNumber: normalizedQuestionNumber,
@@ -82,10 +79,10 @@ export async function createGeminiExplanation({
       requestIp: requestContext?.requestIp || null,
       requestUserAgent: requestContext?.requestUserAgent || null,
     });
-  } catch (_error) {
+  } catch (error) {
     logExplanation('fallback: local ai slot rejected', {
       questionNumber: normalizedQuestionNumber,
-      reason: _error?.message || 'unknown',
+      reason: error?.message || 'unknown',
     });
     return fallbackExplanation;
   }
@@ -105,18 +102,17 @@ export async function createGeminiExplanation({
       });
       return explanation;
     }
+
     logExplanation('fallback: gemini response too short', {
       questionNumber: normalizedQuestionNumber,
       preview: previewText(explanation),
       length: explanation.length,
     });
-  } catch (_error) {
+  } catch (error) {
     logExplanation('fallback: gemini request failed', {
       questionNumber: normalizedQuestionNumber,
-      reason: _error?.message || 'unknown',
+      reason: error?.message || 'unknown',
     });
-    // Fall back to a local explanation when Gemini is unavailable,
-    // rate-limited, quota-limited, or returns malformed content.
   }
 
   logExplanation('returning fallback explanation', {
@@ -160,7 +156,7 @@ async function requestGeminiExplanation({
         generationConfig: {
           temperature: 0.2,
           topP: 0.9,
-          maxOutputTokens: 220,
+          maxOutputTokens: 900,
         },
       }),
     },
@@ -173,6 +169,7 @@ async function requestGeminiExplanation({
     finishReason: payload?.candidates?.[0]?.finishReason || null,
     promptBlocked: payload?.promptFeedback?.blockReason || null,
   });
+
   if (!response.ok) {
     const error = new Error(extractGeminiErrorMessage(payload, response.status));
     error.statusCode = 502;
@@ -197,7 +194,7 @@ function logExplanation(message, details = null) {
   console.log(EXPLANATION_LOG_PREFIX, message);
 }
 
-function previewText(value, maxLength = 120) {
+function previewText(value, maxLength = 160) {
   const normalized = sanitizeText(value).replace(/\s+/g, ' ').trim();
   if (!normalized) {
     return '';
@@ -210,16 +207,17 @@ function previewText(value, maxLength = 120) {
 function buildSystemInstruction() {
   return [
     'You explain medical multiple-choice quiz answers.',
-    'Keep the explanation concise, clear, and student-friendly.',
-    'Focus on why the correct option is right.',
+    'Write a medically meaningful explanation, not a superficial restatement.',
+    'Focus only on why the correct option is right.',
     'Do not explain why the wrong option is wrong.',
-    'Explain only the medical reason why the correct option matches the question.',
+    'Explain the medical basis of the correct answer: mechanism, pathophysiology, anatomy, pharmacology, physiology, diagnosis, or clinical sign as appropriate.',
     'Do not mention being an AI model.',
     'Do not add warnings or generic disclaimers.',
-    'Write 2 or 3 complete sentences in Ukrainian.',
-    'Do not write fragments, sentence starters, headings, bullets, or one-line stubs.',
-    'Finish the thought completely.',
-    'Mention the key mechanism, sign, process, or definition that makes the answer correct.',
+    'Write 3 to 6 complete sentences in Ukrainian.',
+    'Do not write fragments, headings, bullets, or one-line stubs.',
+    'Explain the key medical mechanism or defining feature that makes the answer correct.',
+    'If useful, connect the correct answer to the symptom, disease process, lab finding, anatomy, or drug action mentioned in the question.',
+    'Avoid vague phrases like "fits the condition" without explaining why.',
   ].join(' ');
 }
 
@@ -248,9 +246,10 @@ function buildExplanationPrompt({
     'Options:',
     ...optionLines,
     '',
-    'Explain in Ukrainian why the correct answer is correct.',
+    'Explain in Ukrainian why the correct answer is medically correct.',
     'Do not discuss why the chosen wrong answer is wrong.',
-    'Name the key medical mechanism, feature, definition, or process.',
+    'Give a real medical explanation with the key mechanism, feature, definition, anatomical basis, physiological process, pathological process, or pharmacological action.',
+    'Do not just paraphrase the option.',
   ].join('\n');
 }
 
@@ -312,8 +311,7 @@ function extractRetrySeconds(message) {
 }
 
 function sanitizeExplanation(value) {
-  const normalized = sanitizeText(value).replace(/\*+/g, '');
-  return normalized.slice(0, 420);
+  return sanitizeText(value).replace(/\*+/g, '').trim();
 }
 
 function isExplanationTooShortOrIncomplete(value) {
@@ -322,40 +320,40 @@ function isExplanationTooShortOrIncomplete(value) {
     return true;
   }
 
-  if (normalized.length < 45) {
+  if (normalized.length < 20) {
     return true;
   }
 
-  if (!/[.!?…]$/.test(normalized) && normalized.length < 120) {
+  if (!/[.!?…]$/.test(normalized) && normalized.length < 60) {
     return true;
   }
 
   const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length < 6) {
+  if (words.length < 4) {
     return true;
   }
 
   return false;
 }
 
-function buildFallbackExplanation({ question, selectedOptionNumber }) {
+function buildFallbackExplanation({ question }) {
   const correctOptionIndex = Number(question?.correctIndex);
   const correctAnswer = Array.isArray(question?.options)
     ? sanitizeText(question.options[correctOptionIndex] || '')
     : '';
 
   if (correctAnswer) {
-    return `Правильна відповідь — ${correctAnswer}, бо саме цей варіант прямо відповідає ключовій умові питання. Потрібно орієнтуватися на основний механізм, визначальну ознаку або медичне поняття, яке закладене в формулюванні.`;
+    return `Правильна відповідь — ${correctAnswer}. Саме цей варіант відповідає ключовій медичній ознаці або механізму, про який ідеться в запитанні, тому для точного пояснення потрібен розбір основного патологічного, фізіологічного, анатомічного або фармакологічного змісту формулювання.`;
   }
 
-  return 'Правильна відповідь є правильною, бо вона відповідає ключовій умові питання. Орієнтуватися потрібно на головний механізм, визначальну ознаку або медичне поняття з формулювання.';
+  return 'Правильна відповідь визначається тим, що вона відповідає ключовій медичній ознаці або механізму, закладеному в запитанні.';
 }
 
 function buildMockExplanation({ question, selectedOptionNumber }) {
   const correctOptionNumber = Number(question?.correctIndex) + 1;
   if (Number(selectedOptionNumber) === correctOptionNumber) {
-    return `Правильна відповідь ${correctOptionNumber}, бо саме вона найточніше відповідає змісту питання. Інші варіанти тут менш доречні.`;
+    return `Правильна відповідь ${correctOptionNumber}, бо саме вона найточніше відповідає змісту питання. Вона збігається з ключовою медичною ознакою або механізмом, який перевіряє це завдання.`;
   }
 
-  return `Правильна відповідь ${correctOptionNumber}, бо саме вона відповідає ключовій ознаці в питанні. Обраний варіант не є найточнішим за змістом.`;
+  return `Правильна відповідь ${correctOptionNumber}, бо саме вона відповідає ключовій медичній ознаці в питанні. Її правильність визначається тим механізмом або поняттям, яке закладене у формулюванні завдання.`;
 }
