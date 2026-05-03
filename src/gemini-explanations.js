@@ -210,14 +210,16 @@ function previewText(value, maxLength = 120) {
 function buildSystemInstruction() {
   return [
     'You explain medical multiple-choice quiz answers.',
-    'Keep the explanation short, clear, and student-friendly.',
+    'Keep the explanation concise, clear, and student-friendly.',
     'Focus on why the correct option is right.',
-    'If the selected answer is wrong, briefly say why it is less suitable only when it helps.',
+    'Do not explain why the wrong option is wrong.',
+    'Explain only the medical reason why the correct option matches the question.',
     'Do not mention being an AI model.',
     'Do not add warnings or generic disclaimers.',
-    'Write exactly 2 complete sentences in Ukrainian.',
+    'Write 2 or 3 complete sentences in Ukrainian.',
     'Do not write fragments, sentence starters, headings, bullets, or one-line stubs.',
     'Finish the thought completely.',
+    'Mention the key mechanism, sign, process, or definition that makes the answer correct.',
   ].join(' ');
 }
 
@@ -246,7 +248,9 @@ function buildExplanationPrompt({
     'Options:',
     ...optionLines,
     '',
-    'Write a very short explanation in Ukrainian.',
+    'Explain in Ukrainian why the correct answer is correct.',
+    'Do not discuss why the chosen wrong answer is wrong.',
+    'Name the key medical mechanism, feature, definition, or process.',
   ].join('\n');
 }
 
@@ -339,26 +343,12 @@ function buildFallbackExplanation({ question, selectedOptionNumber }) {
   const correctAnswer = Array.isArray(question?.options)
     ? sanitizeText(question.options[correctOptionIndex] || '')
     : '';
-  const selectedIndex = Number(selectedOptionNumber) - 1;
-  const selectedAnswer = Array.isArray(question?.options) && Number.isInteger(selectedIndex)
-    ? sanitizeText(question.options[selectedIndex] || '')
-    : '';
-
-  if (selectedIndex === correctOptionIndex) {
-    return correctAnswer
-      ? `Правильна відповідь — ${correctAnswer}, бо саме цей варіант відповідає умові питання. Інші варіанти не описують потрібний механізм або ознаку.`
-      : 'Правильна відповідь відповідає умові питання. Інші варіанти не описують потрібний механізм або ознаку.';
-  }
-
-  if (correctAnswer && selectedAnswer) {
-    return `Правильна відповідь — ${correctAnswer}, бо саме цей варіант відповідає умові питання. Варіант ${selectedAnswer} не описує головний механізм або ознаку, про яку йдеться.`;
-  }
 
   if (correctAnswer) {
-    return `Правильна відповідь — ${correctAnswer}, бо саме цей варіант відповідає умові питання. Інші варіанти не є настільки точними.`;
+    return `Правильна відповідь — ${correctAnswer}, бо саме цей варіант прямо відповідає ключовій умові питання. Потрібно орієнтуватися на основний механізм, визначальну ознаку або медичне поняття, яке закладене в формулюванні.`;
   }
 
-  return 'Правильна відповідь відповідає умові питання. Інші варіанти не описують потрібний механізм або ознаку.';
+  return 'Правильна відповідь є правильною, бо вона відповідає ключовій умові питання. Орієнтуватися потрібно на головний механізм, визначальну ознаку або медичне поняття з формулювання.';
 }
 
 function buildMockExplanation({ question, selectedOptionNumber }) {
