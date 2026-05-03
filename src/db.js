@@ -858,6 +858,16 @@ const updateDraftUploadsByTokenStmt = db.prepare(`
   WHERE draft_token = ?
 `);
 
+const updateDraftContentByTokenStmt = db.prepare(`
+  UPDATE quiz_drafts
+  SET
+    parsed_count = ?,
+    questions_json = ?,
+    review_blocks_json = ?,
+    raw_model_json = ?
+  WHERE draft_token = ?
+`);
+
 const updateQuizContentByIdStmt = db.prepare(`
   UPDATE quizzes
   SET
@@ -2031,6 +2041,29 @@ export function attachDraftUploads({
     sanitizeNullableValue(answerUploadName),
     draftToken,
   );
+}
+
+export function updateQuizDraftContent({
+  draftToken,
+  questions,
+  reviewBlocks = [],
+  rawModelJson = {},
+}) {
+  const normalizedToken = String(draftToken || '').trim();
+  if (!normalizedToken) {
+    return null;
+  }
+
+  const parsedCount = Array.isArray(questions) ? questions.length : 0;
+  updateDraftContentByTokenStmt.run(
+    parsedCount,
+    JSON.stringify(Array.isArray(questions) ? questions : []),
+    JSON.stringify(Array.isArray(reviewBlocks) ? reviewBlocks : []),
+    JSON.stringify(rawModelJson && typeof rawModelJson === 'object' ? rawModelJson : {}),
+    normalizedToken,
+  );
+
+  return inspectQuizDraft(normalizedToken);
 }
 
 export function finalizeQuizFromDraftReservation({

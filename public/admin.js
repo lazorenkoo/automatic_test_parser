@@ -31,8 +31,14 @@ let validatedAccessCode = '';
 let validatedCodePayload = null;
 let currentAiJobId = '';
 let rememberedClientTgUsernamePromise = null;
+let adminBootstrapPromise = null;
+let adminBootstrap = {
+  puterParserRepairEnabled: true,
+  puterParserRepairModel: 'google/gemini-2.5-flash-lite',
+};
 
 loadSiteNotice();
+void loadAdminBootstrap();
 loadStoredClientTgUsername();
 void loadRememberedClientTgUsername();
 syncOptionCountMode();
@@ -109,8 +115,10 @@ quizForm.addEventListener('submit', async (event) => {
 
     currentDraftToken = payload.draftToken;
     currentDraftPayload = payload;
+    const repairedPayload = await maybeRepairParsedDraft(payload);
+    currentDraftPayload = repairedPayload;
     setStatus('success', 'Тест готовий.');
-    renderDraftResult(payload);
+    renderDraftResult(repairedPayload);
     await finalizeCurrentDraft('');
   } catch (error) {
     setStatus('error', error.message || 'Не вдалося обробити файл.');
@@ -132,6 +140,276 @@ function clearResultState() {
   currentAiJobId = '';
   resultBox.classList.add('hidden');
   resultBox.innerHTML = '';
+}
+
+async function loadAdminBootstrap(forceRefresh = false) {
+  if (!forceRefresh && adminBootstrapPromise) {
+    return adminBootstrapPromise;
+  }
+
+  adminBootstrapPromise = (async () => {
+    try {
+      const response = await fetch('/api/admin-bootstrap');
+      const payload = await readJsonResponse(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to load admin bootstrap.');
+      }
+
+      adminBootstrap = {
+        ...adminBootstrap,
+        puterParserRepairEnabled: Boolean(payload.puterParserRepairEnabled),
+        puterParserRepairModel: String(payload.puterParserRepairModel || adminBootstrap.puterParserRepairModel || 'google/gemini-2.5-flash-lite'),
+      };
+    } catch (_error) {
+      // Keep default bootstrap values.
+    }
+
+    return adminBootstrap;
+  })();
+
+  return adminBootstrapPromise;
+}
+
+function isPuterParserRepairAvailable() {
+  return Boolean(
+    adminBootstrap.puterParserRepairEnabled
+    && window.puter
+    && window.puter.ai
+    && typeof window.puter.ai.chat === 'function'
+  );
+}
+
+function buildParserRepairMessages(batchQuestions, sourceSnippet, batchIndex, batchCount) {
+  const compactQuestions = batchQuestions.map((question, index) => ({
+    sourceQuestionNumber: Number(question.sourceQuestionNumber || index + 1),
+    q: question.q,
+    options: Array.isArray(question.options) ? question.options : [],
+    correctIndex: Number.isInteger(question.correctIndex) ? question.correctIndex : 0,
+  }));
+
+  const rules = [
+    'Ти виправляєш JSON медичного тесту після локального парсера.',
+    'Виправляй лише очевидні помилки переносу, OCR, обриви та склейки слів.',
+    'Не змінюй порядок питань.',
+    'Не додавай і не видаляй питання.',
+    'Не вигадуй нову інформацію.',
+    'Зберігай correctIndex, якщо немає явної причини для зміни.',
+    'Поверни тільки JSON без markdown у форматі {"questions":[...]}',
+    'У кожному елементі залиш поля q, options, correctIndex, sourceQuestionNumber.',
+  ];
+
+  const parts = [
+    rules.join('\n'),
+    `Батч ${batchIndex + 1} з ${batchCount}.`,
+    `Поточний JSON:\n${JSON.stringify(compactQuestions)}`,
+  ];
+
+  if (sourceSnippet) {
+    parts.push(`Фрагмент сирого тексту:\n${sourceSnippet}`);
+  }
+
+  return [
+    {
+      role: 'user',
+      content: parts.join('\n\n'),
+    },
+  ];
+}
+
+function extractPuterChatText(response) {
+  if (!response) {
+    return '';
+  }
+
+  if (typeof response === 'string') {
+    return response.trim();
+  }
+
+  const directCandidates = [
+    response.text,
+    response.output,
+    response.result,
+    response.content,
+    response.message?.content,
+  ];
+  for (const candidate of directCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  if (Array.isArray(response.message?.content)) {
+    const joined = response.message.content
+      .map((item) => typeof item?.text === 'string' ? item.text : '')
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+    if (joined) {
+      return joined;
+    }
+  }
+
+  if (Array.isArray(response.choices)) {
+    for (const choice of response.choices) {
+      const choiceText = extractPuterChatText(choice?.message || choice);
+      if (choiceText) {
+        return choiceText;
+      }
+    }
+  }
+
+  return '';
+}
+
+function parseJsonFromModelText(text) {
+  const rawText = String(text || '').trim();
+  if (!rawText) {
+    throw new Error('Empty Puter parser repair response.');
+  }
+
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    const start = rawText.indexOf('{');
+    const end = rawText.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      return JSON.parse(rawText.slice(start, end + 1));
+    }
+  }
+
+  throw new Error('Could not parse Puter parser repair JSON.');
+}
+
+function buildBatchSourceSnippet(extractedText, startQuestionNumber, endQuestionNumber) {
+  const sourceText = String(extractedText || '').trim();
+  if (!sourceText) {
+    return '';
+  }
+
+  const startPattern = new RegExp(`(?:^|\\n)\\s*${startQuestionNumber}[.)]\\s`, 'i');
+  const nextPattern = new RegExp(`(?:^|\\n)\\s*${endQuestionNumber + 1}[.)]\\s`, 'i');
+  const startMatch = startPattern.exec(sourceText);
+  const startIndex = startMatch ? startMatch.index : 0;
+  const sliced = sourceText.slice(startIndex);
+  const nextMatch = nextPattern.exec(sliced);
+  const endIndex = nextMatch ? startIndex + nextMatch.index : Math.min(sourceText.length, startIndex + 12000);
+  return sourceText.slice(startIndex, endIndex).trim().slice(0, 12000);
+}
+
+function chunkQuestionsForRepair(questions, chunkSize = 20) {
+  const chunks = [];
+  for (let index = 0; index < questions.length; index += chunkSize) {
+    chunks.push(questions.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+async function requestPuterParserRepair(batchQuestions, sourceSnippet, batchIndex, batchCount) {
+  const messages = buildParserRepairMessages(batchQuestions, sourceSnippet, batchIndex, batchCount);
+  console.log('[parser-repair] puter request start', {
+    batchIndex,
+    batchCount,
+    questionCount: batchQuestions.length,
+    model: adminBootstrap.puterParserRepairModel,
+    hasSourceSnippet: Boolean(sourceSnippet),
+  });
+
+  const response = await window.puter.ai.chat(messages, {
+    model: adminBootstrap.puterParserRepairModel,
+  });
+  const rawText = extractPuterChatText(response);
+  const parsed = parseJsonFromModelText(rawText);
+  const repairedQuestions = Array.isArray(parsed?.questions) ? parsed.questions : [];
+
+  if (repairedQuestions.length !== batchQuestions.length) {
+    throw new Error(`Puter returned ${repairedQuestions.length} questions for a batch of ${batchQuestions.length}.`);
+  }
+
+  return repairedQuestions;
+}
+
+async function maybeRepairParsedDraft(payload) {
+  await loadAdminBootstrap();
+
+  const draftToken = String(payload?.draftToken || '').trim();
+  const questions = Array.isArray(payload?.questions) ? payload.questions : [];
+  const extractedText = String(payload?.extractedText || '');
+
+  if (!draftToken || !questions.length || !isPuterParserRepairAvailable()) {
+    return payload;
+  }
+
+  setStatus('loading', 'Ð›Ð¾ÐºÐ°Ð»ÑŒÐ½Ð¸Ð¹ Ð¿Ð°Ñ€ÑÐµÑ€ Ð·Ð°Ð²ÐµÑ€ÑˆÐ¸Ð²ÑÑ. Ð—Ð°Ð¿ÑƒÑÐºÐ°ÑŽ Ð¿ÐµÑ€ÐµÐ²Ñ–Ñ€ÐºÑƒ Ñ‡ÐµÑ€ÐµÐ· Puter.');
+  const chunks = chunkQuestionsForRepair(questions, 20);
+  const repairedQuestions = [];
+  let usedRawText = false;
+
+  try {
+    for (let batchIndex = 0; batchIndex < chunks.length; batchIndex += 1) {
+      const batch = chunks[batchIndex];
+      const firstQuestionNumber = Number(batch[0]?.sourceQuestionNumber || batchIndex * 20 + 1);
+      const lastQuestionNumber = Number(batch[batch.length - 1]?.sourceQuestionNumber || firstQuestionNumber + batch.length - 1);
+      const sourceSnippet = buildBatchSourceSnippet(extractedText, firstQuestionNumber, lastQuestionNumber);
+      if (sourceSnippet) {
+        usedRawText = true;
+      }
+      setStatus('loading', `Puter Ð¿ÐµÑ€ÐµÐ²Ñ–Ñ€ÑÑ” Ð±Ð°Ñ‚Ñ‡ ${batchIndex + 1} Ñ–Ð· ${chunks.length}.`);
+      const repairedBatch = await requestPuterParserRepair(batch, sourceSnippet, batchIndex, chunks.length);
+      repairedQuestions.push(...repairedBatch);
+    }
+
+    const repairResponse = await fetch('/api/drafts/repair', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        draftToken,
+        questions: repairedQuestions,
+        reviewBlocks: Array.isArray(payload.reviewBlocks) ? payload.reviewBlocks : [],
+        notes: [
+          `Puter parser repair applied in ${chunks.length} batch${chunks.length === 1 ? '' : 'es'}.`,
+        ],
+        parserRepair: {
+          model: adminBootstrap.puterParserRepairModel,
+          batchCount: chunks.length,
+          usedRawText,
+        },
+      }),
+    });
+    const repairPayload = await readJsonResponse(repairResponse);
+    if (!repairResponse.ok) {
+      throw new Error(repairPayload.error || 'Failed to save repaired parser result.');
+    }
+
+    console.log('[parser-repair] draft updated', {
+      draftToken,
+      parsedCount: repairPayload.parsedCount,
+      model: adminBootstrap.puterParserRepairModel,
+    });
+
+    return {
+      ...payload,
+      parsedCount: repairPayload.parsedCount || payload.parsedCount,
+      questions: repairedQuestions,
+      reviewBlocks: Array.isArray(payload.reviewBlocks) ? payload.reviewBlocks : [],
+      notes: Array.isArray(repairPayload.notes) && repairPayload.notes.length
+        ? repairPayload.notes
+        : (Array.isArray(payload.notes) ? payload.notes : []),
+      rawModelJson: repairPayload.rawModelJson || payload.rawModelJson || {},
+    };
+  } catch (error) {
+    console.warn('[parser-repair] skipped', {
+      message: error?.message || String(error || ''),
+    });
+    return {
+      ...payload,
+      notes: [
+        ...(Array.isArray(payload.notes) ? payload.notes : []),
+        'Puter parser repair was skipped. The local parser result is being used.',
+      ],
+    };
+  }
 }
 
 function normalizeClientTgUsername(value) {

@@ -247,6 +247,16 @@ export const __test__ = {
   parseQuestionsBySequentialBlocks,
 };
 
+export function normalizeImportedQuestions(questions, {
+  answerIndex = 1,
+  optionCount = AUTO_OPTION_COUNT,
+} = {}) {
+  const normalizedOptionCount = normalizeOptionCountSetting(optionCount);
+  return (Array.isArray(questions) ? questions : [])
+    .map((item, index) => normalizeJsonQuestion(item, index + 1, answerIndex, normalizedOptionCount))
+    .filter(Boolean);
+}
+
 function parseQuizFromJsonFile({
   buffer,
   filename,

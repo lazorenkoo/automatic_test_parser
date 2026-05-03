@@ -36,8 +36,10 @@ import {
   reserveAccessCode,
   reserveInternalAiAccessCode,
   setQuizBanStatus,
+  updateQuizDraftContent,
 } from './src/db.js';
 import {
+  normalizeImportedQuestions,
   parseAnswerKeyFromFile,
   parseQuizFromFile,
   SUPPORTED_ANSWER_EXTENSIONS,
@@ -114,6 +116,13 @@ app.get('/api/site-notice', (_req, res) => {
   return res.json({
     message: notice.message,
     updatedAt: notice.updatedAt,
+  });
+});
+
+app.get('/api/admin-bootstrap', (_req, res) => {
+  return res.json({
+    puterParserRepairEnabled: String(process.env.PUTER_PARSER_REPAIR_ENABLED || '1') !== '0',
+    puterParserRepairModel: String(process.env.PUTER_PARSER_REPAIR_MODEL || 'google/gemini-2.5-flash-lite').trim(),
   });
 });
 
@@ -237,7 +246,83 @@ app.post('/api/parse', upload.fields([
       questionMode,
       answerMode,
       notes: selectedQuiz.notes,
+      questions: selectedQuiz.questions,
+      reviewBlocks: selectedQuiz.reviewBlocks || [],
+      extractedText: selectedQuiz.extractedText || '',
+      rawModelJson: selectedQuiz.rawModelJson || {},
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/drafts/repair', async (req, res, next) => {
+  const draftToken = String(req.body.draftToken || '').trim();
+  const questions = Array.isArray(req.body.questions) ? req.body.questions : [];
+  const reviewBlocks = Array.isArray(req.body.reviewBlocks) ? req.body.reviewBlocks : [];
+  const notes = Array.isArray(req.body.notes) ? req.body.notes.filter(Boolean).map((note) => sanitizeText(note)).filter(Boolean) : [];
+  const parserRepair = req.body.parserRepair && typeof req.body.parserRepair === 'object'
+    ? req.body.parserRepair
+    : {};
+
+  if (!draftToken) {
+    return res.status(400).json({ error: 'Draft token is required.' });
+  }
+
+  const draft = inspectQuizDraft(draftToken);
+  if (!draft) {
+    return res.status(404).json({ error: 'Draft not found.' });
+  }
+
+  try {
+    const optionCount = draft?.rawModel?.optionCount ?? autoOptionCountValue;
+    const normalizedQuestions = normalizeImportedQuestions(questions, {
+      answerIndex: Number(draft?.rawModel?.answerIndex || 1),
+      optionCount,
+    });
+
+    if (!normalizedQuestions.length) {
+      return res.status(422).json({ error: 'No valid repaired questions were provided.' });
+    }
+
+    if (normalizedQuestions.length !== questions.length) {
+      return res.status(422).json({ error: 'Some repaired questions became invalid after normalization.' });
+    }
+
+    const mergedRawModel = {
+      ...(draft.rawModel || {}),
+      parserRepair: {
+        provider: 'puter',
+        appliedAt: Date.now(),
+        batchCount: Number(parserRepair.batchCount || 0),
+        usedRawText: Boolean(parserRepair.usedRawText),
+        model: sanitizeText(parserRepair.model || ''),
+      },
+    };
+    const mergedNotes = Array.from(new Set([
+      ...(Array.isArray(draft.rawModel?.repairNotes) ? draft.rawModel.repairNotes : []),
+      ...notes,
+    ]));
+
+    if (mergedNotes.length) {
+      mergedRawModel.repairNotes = mergedNotes;
+    }
+
+    const updatedDraft = updateQuizDraftContent({
+      draftToken,
+      questions: normalizedQuestions,
+      reviewBlocks,
+      rawModelJson: mergedRawModel,
+    });
+
+    return res.json({
+      ok: true,
+      draftToken,
+      parsedCount: normalizedQuestions.length,
+      notes: mergedNotes,
+      rawModelJson: mergedRawModel,
+      updatedDraft,
     });
   } catch (error) {
     return next(error);
