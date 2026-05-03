@@ -85,7 +85,7 @@ h1{
   display:block;
   margin-bottom:6px;
 }
-.hidden{display:none}
+.hidden{display:none !important}
 .meta{
   display:grid;
   grid-template-columns:1fr;
@@ -398,6 +398,9 @@ h1{
   display:grid;
   grid-template-columns:repeat(2, minmax(0, 1fr));
   gap:12px;
+}
+.timer-single{
+  grid-template-columns:minmax(0, 1fr);
 }
 .timer-panel .small{
   color:var(--accent-strong);
@@ -913,7 +916,7 @@ function ensureTimerUi() {
         '<option value="total">' + t('timerWholeTest') + '</option>' +
         '</select>' +
         '</label>' +
-        '<div id="timerPerQuestionField" class="timer-inline hidden">' +
+        '<div id="timerPerQuestionField" class="timer-inline timer-single hidden">' +
         '<label class="field">' +
         '<span>' + t('timerSeconds') + '</span>' +
         '<input id="timerPerQuestionInput" class="control-input" type="number" min="5" step="1" value="30" />' +
@@ -1059,6 +1062,8 @@ function syncTimerConfigUi() {
 
   els.timerPerQuestionField?.classList.toggle('hidden', state.timerMode !== 'question');
   els.timerTotalField?.classList.toggle('hidden', state.timerMode !== 'total');
+  els.timerPerQuestionField?.setAttribute('aria-hidden', state.timerMode === 'question' ? 'false' : 'true');
+  els.timerTotalField?.setAttribute('aria-hidden', state.timerMode === 'total' ? 'false' : 'true');
   renderTimerDisplay();
 }
 
