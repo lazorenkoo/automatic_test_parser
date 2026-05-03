@@ -61,7 +61,7 @@ closeMyTestsBtn?.addEventListener('click', closeMyTestsPanel);
 quizForm.addEventListener('submit', async (event) => {
   event.preventDefault();
 
-  setStatus('loading', 'Файл обробляється локальним парсером. Це може зайняти трохи часу.');
+  setParserProgressStatus(10);
   clearResultState();
   submitBtn.disabled = true;
 
@@ -118,6 +118,7 @@ quizForm.addEventListener('submit', async (event) => {
     const repairedPayload = await maybeRepairParsedDraft(payload);
     currentDraftPayload = repairedPayload;
     setStatus('success', 'Тест готовий.');
+    setParserProgressStatus(100);
     renderDraftResult(repairedPayload);
     await finalizeCurrentDraft('');
   } catch (error) {
@@ -130,6 +131,14 @@ quizForm.addEventListener('submit', async (event) => {
 function setStatus(kind, message) {
   statusBox.className = `status ${kind}`;
   statusBox.textContent = message;
+}
+
+function setParserProgressStatus(percent) {
+  const numericPercent = Number(percent);
+  const safePercent = Number.isFinite(numericPercent)
+    ? Math.max(0, Math.min(100, Math.round(numericPercent)))
+    : 0;
+  setStatus('loading', `Файл обробляється парсером... ${safePercent}%`);
 }
 
 function clearResultState() {
@@ -264,7 +273,7 @@ function extractPuterChatText(response) {
 function parseJsonFromModelText(text) {
   const rawText = String(text || '').trim();
   if (!rawText) {
-    throw new Error('Empty Puter parser repair response.');
+    throw new Error('Empty parser refinement response.');
   }
 
   try {
@@ -277,7 +286,7 @@ function parseJsonFromModelText(text) {
     }
   }
 
-  throw new Error('Could not parse Puter parser repair JSON.');
+  throw new Error('Could not parse refined parser JSON.');
 }
 
 function buildBatchSourceSnippet(extractedText, startQuestionNumber, endQuestionNumber) {
@@ -322,7 +331,7 @@ async function requestPuterParserRepair(batchQuestions, sourceSnippet, batchInde
   const repairedQuestions = Array.isArray(parsed?.questions) ? parsed.questions : [];
 
   if (repairedQuestions.length !== batchQuestions.length) {
-    throw new Error(`Puter returned ${repairedQuestions.length} questions for a batch of ${batchQuestions.length}.`);
+    throw new Error(`Refinement returned ${repairedQuestions.length} questions for a batch of ${batchQuestions.length}.`);
   }
 
   return repairedQuestions;
@@ -339,7 +348,7 @@ async function maybeRepairParsedDraft(payload) {
     return payload;
   }
 
-  setStatus('loading', 'Ð›Ð¾ÐºÐ°Ð»ÑŒÐ½Ð¸Ð¹ Ð¿Ð°Ñ€ÑÐµÑ€ Ð·Ð°Ð²ÐµÑ€ÑˆÐ¸Ð²ÑÑ. Ð—Ð°Ð¿ÑƒÑÐºÐ°ÑŽ Ð¿ÐµÑ€ÐµÐ²Ñ–Ñ€ÐºÑƒ Ñ‡ÐµÑ€ÐµÐ· Puter.');
+  setParserProgressStatus(55);
   const chunks = chunkQuestionsForRepair(questions, 20);
   const repairedQuestions = [];
   let usedRawText = false;
@@ -353,7 +362,8 @@ async function maybeRepairParsedDraft(payload) {
       if (sourceSnippet) {
         usedRawText = true;
       }
-      setStatus('loading', `Puter Ð¿ÐµÑ€ÐµÐ²Ñ–Ñ€ÑÑ” Ð±Ð°Ñ‚Ñ‡ ${batchIndex + 1} Ñ–Ð· ${chunks.length}.`);
+      const progress = 55 + (((batchIndex + 1) / Math.max(1, chunks.length)) * 40);
+      setParserProgressStatus(progress);
       const repairedBatch = await requestPuterParserRepair(batch, sourceSnippet, batchIndex, chunks.length);
       repairedQuestions.push(...repairedBatch);
     }
@@ -368,7 +378,7 @@ async function maybeRepairParsedDraft(payload) {
         questions: repairedQuestions,
         reviewBlocks: Array.isArray(payload.reviewBlocks) ? payload.reviewBlocks : [],
         notes: [
-          `Puter parser repair applied in ${chunks.length} batch${chunks.length === 1 ? '' : 'es'}.`,
+          `Додаткова перевірка структури виконана для ${chunks.length} блок${chunks.length === 1 ? 'у' : 'ів'}.`,
         ],
         parserRepair: {
           model: adminBootstrap.puterParserRepairModel,
@@ -381,6 +391,8 @@ async function maybeRepairParsedDraft(payload) {
     if (!repairResponse.ok) {
       throw new Error(repairPayload.error || 'Failed to save repaired parser result.');
     }
+
+    setParserProgressStatus(98);
 
     console.log('[parser-repair] draft updated', {
       draftToken,
@@ -402,11 +414,12 @@ async function maybeRepairParsedDraft(payload) {
     console.warn('[parser-repair] skipped', {
       message: error?.message || String(error || ''),
     });
+    setParserProgressStatus(98);
     return {
       ...payload,
       notes: [
         ...(Array.isArray(payload.notes) ? payload.notes : []),
-        'Puter parser repair was skipped. The local parser result is being used.',
+        'Додаткову перевірку структури пропущено. Використано результат локального парсера.',
       ],
     };
   }
