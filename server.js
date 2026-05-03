@@ -950,6 +950,7 @@ app.post('/api/quizzes/:slug/explanations', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid question number.' });
     }
 
+    const creatorSnapshot = buildCreatorSnapshot(req, req.body?.creatorProfile);
     const question = quiz.questions[questionNumber - 1];
     const explanation = await createGeminiExplanation({
       quizTitle: quiz.title,
@@ -958,10 +959,10 @@ app.post('/api/quizzes/:slug/explanations', async (req, res, next) => {
       selectedOptionNumber,
       requestContext: {
         sourceFilename: quiz.sourceFilename || null,
-        browserId: getBrowserIdentifier(req),
-        fingerprint: getBrowserFingerprint(req),
-        requestIp: getClientIp(req),
-        requestUserAgent: req.get('user-agent'),
+        browserId: creatorSnapshot.browserId || null,
+        fingerprint: creatorSnapshot.fingerprint || null,
+        requestIp: creatorSnapshot.request?.ip || null,
+        requestUserAgent: creatorSnapshot.request?.userAgent || null,
       },
     });
 
