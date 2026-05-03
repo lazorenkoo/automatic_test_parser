@@ -82,9 +82,14 @@ export async function createGeminiExplanation({
     strictMode: true,
   });
 
-  return isExplanationTooShortOrIncomplete(retryExplanation)
-    ? primaryExplanation
-    : retryExplanation;
+  if (!isExplanationTooShortOrIncomplete(retryExplanation)) {
+    return retryExplanation;
+  }
+
+  return buildFallbackExplanation({
+    question,
+    selectedOptionNumber,
+  });
 }
 
 async function requestGeminiExplanation({
@@ -276,6 +281,33 @@ function isExplanationTooShortOrIncomplete(value) {
   }
 
   return false;
+}
+
+function buildFallbackExplanation({ question, selectedOptionNumber }) {
+  const correctOptionIndex = Number(question?.correctIndex);
+  const correctAnswer = Array.isArray(question?.options)
+    ? sanitizeText(question.options[correctOptionIndex] || '')
+    : '';
+  const selectedIndex = Number(selectedOptionNumber) - 1;
+  const selectedAnswer = Array.isArray(question?.options) && Number.isInteger(selectedIndex)
+    ? sanitizeText(question.options[selectedIndex] || '')
+    : '';
+
+  if (selectedIndex === correctOptionIndex) {
+    return correctAnswer
+      ? `Правильна відповідь — ${correctAnswer}, бо саме цей варіант відповідає умові питання. Інші варіанти не описують потрібний механізм або ознаку.`
+      : 'Правильна відповідь відповідає умові питання. Інші варіанти не описують потрібний механізм або ознаку.';
+  }
+
+  if (correctAnswer && selectedAnswer) {
+    return `Правильна відповідь — ${correctAnswer}, бо саме цей варіант відповідає умові питання. Варіант ${selectedAnswer} не описує головний механізм або ознаку, про яку йдеться.`;
+  }
+
+  if (correctAnswer) {
+    return `Правильна відповідь — ${correctAnswer}, бо саме цей варіант відповідає умові питання. Інші варіанти не є настільки точними.`;
+  }
+
+  return 'Правильна відповідь відповідає умові питання. Інші варіанти не описують потрібний механізм або ознаку.';
 }
 
 function buildMockExplanation({ question, selectedOptionNumber }) {

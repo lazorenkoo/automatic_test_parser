@@ -1386,6 +1386,23 @@ function closeExplanationModal() {
   hide(els.explanationModal);
 }
 
+function isExplanationTextAcceptable(value) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (normalized.length < 45) {
+    return false;
+  }
+
+  if (!/[.!?…]$/.test(normalized) && normalized.length < 120) {
+    return false;
+  }
+
+  return normalized.split(/\s+/).filter(Boolean).length >= 6;
+}
+
 async function requestExplanation() {
   const { sourceQuestionIndex: questionIndex, optionOrder } = getCurrentQuestionContext();
   if (!explanationsEnabled || !explanationUrl) {
@@ -1399,13 +1416,16 @@ async function requestExplanation() {
   }
 
   const cached = state.explanationsByQuestion[questionIndex];
-  if (cached?.status === 'ready') {
+  if (cached?.status === 'ready' && isExplanationTextAcceptable(cached.text)) {
     openExplanationModal('ready', cached.text);
     return;
   }
   if (cached?.status === 'loading') {
     openExplanationModal('loading', t('explainWaiting'));
     return;
+  }
+  if (cached?.status === 'ready') {
+    delete state.explanationsByQuestion[questionIndex];
   }
 
   const selectedSourceOptionIndex = optionOrder[chosenRenderedIndex];
@@ -1433,9 +1453,14 @@ async function requestExplanation() {
       throw new Error(result?.error || t('explainError'));
     }
 
+    const explanationText = String(result?.explanation || '').trim();
+    if (!isExplanationTextAcceptable(explanationText)) {
+      throw new Error(t('explainError'));
+    }
+
     state.explanationsByQuestion[questionIndex] = {
       status: 'ready',
-      text: String(result?.explanation || '').trim(),
+      text: explanationText,
       message: '',
     };
     openExplanationModal('ready', state.explanationsByQuestion[questionIndex].text);
