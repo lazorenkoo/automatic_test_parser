@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "PDF to hosted medical quiz generator with one-time access codes",
   "main": "server.js",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
