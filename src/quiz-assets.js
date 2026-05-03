@@ -468,11 +468,49 @@ h1{
   font-size:16px;
   color:var(--ink);
 }
+.modal-content{
+  display:grid;
+  gap:16px;
+  padding:18px 22px 22px;
+}
+.modal-question-card{
+  padding:14px 16px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:#fff8f1;
+}
+.modal-question-text{
+  margin-top:8px;
+  line-height:1.55;
+  font-size:15px;
+  color:var(--ink);
+}
 .modal-body.loading{
   color:var(--muted);
 }
 .modal-body.error{
   color:#9a3412;
+}
+.modal-content .modal-body{
+  padding:0;
+}
+.explanation-panel{
+  margin-top:18px;
+  padding:18px;
+  border:1px solid var(--line);
+  border-radius:20px;
+  background:#fffaf3;
+}
+.explanation-panel-title{
+  margin:0 0 14px;
+  font-size:20px;
+  color:var(--accent-strong);
+}
+.explanation-panel .modal-question-card{
+  margin-bottom:14px;
+}
+.explanation-panel .modal-body{
+  padding:0;
 }
 @media (hover:none){
   .option:hover,
@@ -675,8 +713,8 @@ i18n.explain = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F';
 i18n.explainLoading = '\u0413\u043E\u0442\u0443\u044E \u043A\u043E\u0440\u043E\u0442\u043A\u0435 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F...';
 i18n.explainUnavailable = '\u0417\u0430\u0440\u0430\u0437 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0435.';
 i18n.explainError = '\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u043F\u0456\u0437\u043D\u0456\u0448\u0435.';
-i18n.explainTitle = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F \u0432\u0456\u0434 \u0406\u0406';
-i18n.explainWaiting = '\u0417\u0430\u043F\u0438\u0442 \u0434\u043E \u0406\u0406 \u0439\u0434\u0435...';
+i18n.explainTitle = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F \u0432\u0456\u0434 \u0428\u0406';
+i18n.explainWaiting = '\u0417\u0430\u043F\u0438\u0442 \u0434\u043E \u0428\u0406 \u0439\u0434\u0435...';
 i18n.close = '\u0417\u0430\u043A\u0440\u0438\u0442\u0438';
 i18n.timerTitle = '\u0422\u0430\u0439\u043C\u0435\u0440';
 i18n.timerMode = '\u0420\u0435\u0436\u0438\u043C \u0442\u0430\u0439\u043C\u0435\u0440\u0430';
@@ -738,9 +776,10 @@ const els = {
   finish: document.getElementById('finish'),
   correctionOpenBtn: document.getElementById('correctionOpenBtn'),
   explainBtn: document.getElementById('explainBtn'),
-  explanationModal: document.getElementById('explanationModal'),
-  explanationModalBody: document.getElementById('explanationModalBody'),
-  explanationModalCloseBtn: document.getElementById('explanationModalCloseBtn'),
+  explanationPanel: document.getElementById('explanationPanel'),
+  explanationPanelTitle: document.getElementById('explanationPanelTitle'),
+  explanationPanelQuestion: document.getElementById('explanationPanelQuestion'),
+  explanationPanelBody: document.getElementById('explanationPanelBody'),
   correctionPanel: document.getElementById('correctionPanel'),
   timerModeSelect: document.getElementById('timerModeSelect'),
   questionModeSelect: document.getElementById('questionModeSelect'),
@@ -817,6 +856,9 @@ function applyLanguage() {
   }
   if (els.explainBtn) {
     els.explainBtn.textContent = t('explain');
+  }
+  if (els.explanationPanelTitle) {
+    els.explanationPanelTitle.textContent = t('explainTitle');
   }
   if (els.correctionTitle) {
     els.correctionTitle.textContent = t('correctionTitle');
@@ -904,7 +946,7 @@ function hide(node) {
 }
 
 function ensureExplanationUi() {
-  if (els.explainBtn && els.explanationModal && els.explanationModalBody && els.explanationModalCloseBtn) {
+  if (els.explainBtn && els.explanationPanel && els.explanationPanelQuestion && els.explanationPanelBody) {
     return;
   }
 
@@ -924,28 +966,22 @@ function ensureExplanationUi() {
     els.explainBtn = button;
   }
 
-  if (!els.explanationModal) {
-    const modal = document.createElement('div');
-    modal.id = 'explanationModal';
-    modal.className = 'modal-backdrop hidden';
-    modal.innerHTML =
-      '<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="explanationModalTitle">' +
-      '<div class="modal-head">' +
-      '<h3 id="explanationModalTitle" class="modal-title">' + t('explainTitle') + '</h3>' +
-      '<button id="explanationModalCloseBtn" class="btn secondary modal-close" type="button">' + t('close') + '</button>' +
+  if (!els.explanationPanel) {
+    const panel = document.createElement('div');
+    panel.id = 'explanationPanel';
+    panel.className = 'explanation-panel hidden';
+    panel.innerHTML =
+      '<h3 id="explanationPanelTitle" class="explanation-panel-title">' + t('explainTitle') + '</h3>' +
+      '<div class="modal-question-card">' +
+      '<div class="small">' + t('questionShort') + '</div>' +
+      '<div id="explanationPanelQuestion" class="modal-question-text"></div>' +
       '</div>' +
-      '<div id="explanationModalBody" class="modal-body"></div>' +
-      '</div>';
-    document.body.appendChild(modal);
-    els.explanationModal = modal;
-    els.explanationModalBody = document.getElementById('explanationModalBody');
-    els.explanationModalCloseBtn = document.getElementById('explanationModalCloseBtn');
-    els.explanationModalCloseBtn?.addEventListener('click', closeExplanationModal);
-    els.explanationModal?.addEventListener('click', (event) => {
-      if (event.target === els.explanationModal) {
-        closeExplanationModal();
-      }
-    });
+      '<div id="explanationPanelBody" class="modal-body"></div>';
+    quizSection.appendChild(panel);
+    els.explanationPanel = panel;
+    els.explanationPanelTitle = document.getElementById('explanationPanelTitle');
+    els.explanationPanelQuestion = document.getElementById('explanationPanelQuestion');
+    els.explanationPanelBody = document.getElementById('explanationPanelBody');
   }
 }
 
@@ -1284,7 +1320,7 @@ function startQuiz() {
   state.resultsFilter = 'all';
   state.resultsSnapshot = null;
   state.explanationsByQuestion = {};
-  closeExplanationModal();
+  closeExplanationPanel();
 
   hide(els.start);
   hide(els.results);
@@ -1323,6 +1359,7 @@ function renderQuestion() {
   }
 
   renderExplanationState(questionIndex);
+  closeExplanationPanel();
   if (els.correctionDot) {
     els.correctionDot.classList.toggle('hidden', !question?.manuallyCorrected);
   }
@@ -1366,11 +1403,56 @@ function renderExplanationState(questionIndex) {
   }
 }
 
-function openExplanationModal(kind, message) {
-  if (!els.explanationModal || !els.explanationModalBody) {
+function buildExplanationModalText(answerText, explanationText) {
+  const normalizedAnswer = String(answerText || '').trim();
+  const normalizedBody = normalizeExplanationBody(explanationText);
+
+  if (!normalizedAnswer && !normalizedBody) {
+    return '';
+  }
+  if (!normalizedAnswer) {
+    return normalizedBody;
+  }
+  if (!normalizedBody) {
+    return 'Правильна відповідь — ' + normalizedAnswer + '.';
+  }
+
+  return 'Правильна відповідь — ' + normalizedAnswer + ', тому що ' + lowerCaseLeadingLetter(normalizedBody);
+}
+
+function normalizeExplanationBody(value) {
+  let normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  normalized = normalized.replace(/^Правильна відповідь\s*[—-]\s*[^.?!]+[.?!:]\s*/iu, '');
+  normalized = normalized.replace(/^У\s+(?:завданні|запитанні)\s+йдеться\s+про\s+(?:таке:)?\s*/iu, '');
+  normalized = normalized.replace(/^Саме\s+тому\s*/iu, '');
+  normalized = normalized.replace(/^Тому\s+що\s*/iu, '');
+  return normalized.trim();
+}
+
+function lowerCaseLeadingLetter(value) {
+  if (!value) {
+    return '';
+  }
+
+  const first = value.charAt(0);
+  const second = value.charAt(1);
+  if (/[A-ZА-ЯІЇЄҐ]/.test(first) && /[a-zа-яіїєґ]/.test(second)) {
+    return first.toLocaleLowerCase('uk-UA') + value.slice(1);
+  }
+
+  return value;
+}
+
+function openExplanationModal(kind, payload) {
+  if (!els.explanationModal || !els.explanationModalQuestion || !els.explanationModalBody) {
     return;
   }
 
+  const questionText = String(payload?.questionText || '').trim();
+  const answerText = String(payload?.answerText || '').trim();
+  const message = String(payload?.message || '');
+
+  els.explanationModalQuestion.textContent = questionText;
   els.explanationModalBody.classList.remove('loading', 'error');
   if (kind === 'loading') {
     els.explanationModalBody.classList.add('loading');
@@ -1378,12 +1460,84 @@ function openExplanationModal(kind, message) {
   if (kind === 'error') {
     els.explanationModalBody.classList.add('error');
   }
-  els.explanationModalBody.textContent = String(message || '');
+  els.explanationModalBody.textContent = kind === 'ready'
+    ? buildExplanationModalText(answerText, message)
+    : message;
   show(els.explanationModal);
 }
 
 function closeExplanationModal() {
   hide(els.explanationModal);
+}
+
+function buildExplanationPanelText(answerText, explanationText) {
+  const normalizedAnswer = String(answerText || '').trim();
+  const normalizedBody = normalizeExplanationPanelBody(explanationText);
+
+  if (!normalizedAnswer && !normalizedBody) {
+    return '';
+  }
+  if (!normalizedAnswer) {
+    return normalizedBody;
+  }
+  if (!normalizedBody) {
+    return 'Правильна відповідь — ' + normalizedAnswer + '.';
+  }
+
+  return 'Правильна відповідь — ' + normalizedAnswer + ', тому що ' + lowerCaseLeadingLetterUk(normalizedBody);
+}
+
+function normalizeExplanationPanelBody(value) {
+  let normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  normalized = normalized.replace(/^Правильна відповідь\s*[—-]\s*[^.?!]+[.?!:]\s*/iu, '');
+  normalized = normalized.replace(/^У\s+(?:завданні|запитанні)\s+йдеться\s+про\s+(?:таке:)?\s*/iu, '');
+  normalized = normalized.replace(/^Саме\s+тому\s*/iu, '');
+  normalized = normalized.replace(/^Тому\s+що\s*/iu, '');
+  normalized = normalized.replace(/^Суть:\s*/iu, '');
+  normalized = normalized.replace(/\s*Маркер:\s*/iu, ' ');
+  return normalized.trim();
+}
+
+function lowerCaseLeadingLetterUk(value) {
+  if (!value) {
+    return '';
+  }
+
+  const first = value.charAt(0);
+  const second = value.charAt(1);
+  if (/[A-ZА-ЯІЇЄҐ]/.test(first) && /[a-zа-яіїєґ]/.test(second)) {
+    return first.toLocaleLowerCase('uk-UA') + value.slice(1);
+  }
+
+  return value;
+}
+
+function showExplanationPanel(kind, payload) {
+  if (!els.explanationPanel || !els.explanationPanelQuestion || !els.explanationPanelBody) {
+    return;
+  }
+
+  const questionText = String(payload?.questionText || '').trim();
+  const answerText = String(payload?.answerText || '').trim();
+  const message = String(payload?.message || '');
+
+  els.explanationPanelQuestion.textContent = questionText;
+  els.explanationPanelBody.classList.remove('loading', 'error');
+  if (kind === 'loading') {
+    els.explanationPanelBody.classList.add('loading');
+  }
+  if (kind === 'error') {
+    els.explanationPanelBody.classList.add('error');
+  }
+  els.explanationPanelBody.textContent = kind === 'ready'
+    ? buildExplanationPanelText(answerText, message)
+    : message;
+  show(els.explanationPanel);
+  els.explanationPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function closeExplanationPanel() {
+  hide(els.explanationPanel);
 }
 
 function isExplanationTextAcceptable(value) {
@@ -1392,13 +1546,17 @@ function isExplanationTextAcceptable(value) {
 }
 
 async function requestExplanation() {
-  const { sourceQuestionIndex: questionIndex, optionOrder } = getCurrentQuestionContext();
+  const { sourceQuestionIndex: questionIndex, optionOrder, question } = getCurrentQuestionContext();
   if (!explanationsEnabled || !explanationUrl) {
     console.warn('[explanations-ui] unavailable', {
       explanationsEnabled,
       explanationUrl,
     });
-    openExplanationModal('error', t('explainUnavailable'));
+    showExplanationPanel('error', {
+      questionText: question?.q || '',
+      answerText: question?.options?.[question?.correctIndex] || '',
+      message: t('explainUnavailable'),
+    });
     return;
   }
 
@@ -1417,14 +1575,22 @@ async function requestExplanation() {
       preview: cached.text.slice(0, 120),
       length: cached.text.length,
     });
-    openExplanationModal('ready', cached.text);
+    showExplanationPanel('ready', {
+      questionText: question?.q || '',
+      answerText: question?.options?.[question?.correctIndex] || '',
+      message: cached.text,
+    });
     return;
   }
   if (cached?.status === 'loading') {
     console.log('[explanations-ui] already loading', {
       questionIndex,
     });
-    openExplanationModal('loading', t('explainWaiting'));
+    showExplanationPanel('loading', {
+      questionText: question?.q || '',
+      answerText: question?.options?.[question?.correctIndex] || '',
+      message: t('explainWaiting'),
+    });
     return;
   }
   if (cached?.status === 'ready') {
@@ -1442,7 +1608,11 @@ async function requestExplanation() {
     text: '',
     message: '',
   };
-  openExplanationModal('loading', t('explainWaiting'));
+  showExplanationPanel('loading', {
+    questionText: question?.q || '',
+    answerText: question?.options?.[question?.correctIndex] || '',
+    message: t('explainWaiting'),
+  });
 
   try {
     console.log('[explanations-ui] request start', {
@@ -1489,7 +1659,11 @@ async function requestExplanation() {
       text: explanationText,
       message: '',
     };
-    openExplanationModal('ready', state.explanationsByQuestion[questionIndex].text);
+    showExplanationPanel('ready', {
+      questionText: question?.q || '',
+      answerText: question?.options?.[question?.correctIndex] || '',
+      message: state.explanationsByQuestion[questionIndex].text,
+    });
   } catch (error) {
     console.error('[explanations-ui] request failed', {
       questionIndex,
@@ -1501,7 +1675,11 @@ async function requestExplanation() {
       text: '',
       message: error?.message || t('explainError'),
     };
-    openExplanationModal('error', state.explanationsByQuestion[questionIndex].message);
+    showExplanationPanel('error', {
+      questionText: question?.q || '',
+      answerText: question?.options?.[question?.correctIndex] || '',
+      message: state.explanationsByQuestion[questionIndex].message,
+    });
   }
 }
 
@@ -1919,7 +2097,7 @@ function resetQuiz() {
   state.resultsSnapshot = null;
   state.explanationsByQuestion = {};
   state.questions = sourceQuestions;
-  closeExplanationModal();
+  closeExplanationPanel();
   hide(els.quiz);
   hide(els.results);
   show(els.start);
@@ -2016,7 +2194,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.reportBtn?.addEventListener('click', reportBrokenQuiz);
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      closeExplanationModal();
+      closeExplanationPanel();
     }
   });
 });
