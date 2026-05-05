@@ -5,6 +5,7 @@ import {
   createTopUpPaymentSession,
   createReusableAccessCode,
   banAiDevice,
+  banSiteDevice,
   cancelPaymentSession,
   deleteQuizById,
   deleteQuizReportById,
@@ -31,6 +32,7 @@ import {
   listAiRequestLogs,
   listQuizCorrections,
   listQuizReports,
+  listSiteDeviceBans,
   listUploadReports,
   listQuizzesForAdmin,
   getQuizCorrectionById,
@@ -38,6 +40,7 @@ import {
   topUpAccessCode,
   setQuizBanStatusById,
   unbanAiDevice,
+  unbanSiteDevice,
   clearHomepageNotice,
   updateHomepageNotice,
   updateAiRuntimeSettings,
@@ -92,6 +95,9 @@ export function startTelegramBot() {
     '/aiban <browserId> [reason]',
     '/aiunban <browserId>',
     '/aibans [limit]',
+    '/deviceban <deviceId> <days> [reason]',
+    '/deviceunban <deviceId>',
+    '/devicebans [limit]',
     '/sites [page] [type=1] [tg=@user] [q=text] [ai=yes|no] [visited=yes|no] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
     '/search <text>',
     '/site <id>',
@@ -140,6 +146,9 @@ export function startTelegramBot() {
     { command: 'aiban', description: 'Ban AI device by browserId' },
     { command: 'aiunban', description: 'Unban AI device' },
     { command: 'aibans', description: 'List AI device bans' },
+    { command: 'deviceban', description: 'Ban site device for days' },
+    { command: 'deviceunban', description: 'Unban site device' },
+    { command: 'devicebans', description: 'List site device bans' },
     { command: 'sites', description: 'List quiz sites' },
     { command: 'search', description: 'Search quiz sites' },
     { command: 'site', description: 'Show site details' },
@@ -639,6 +648,45 @@ export function startTelegramBot() {
 
     const limit = normalizeOptionalLimit(match?.[1], 20, 100);
     await bot.sendMessage(msg.chat.id, formatAiBans(limit));
+  });
+
+  bot.onText(/^\/deviceban(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseSiteDeviceBanArgs(match?.[1]);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const result = banSiteDevice(parsed.deviceId, parsed.days, parsed.reason);
+    await bot.sendMessage(msg.chat.id, formatSiteDeviceBanEntry(result, 'Site device banned.'));
+  });
+
+  bot.onText(/^\/deviceunban(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const deviceId = String(match?.[1] || '').trim();
+    if (!deviceId) {
+      await bot.sendMessage(msg.chat.id, 'Format: /deviceunban <deviceId>');
+      return;
+    }
+
+    const removed = unbanSiteDevice(deviceId);
+    await bot.sendMessage(msg.chat.id, removed ? 'Site device unbanned.' : 'Site device ban not found.');
+  });
+
+  bot.onText(/^\/devicebans(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const limit = normalizeOptionalLimit(match?.[1], 20, 100);
+    await bot.sendMessage(msg.chat.id, formatSiteDeviceBans(limit));
   });
 
   bot.onText(/^\/sites(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -1794,6 +1842,34 @@ function parseAiBanArgs(rawValue, formatHint) {
   };
 }
 
+function parseSiteDeviceBanArgs(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return { ok: false, error: 'Format: /deviceban <deviceId> <days> [reason]' };
+  }
+
+  const parts = tokenizeArgs(value);
+  if (parts.length < 2) {
+    return { ok: false, error: 'Format: /deviceban <deviceId> <days> [reason]' };
+  }
+
+  const deviceId = String(parts[0] || '').trim();
+  const days = Number(parts[1]);
+  if (!deviceId) {
+    return { ok: false, error: 'Device ID is required.' };
+  }
+  if (!Number.isInteger(days) || days < 1) {
+    return { ok: false, error: 'Days must be an integer 1 or greater.' };
+  }
+
+  return {
+    ok: true,
+    deviceId,
+    days,
+    reason: parts.slice(2).join(' ').trim() || null,
+  };
+}
+
 function normalizeOptionalLimit(rawValue, fallbackValue = 20, maxValue = 100) {
   const value = String(rawValue || '').trim();
   if (!value) {
@@ -2139,7 +2215,7 @@ function formatSiteDetails(quiz) {
     ...creatorLines,
     '',
     devices.length
-      ? devices.slice(0, 10).map((device, index) => `${index + 1}. ${maskDeviceId(device.deviceId)} | ${formatDateTime(device.lastSeenAt)} | ${device.lastIp || 'IP ?'}`).join('\n')
+      ? devices.slice(0, 10).map((device, index) => `${index + 1}. ${device.deviceId || maskDeviceId(device.deviceId)} | ${formatDateTime(device.lastSeenAt)} | ${device.lastIp || 'IP ?'}`).join('\n')
       : 'No visits yet.',
   ].join('\n');
 }
@@ -2285,6 +2361,33 @@ function formatAiBanEntry(entry, header) {
     header,
     `Browser ID: ${entry.browserId}`,
     `Created: ${formatDateTime(entry.createdAt)}`,
+    `Reason: ${entry.reason || '-'}`,
+  ].join('\n');
+}
+
+function formatSiteDeviceBans(limit) {
+  const entries = listSiteDeviceBans(limit);
+  if (!entries.length) {
+    return 'No active site device bans.';
+  }
+
+  return [
+    `Site device bans: ${entries.length}`,
+    '',
+    ...entries.map((entry, index) => `${index + 1}. ${entry.deviceId} | until ${formatDateTime(entry.expiresAt)} | ${entry.reason || 'no reason'}`),
+  ].join('\n');
+}
+
+function formatSiteDeviceBanEntry(entry, header) {
+  if (!entry) {
+    return `${header}\nDevice ID: -`;
+  }
+
+  return [
+    header,
+    `Device ID: ${entry.deviceId}`,
+    `Created: ${formatDateTime(entry.createdAt)}`,
+    `Expires: ${formatDateTime(entry.expiresAt)}`,
     `Reason: ${entry.reason || '-'}`,
   ].join('\n');
 }

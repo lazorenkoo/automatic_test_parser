@@ -175,6 +175,13 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS site_device_bans (
+    device_id TEXT PRIMARY KEY,
+    reason TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS device_client_links (
     browser_id TEXT PRIMARY KEY,
     client_tg_username TEXT NOT NULL,
@@ -478,6 +485,51 @@ const listAiDeviceBansStmt = db.prepare(`
     created_at AS createdAt
   FROM ai_device_bans
   ORDER BY created_at DESC
+  LIMIT ?
+`);
+
+const upsertSiteDeviceBanStmt = db.prepare(`
+  INSERT INTO site_device_bans (
+    device_id,
+    reason,
+    created_at,
+    expires_at
+  ) VALUES (?, ?, ?, ?)
+  ON CONFLICT(device_id) DO UPDATE SET
+    reason = excluded.reason,
+    created_at = excluded.created_at,
+    expires_at = excluded.expires_at
+`);
+
+const getSiteDeviceBanStmt = db.prepare(`
+  SELECT
+    device_id AS deviceId,
+    reason,
+    created_at AS createdAt,
+    expires_at AS expiresAt
+  FROM site_device_bans
+  WHERE device_id = ?
+`);
+
+const deleteSiteDeviceBanStmt = db.prepare(`
+  DELETE FROM site_device_bans
+  WHERE device_id = ?
+`);
+
+const deleteExpiredSiteDeviceBansStmt = db.prepare(`
+  DELETE FROM site_device_bans
+  WHERE expires_at <= ?
+`);
+
+const listSiteDeviceBansStmt = db.prepare(`
+  SELECT
+    device_id AS deviceId,
+    reason,
+    created_at AS createdAt,
+    expires_at AS expiresAt
+  FROM site_device_bans
+  WHERE expires_at > ?
+  ORDER BY expires_at DESC, created_at DESC
   LIMIT ?
 `);
 
@@ -1455,6 +1507,70 @@ export function listAiDeviceBans(limit = 20) {
     browserId: row.browserId,
     reason: row.reason || null,
     createdAt: Number(row.createdAt || 0),
+  }));
+}
+
+export function banSiteDevice(deviceId, days, reason = null) {
+  const normalized = sanitizeNullableValue(deviceId);
+  const numericDays = Number(days);
+  if (!normalized || !Number.isInteger(numericDays) || numericDays < 1) {
+    return null;
+  }
+
+  const createdAt = nowMs();
+  const expiresAt = createdAt + (numericDays * 24 * 60 * 60 * 1000);
+  upsertSiteDeviceBanStmt.run(normalized, sanitizeNullableValue(reason), createdAt, expiresAt);
+  return getSiteDeviceBan(normalized, createdAt);
+}
+
+export function unbanSiteDevice(deviceId) {
+  const normalized = sanitizeNullableValue(deviceId);
+  if (!normalized) {
+    return false;
+  }
+
+  const result = deleteSiteDeviceBanStmt.run(normalized);
+  return Number(result.changes || 0) > 0;
+}
+
+export function getSiteDeviceBan(deviceId, now = nowMs()) {
+  const normalized = sanitizeNullableValue(deviceId);
+  if (!normalized) {
+    return null;
+  }
+
+  const safeNow = Number(now) || nowMs();
+  deleteExpiredSiteDeviceBansStmt.run(safeNow);
+  const row = getSiteDeviceBanStmt.get(normalized);
+  if (!row) {
+    return null;
+  }
+
+  const expiresAt = Number(row.expiresAt || 0);
+  if (!expiresAt || expiresAt <= safeNow) {
+    deleteSiteDeviceBanStmt.run(normalized);
+    return null;
+  }
+
+  return {
+    deviceId: row.deviceId,
+    reason: row.reason || null,
+    createdAt: Number(row.createdAt || 0),
+    expiresAt,
+    remainingMs: Math.max(0, expiresAt - safeNow),
+  };
+}
+
+export function listSiteDeviceBans(limit = 20, now = nowMs()) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  const safeNow = Number(now) || nowMs();
+  deleteExpiredSiteDeviceBansStmt.run(safeNow);
+  return listSiteDeviceBansStmt.all(safeNow, safeLimit).map((row) => ({
+    deviceId: row.deviceId,
+    reason: row.reason || null,
+    createdAt: Number(row.createdAt || 0),
+    expiresAt: Number(row.expiresAt || 0),
+    remainingMs: Math.max(0, Number(row.expiresAt || 0) - safeNow),
   }));
 }
 

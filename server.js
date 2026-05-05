@@ -25,6 +25,7 @@ import {
   inspectQuizDraft,
   getQuizById,
   getQuizReportById,
+  getSiteDeviceBan,
   getUploadReportById,
   getQuizBySlug,
   listQuizReports,
@@ -94,6 +95,19 @@ app.use((_req, res, next) => {
 });
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  if (!shouldEnforceSiteDeviceBan(req)) {
+    return next();
+  }
+
+  const deviceId = ensureDeviceCookie(req, res);
+  const ban = getSiteDeviceBan(deviceId);
+  if (!ban) {
+    return next();
+  }
+
+  return respondWithSiteDeviceBan(req, res, ban);
+});
 app.use(express.static(path.resolve('public')));
 
 app.get('/', (_req, res) => {
@@ -989,11 +1003,7 @@ app.get('/quiz/:slug', (req, res) => {
     return res.status(410).type('html').send(renderUnavailableQuizHtml(quiz.title, 'expired'));
   }
 
-  let deviceId = getCookieValue(req, 'pdmu_device_id');
-  if (!deviceId) {
-    deviceId = randomToken();
-    setDeviceCookie(res, deviceId);
-  }
+  const deviceId = ensureDeviceCookie(req, res);
 
   recordQuizVisit({
     quizId: quiz.id,
@@ -1355,6 +1365,16 @@ function getCookieValue(req, key) {
   return '';
 }
 
+function ensureDeviceCookie(req, res) {
+  let deviceId = getCookieValue(req, 'pdmu_device_id');
+  if (!deviceId) {
+    deviceId = randomToken();
+    setDeviceCookie(res, deviceId);
+  }
+
+  return deviceId;
+}
+
 function setDeviceCookie(res, deviceId) {
   const maxAge = 60 * 60 * 24 * 365;
   res.append('Set-Cookie', [
@@ -1366,9 +1386,75 @@ function setDeviceCookie(res, deviceId) {
   ].join('; '));
 }
 
+function shouldEnforceSiteDeviceBan(req) {
+  const pathname = String(req.path || '');
+  if (!pathname || pathname === '/health' || pathname.startsWith('/api/admin')) {
+    return false;
+  }
+
+  if (pathname === '/' || pathname === '/admin.html' || pathname.startsWith('/quiz/')) {
+    return true;
+  }
+
+  return pathname.startsWith('/api/');
+}
+
+function respondWithSiteDeviceBan(req, res, ban) {
+  if (String(req.path || '').startsWith('/api/')) {
+    return res.status(403).json({
+      error: 'This device is temporarily banned.',
+      deviceBan: serializeSiteDeviceBan(ban),
+    });
+  }
+
+  return res.status(403).type('html').send(renderSiteDeviceBanHtml(ban));
+}
+
+function serializeSiteDeviceBan(ban) {
+  return {
+    deviceId: ban.deviceId,
+    reason: ban.reason || null,
+    createdAt: Number(ban.createdAt || 0),
+    expiresAt: Number(ban.expiresAt || 0),
+    remainingMs: Math.max(0, Number(ban.remainingMs || 0)),
+  };
+}
+
 function getClientIp(req) {
   const forwardedFor = String(req.get('x-forwarded-for') || '').split(',')[0].trim();
   return forwardedFor || req.ip || '';
+}
+
+function renderSiteDeviceBanHtml(ban) {
+  const reason = htmlEscape(sanitizeText(ban?.reason) || 'Причина не вказана.');
+  const untilText = htmlEscape(formatDateTimeUa(ban?.expiresAt));
+  const remainingText = htmlEscape(formatRemainingDuration(ban?.remainingMs));
+  return `<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Доступ обмежено</title>
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:"Outfit","Segoe UI",sans-serif;background:linear-gradient(160deg,#fff8f1 0%,#f6e7d6 100%);color:#1f2937}
+    .card{max-width:620px;margin:20px;padding:28px;border-radius:24px;background:#fffdf9;border:1px solid #ead8c2;box-shadow:0 18px 48px rgba(31,41,55,.08)}
+    h1{margin:0 0 12px;font-size:32px}
+    p{margin:0 0 14px;color:#4b5563;font-size:18px;line-height:1.55}
+    .meta{padding:16px 18px;border-radius:18px;background:#f8efe5;color:#7c2d12}
+    .meta strong{color:#431407}
+  </style>
+</head>
+<body>
+  <section class="card">
+    <h1>Доступ для цього пристрою тимчасово заблоковано</h1>
+    <p>Причина: <strong>${reason}</strong></p>
+    <div class="meta">
+      <p><strong>До розбану:</strong> ${remainingText}</p>
+      <p><strong>Розбан:</strong> ${untilText}</p>
+    </div>
+  </section>
+</body>
+</html>`;
 }
 
 function renderUnavailableQuizHtml(title, reason = 'banned') {
@@ -1415,6 +1501,49 @@ function formatQuizTtlDays(ttlMs) {
 function normalizePublicUsername(value) {
   const normalized = String(value || '').trim().replace(/^@+/, '');
   return normalized ? `@${normalized}` : '';
+}
+
+function formatDateTimeUa(value) {
+  const timestamp = Number(value || 0);
+  if (!timestamp) {
+    return '-';
+  }
+
+  try {
+    return new Intl.DateTimeFormat('uk-UA', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(new Date(timestamp));
+  } catch {
+    return new Date(timestamp).toISOString();
+  }
+}
+
+function formatRemainingDuration(value) {
+  const totalMs = Math.max(0, Number(value || 0));
+  if (!totalMs) {
+    return 'менше хвилини';
+  }
+
+  let remainingMinutes = Math.ceil(totalMs / (60 * 1000));
+  const days = Math.floor(remainingMinutes / (60 * 24));
+  remainingMinutes -= days * 60 * 24;
+  const hours = Math.floor(remainingMinutes / 60);
+  remainingMinutes -= hours * 60;
+  const minutes = remainingMinutes;
+  const parts = [];
+
+  if (days > 0) {
+    parts.push(`${days} дн.`);
+  }
+  if (hours > 0) {
+    parts.push(`${hours} год.`);
+  }
+  if (minutes > 0 && parts.length < 2) {
+    parts.push(`${minutes} хв.`);
+  }
+
+  return parts.join(' ') || 'менше хвилини';
 }
 
 function normalizeClientUsername(value) {
