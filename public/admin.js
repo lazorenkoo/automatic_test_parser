@@ -38,6 +38,7 @@ let currentAiJobId = '';
 let rememberedClientTgUsernamePromise = null;
 let adminBootstrapPromise = null;
 let puterUsageRefreshPromise = null;
+let activeDeviceWarningSignature = '';
 let adminBootstrap = {
   puterParserRepairEnabled: true,
   puterParserRepairModel: 'google/gemini-2.5-flash-lite',
@@ -1355,17 +1356,60 @@ async function loadDeviceWarning() {
 
     const warning = payload.warning && typeof payload.warning === 'object' ? payload.warning : null;
     if (!warning || !String(warning.reason || '').trim()) {
+      activeDeviceWarningSignature = '';
       closeDeviceWarningModal();
       deviceWarningModalText.textContent = '';
       deviceWarningModalTime.textContent = '';
       return;
     }
 
+    activeDeviceWarningSignature = buildDeviceWarningSignature(warning);
     deviceWarningModalText.textContent = String(warning.reason || '').trim();
     deviceWarningModalTime.textContent = Number(warning.createdAt || 0) > 0 ? formatNoticeDateTime(Number(warning.createdAt || 0)) : '';
+    if (isDeviceWarningDismissed(activeDeviceWarningSignature)) {
+      closeDeviceWarningModal();
+      return;
+    }
+
     openDeviceWarningModal();
   } catch (_error) {
     closeDeviceWarningModal();
+  }
+}
+
+function buildDeviceWarningSignature(warning) {
+  if (!warning || typeof warning !== 'object') {
+    return '';
+  }
+
+  return [
+    String(warning.deviceId || '').trim(),
+    String(warning.createdAt || '').trim(),
+    String(warning.reason || '').trim(),
+  ].join('::');
+}
+
+function isDeviceWarningDismissed(signature) {
+  if (!signature) {
+    return false;
+  }
+
+  try {
+    return window.localStorage.getItem('pdmu_device_warning_dismissed') === signature;
+  } catch {
+    return false;
+  }
+}
+
+function markDeviceWarningDismissed(signature) {
+  if (!signature) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem('pdmu_device_warning_dismissed', signature);
+  } catch {
+    // Ignore storage failures.
   }
 }
 
@@ -1383,6 +1427,9 @@ function closeDeviceWarningModal() {
     return;
   }
 
+  if (activeDeviceWarningSignature) {
+    markDeviceWarningDismissed(activeDeviceWarningSignature);
+  }
   deviceWarningModal.classList.add('hidden');
   deviceWarningModal.setAttribute('aria-hidden', 'true');
 }

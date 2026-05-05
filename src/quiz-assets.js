@@ -682,6 +682,7 @@ const explanationsEnabled = puterExplanationsEnabled;
 const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOptionCount))
   ? Math.max(0, Number(bootstrapData.configuredOptionCount))
   : 0;
+const deviceWarningSignature = buildDeviceWarningSignature(deviceWarning);
 
 const i18n = {
   eyebrow: 'Посилання на тест ПДМУ',
@@ -985,7 +986,46 @@ function hide(node) {
   node.classList.add('hidden');
 }
 
+function buildDeviceWarningSignature(warning) {
+  if (!warning || typeof warning !== 'object') {
+    return '';
+  }
+
+  return [
+    String(warning.deviceId || '').trim(),
+    String(warning.createdAt || '').trim(),
+    String(warning.reason || '').trim(),
+  ].join('::');
+}
+
+function isDeviceWarningDismissed(signature) {
+  if (!signature) {
+    return false;
+  }
+
+  try {
+    return window.localStorage.getItem('pdmu_device_warning_dismissed') === signature;
+  } catch {
+    return false;
+  }
+}
+
+function markDeviceWarningDismissed(signature) {
+  if (!signature) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem('pdmu_device_warning_dismissed', signature);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 function closeDeviceWarningModal() {
+  if (deviceWarningSignature) {
+    markDeviceWarningDismissed(deviceWarningSignature);
+  }
   hide(els.deviceWarningModal);
 }
 
@@ -2494,7 +2534,7 @@ document.addEventListener('DOMContentLoaded', () => {
       closeDeviceWarningModal();
     }
   });
-  if (deviceWarning?.reason) {
+  if (deviceWarning?.reason && !isDeviceWarningDismissed(deviceWarningSignature)) {
     show(els.deviceWarningModal);
   }
   document.addEventListener('keydown', (event) => {
