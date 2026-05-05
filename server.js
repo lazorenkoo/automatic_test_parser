@@ -26,6 +26,7 @@ import {
   getQuizById,
   getQuizReportById,
   getSiteDeviceBan,
+  getSiteDeviceWarning,
   getUploadReportById,
   getQuizBySlug,
   listQuizReports,
@@ -132,6 +133,13 @@ app.get('/api/site-notice', (_req, res) => {
   return res.json({
     message: notice.message,
     updatedAt: notice.updatedAt,
+  });
+});
+
+app.get('/api/device-warning', (req, res) => {
+  const warning = getCurrentSiteDeviceWarning(req, res);
+  return res.json({
+    warning: warning ? serializeSiteDeviceWarning(warning) : null,
   });
 });
 
@@ -1020,6 +1028,7 @@ app.get('/quiz/:slug', (req, res) => {
     correctionUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/corrections`),
     puterExplanationsEnabled: String(process.env.PUTER_EXPLANATIONS_ENABLED || '1') !== '0',
     puterExplanationModel: String(process.env.PUTER_EXPLANATION_MODEL || 'google/gemini-2.5-pro').trim(),
+    deviceWarning: getCurrentSiteDeviceWarning(req, res),
   }));
 });
 
@@ -1386,6 +1395,13 @@ function getCurrentSiteDeviceIdentifiers(req, res) {
   ].filter(Boolean)));
 }
 
+function getCurrentSiteDeviceWarning(req, res) {
+  const identifiers = getCurrentSiteDeviceIdentifiers(req, res);
+  return identifiers.find((value) => value)
+    ? identifiers.map((value) => getSiteDeviceWarning(value)).find(Boolean) || null
+    : null;
+}
+
 function setDeviceCookie(res, deviceId) {
   const maxAge = 60 * 60 * 24 * 365;
   res.append('Set-Cookie', [
@@ -1428,6 +1444,14 @@ function serializeSiteDeviceBan(ban) {
     createdAt: Number(ban.createdAt || 0),
     expiresAt: Number(ban.expiresAt || 0),
     remainingMs: Math.max(0, Number(ban.remainingMs || 0)),
+  };
+}
+
+function serializeSiteDeviceWarning(warning) {
+  return {
+    deviceId: warning.deviceId,
+    reason: warning.reason || null,
+    createdAt: Number(warning.createdAt || 0),
   };
 }
 

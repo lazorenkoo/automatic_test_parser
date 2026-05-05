@@ -24,6 +24,9 @@ const closeMyTestsBtn = document.getElementById('closeMyTestsBtn');
 const siteNoticeCard = document.getElementById('siteNoticeCard');
 const siteNoticeText = document.getElementById('siteNoticeText');
 const siteNoticeTime = document.getElementById('siteNoticeTime');
+const deviceWarningCard = document.getElementById('deviceWarningCard');
+const deviceWarningText = document.getElementById('deviceWarningText');
+const deviceWarningTime = document.getElementById('deviceWarningTime');
 const puterUsageFooter = document.getElementById('puterUsageFooter');
 
 let currentDraftToken = '';
@@ -40,6 +43,7 @@ let adminBootstrap = {
 };
 
 loadSiteNotice();
+loadDeviceWarning();
 void loadAdminBootstrap();
 loadStoredClientTgUsername();
 void loadRememberedClientTgUsername();
@@ -1327,6 +1331,34 @@ function getOrCreateBrowserId() {
     return typeof window.crypto?.randomUUID === 'function'
       ? window.crypto.randomUUID()
       : `browser-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+async function loadDeviceWarning() {
+  if (!deviceWarningCard || !deviceWarningText || !deviceWarningTime) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/device-warning');
+    const payload = await readJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(payload.error || 'Failed to load device warning.');
+    }
+
+    const warning = payload.warning && typeof payload.warning === 'object' ? payload.warning : null;
+    if (!warning || !String(warning.reason || '').trim()) {
+      deviceWarningCard.classList.add('hidden');
+      deviceWarningText.textContent = '';
+      deviceWarningTime.textContent = '';
+      return;
+    }
+
+    deviceWarningText.textContent = String(warning.reason || '').trim();
+    deviceWarningTime.textContent = Number(warning.createdAt || 0) > 0 ? formatNoticeDateTime(Number(warning.createdAt || 0)) : '';
+    deviceWarningCard.classList.remove('hidden');
+  } catch (_error) {
+    deviceWarningCard.classList.add('hidden');
   }
 }
 

@@ -182,6 +182,12 @@ db.exec(`
     expires_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS site_device_warnings (
+    device_id TEXT PRIMARY KEY,
+    reason TEXT,
+    created_at INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS device_client_links (
     browser_id TEXT PRIMARY KEY,
     client_tg_username TEXT NOT NULL,
@@ -530,6 +536,41 @@ const listSiteDeviceBansStmt = db.prepare(`
   FROM site_device_bans
   WHERE expires_at > ?
   ORDER BY expires_at DESC, created_at DESC
+  LIMIT ?
+`);
+
+const upsertSiteDeviceWarningStmt = db.prepare(`
+  INSERT INTO site_device_warnings (
+    device_id,
+    reason,
+    created_at
+  ) VALUES (?, ?, ?)
+  ON CONFLICT(device_id) DO UPDATE SET
+    reason = excluded.reason,
+    created_at = excluded.created_at
+`);
+
+const getSiteDeviceWarningStmt = db.prepare(`
+  SELECT
+    device_id AS deviceId,
+    reason,
+    created_at AS createdAt
+  FROM site_device_warnings
+  WHERE device_id = ?
+`);
+
+const deleteSiteDeviceWarningStmt = db.prepare(`
+  DELETE FROM site_device_warnings
+  WHERE device_id = ?
+`);
+
+const listSiteDeviceWarningsStmt = db.prepare(`
+  SELECT
+    device_id AS deviceId,
+    reason,
+    created_at AS createdAt
+  FROM site_device_warnings
+  ORDER BY created_at DESC
   LIMIT ?
 `);
 
@@ -1571,6 +1612,50 @@ export function listSiteDeviceBans(limit = 20, now = nowMs()) {
     createdAt: Number(row.createdAt || 0),
     expiresAt: Number(row.expiresAt || 0),
     remainingMs: Math.max(0, Number(row.expiresAt || 0) - safeNow),
+  }));
+}
+
+export function warnSiteDevice(deviceId, reason = null) {
+  const normalized = sanitizeNullableValue(deviceId);
+  if (!normalized) {
+    return null;
+  }
+
+  const createdAt = nowMs();
+  upsertSiteDeviceWarningStmt.run(normalized, sanitizeNullableValue(reason), createdAt);
+  return getSiteDeviceWarning(normalized);
+}
+
+export function unwarnSiteDevice(deviceId) {
+  const normalized = sanitizeNullableValue(deviceId);
+  if (!normalized) {
+    return false;
+  }
+
+  const result = deleteSiteDeviceWarningStmt.run(normalized);
+  return Number(result.changes || 0) > 0;
+}
+
+export function getSiteDeviceWarning(deviceId) {
+  const normalized = sanitizeNullableValue(deviceId);
+  if (!normalized) {
+    return null;
+  }
+
+  const row = getSiteDeviceWarningStmt.get(normalized);
+  return row ? {
+    deviceId: row.deviceId,
+    reason: row.reason || null,
+    createdAt: Number(row.createdAt || 0),
+  } : null;
+}
+
+export function listSiteDeviceWarnings(limit = 20) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  return listSiteDeviceWarningsStmt.all(safeLimit).map((row) => ({
+    deviceId: row.deviceId,
+    reason: row.reason || null,
+    createdAt: Number(row.createdAt || 0),
   }));
 }
 

@@ -54,6 +54,12 @@ body{
     linear-gradient(135deg, rgba(180,83,9,.08), rgba(15,118,110,.08)),
     var(--card);
 }
+.device-warning{
+  border-color:#f2c28b;
+  background:
+    linear-gradient(135deg, rgba(245,158,11,.10), rgba(180,83,9,.08)),
+    var(--card);
+}
 .site-notice-head{
   display:flex;
   justify-content:space-between;

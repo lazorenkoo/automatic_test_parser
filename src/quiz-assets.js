@@ -655,6 +655,9 @@ const aiDisagreements = Array.isArray(bootstrapData.aiDisagreements)
 const aiSuspiciousQuestions = Array.isArray(bootstrapData.aiSuspiciousQuestions)
   ? bootstrapData.aiSuspiciousQuestions
   : [];
+const deviceWarning = bootstrapData.deviceWarning && typeof bootstrapData.deviceWarning === 'object'
+  ? bootstrapData.deviceWarning
+  : null;
 const titleText = bootstrapData.title || bootstrapData.slug || 'Quiz';
 const reportUrl = bootstrapData.reportUrl || '';
 const correctionUrl = bootstrapData.correctionUrl || '';
@@ -709,6 +712,7 @@ const i18n = {
   reportError: 'Не вдалося надіслати повідомлення. Спробуйте ще раз пізніше.',
   reportUnavailable: 'Зараз цей тест не може надсилати повідомлення.',
   warningTitle: 'Будь ласка, перевірте ще раз такі питання:',
+  deviceWarningTitle: 'Увага для цього пристрою:',
 };
 
 i18n.explain = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F';
@@ -910,15 +914,21 @@ function applyLanguage() {
     els.reportBtn.textContent = t('report');
   }
   if (els.warningBox) {
+    const warningParts = [];
+    if (deviceWarning?.reason) {
+      warningParts.push('<strong>' + t('deviceWarningTitle') + '</strong>' + escapeHtml(String(deviceWarning.reason)));
+    }
     const warningNumbers = Array.from(new Set([
       ...aiDisagreements.map((item) => String(item.questionNumber || '?')),
       ...aiSuspiciousQuestions.map((item) => String(item.questionNumber || '?')),
     ]));
 
     if (warningNumbers.length) {
-      els.warningBox.innerHTML =
-        '<strong>' + t('warningTitle') + '</strong>' +
-        warningNumbers.join(', ');
+      warningParts.push('<strong>' + t('warningTitle') + '</strong>' + warningNumbers.join(', '));
+    }
+
+    if (warningParts.length) {
+      els.warningBox.innerHTML = warningParts.join('<br><br>');
       els.warningBox.classList.remove('hidden');
     } else {
       els.warningBox.classList.add('hidden');
@@ -2480,6 +2490,7 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     questions: quiz.questions,
     aiDisagreements: Array.isArray(quiz.rawModelJson?.aiDisagreements) ? quiz.rawModelJson.aiDisagreements : [],
     aiSuspiciousQuestions: Array.isArray(quiz.rawModelJson?.aiSuspiciousQuestions) ? quiz.rawModelJson.aiSuspiciousQuestions : [],
+    deviceWarning: typeof options === 'object' && options ? options.deviceWarning || null : null,
   });
 
   return `<!doctype html>

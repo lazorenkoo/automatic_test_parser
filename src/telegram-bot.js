@@ -23,6 +23,7 @@ import {
   getQuizById,
   getQuizQuestionStatsByRange,
   getQuizReportById,
+  getSiteDeviceWarning,
   getUploadReportById,
   inspectAccessCode,
   listAccessCodesByClient,
@@ -33,6 +34,7 @@ import {
   listQuizCorrections,
   listQuizReports,
   listSiteDeviceBans,
+  listSiteDeviceWarnings,
   listUploadReports,
   listQuizzesForAdmin,
   getQuizCorrectionById,
@@ -41,6 +43,8 @@ import {
   setQuizBanStatusById,
   unbanAiDevice,
   unbanSiteDevice,
+  unwarnSiteDevice,
+  warnSiteDevice,
   clearHomepageNotice,
   updateHomepageNotice,
   updateAiRuntimeSettings,
@@ -98,6 +102,9 @@ export function startTelegramBot() {
     '/deviceban <deviceId> <days|hours> [reason]',
     '/deviceunban <deviceId>',
     '/devicebans [limit]',
+    '/devicewarn <deviceId> <reason>',
+    '/deviceunwarn <deviceId>',
+    '/devicewarns [limit]',
     '/sites [page] [type=1] [tg=@user] [q=text] [ai=yes|no] [visited=yes|no] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
     '/search <text>',
     '/site <id>',
@@ -149,6 +156,9 @@ export function startTelegramBot() {
     { command: 'deviceban', description: 'Ban site device for days/hours' },
     { command: 'deviceunban', description: 'Unban site device' },
     { command: 'devicebans', description: 'List site device bans' },
+    { command: 'devicewarn', description: 'Warn site device' },
+    { command: 'deviceunwarn', description: 'Remove site device warning' },
+    { command: 'devicewarns', description: 'List site device warnings' },
     { command: 'sites', description: 'List quiz sites' },
     { command: 'search', description: 'Search quiz sites' },
     { command: 'site', description: 'Show site details' },
@@ -687,6 +697,45 @@ export function startTelegramBot() {
 
     const limit = normalizeOptionalLimit(match?.[1], 20, 100);
     await bot.sendMessage(msg.chat.id, formatSiteDeviceBans(limit));
+  });
+
+  bot.onText(/^\/devicewarn(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const parsed = parseSiteDeviceWarningArgs(match?.[1]);
+    if (!parsed.ok) {
+      await bot.sendMessage(msg.chat.id, parsed.error);
+      return;
+    }
+
+    const result = warnSiteDevice(parsed.deviceId, parsed.reason);
+    await bot.sendMessage(msg.chat.id, formatSiteDeviceWarningEntry(result, 'Site device warning saved.'));
+  });
+
+  bot.onText(/^\/deviceunwarn(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const deviceId = String(match?.[1] || '').trim();
+    if (!deviceId) {
+      await bot.sendMessage(msg.chat.id, 'Format: /deviceunwarn <deviceId>');
+      return;
+    }
+
+    const removed = unwarnSiteDevice(deviceId);
+    await bot.sendMessage(msg.chat.id, removed ? 'Site device warning removed.' : 'Site device warning not found.');
+  });
+
+  bot.onText(/^\/devicewarns(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const limit = normalizeOptionalLimit(match?.[1], 20, 100);
+    await bot.sendMessage(msg.chat.id, formatSiteDeviceWarnings(limit));
   });
 
   bot.onText(/^\/sites(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
@@ -1898,6 +1947,33 @@ function parseSiteDeviceBanDuration(rawValue) {
   return { ok: false, error: 'Supported duration units: h for hours, d for days.' };
 }
 
+function parseSiteDeviceWarningArgs(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return { ok: false, error: 'Format: /devicewarn <deviceId> <reason>' };
+  }
+
+  const parts = tokenizeArgs(value);
+  if (parts.length < 2) {
+    return { ok: false, error: 'Format: /devicewarn <deviceId> <reason>' };
+  }
+
+  const deviceId = String(parts[0] || '').trim();
+  const reason = parts.slice(1).join(' ').trim();
+  if (!deviceId) {
+    return { ok: false, error: 'Device ID is required.' };
+  }
+  if (!reason) {
+    return { ok: false, error: 'Reason is required.' };
+  }
+
+  return {
+    ok: true,
+    deviceId,
+    reason,
+  };
+}
+
 function normalizeOptionalLimit(rawValue, fallbackValue = 20, maxValue = 100) {
   const value = String(rawValue || '').trim();
   if (!value) {
@@ -2416,6 +2492,32 @@ function formatSiteDeviceBanEntry(entry, header) {
     `Device ID: ${entry.deviceId}`,
     `Created: ${formatDateTime(entry.createdAt)}`,
     `Expires: ${formatDateTime(entry.expiresAt)}`,
+    `Reason: ${entry.reason || '-'}`,
+  ].join('\n');
+}
+
+function formatSiteDeviceWarnings(limit) {
+  const entries = listSiteDeviceWarnings(limit);
+  if (!entries.length) {
+    return 'No active site device warnings.';
+  }
+
+  return [
+    `Site device warnings: ${entries.length}`,
+    '',
+    ...entries.map((entry, index) => `${index + 1}. ${entry.deviceId} | ${formatDateTime(entry.createdAt)} | ${entry.reason || 'no reason'}`),
+  ].join('\n');
+}
+
+function formatSiteDeviceWarningEntry(entry, header) {
+  if (!entry) {
+    return `${header}\nDevice ID: -`;
+  }
+
+  return [
+    header,
+    `Device ID: ${entry.deviceId}`,
+    `Created: ${formatDateTime(entry.createdAt)}`,
     `Reason: ${entry.reason || '-'}`,
   ].join('\n');
 }
