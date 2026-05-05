@@ -100,8 +100,10 @@ app.use((req, res, next) => {
     return next();
   }
 
-  const deviceId = ensureDeviceCookie(req, res);
-  const ban = getSiteDeviceBan(deviceId);
+  const identifiers = getCurrentSiteDeviceIdentifiers(req, res);
+  const ban = identifiers.find((value) => value)
+    ? identifiers.map((value) => getSiteDeviceBan(value)).find(Boolean)
+    : null;
   if (!ban) {
     return next();
   }
@@ -1373,6 +1375,15 @@ function ensureDeviceCookie(req, res) {
   }
 
   return deviceId;
+}
+
+function getCurrentSiteDeviceIdentifiers(req, res) {
+  const primaryDeviceId = ensureDeviceCookie(req, res);
+  const browserCookieId = getCookieValue(req, 'pdmu_browser_id');
+  return Array.from(new Set([
+    String(primaryDeviceId || '').trim(),
+    String(browserCookieId || '').trim(),
+  ].filter(Boolean)));
 }
 
 function setDeviceCookie(res, deviceId) {

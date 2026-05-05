@@ -24,6 +24,7 @@ const closeMyTestsBtn = document.getElementById('closeMyTestsBtn');
 const siteNoticeCard = document.getElementById('siteNoticeCard');
 const siteNoticeText = document.getElementById('siteNoticeText');
 const siteNoticeTime = document.getElementById('siteNoticeTime');
+const puterUsageFooter = document.getElementById('puterUsageFooter');
 
 let currentDraftToken = '';
 let currentDraftPayload = null;
@@ -32,6 +33,7 @@ let validatedCodePayload = null;
 let currentAiJobId = '';
 let rememberedClientTgUsernamePromise = null;
 let adminBootstrapPromise = null;
+let puterUsageRefreshPromise = null;
 let adminBootstrap = {
   puterParserRepairEnabled: true,
   puterParserRepairModel: 'google/gemini-2.5-flash-lite',
@@ -41,6 +43,8 @@ loadSiteNotice();
 void loadAdminBootstrap();
 loadStoredClientTgUsername();
 void loadRememberedClientTgUsername();
+syncBrowserIdCookie();
+void schedulePuterUsageRefresh();
 syncOptionCountMode();
 syncAnswerIndexOptions();
 syncAnswerMode();
@@ -422,6 +426,8 @@ async function maybeRepairParsedDraft(payload) {
         'Додаткову перевірку структури пропущено. Використано результат локального парсера.',
       ],
     };
+  } finally {
+    void refreshPuterUsageFooter(true);
   }
 }
 
@@ -523,6 +529,109 @@ function rememberResolvedClientTgUsername(value) {
     clientTgUsernameInput.value = normalized;
     persistClientTgUsername();
   }
+}
+
+function isPuterUsageAvailable() {
+  return Boolean(
+    window.puter
+    && window.puter.auth
+    && typeof window.puter.auth.getMonthlyUsage === 'function'
+  );
+}
+
+function microcentsToDollars(value) {
+  const numericValue = Number(value || 0);
+  if (!Number.isFinite(numericValue)) {
+    return 0;
+  }
+
+  return numericValue / 100000000;
+}
+
+function formatUsdAmount(value) {
+  const numericValue = Number(value || 0);
+  if (!Number.isFinite(numericValue)) {
+    return '$0.00';
+  }
+
+  if (numericValue >= 0.1) {
+    return `$${numericValue.toFixed(2)}`;
+  }
+
+  return `$${numericValue.toFixed(4)}`;
+}
+
+function setPuterUsageText(message) {
+  if (!puterUsageFooter) {
+    return;
+  }
+
+  puterUsageFooter.textContent = message;
+}
+
+async function refreshPuterUsageFooter(force = false) {
+  if (!puterUsageFooter) {
+    return null;
+  }
+
+  if (!force && puterUsageRefreshPromise) {
+    return puterUsageRefreshPromise;
+  }
+
+  puterUsageRefreshPromise = (async () => {
+    if (!isPuterUsageAvailable()) {
+      setPuterUsageText('Puter limit: unavailable on this device right now.');
+      return null;
+    }
+
+    try {
+      const usage = await window.puter.auth.getMonthlyUsage();
+      const allowanceInfo = usage && typeof usage === 'object' ? usage.allowanceInfo : null;
+      const remainingDollars = microcentsToDollars(allowanceInfo?.remaining);
+      const totalDollars = microcentsToDollars(allowanceInfo?.monthUsageAllowance);
+
+      if (!allowanceInfo || !Number.isFinite(remainingDollars) || !Number.isFinite(totalDollars) || totalDollars <= 0) {
+        setPuterUsageText('Puter limit: usage data is not available for this device.');
+        return null;
+      }
+
+      setPuterUsageText(`Puter free limit left on this device: ${formatUsdAmount(remainingDollars)} of ${formatUsdAmount(totalDollars)}.`);
+      return usage;
+    } catch (error) {
+      const message = String(error?.message || '');
+      if (/sign\s*in|login|auth|unauthor/i.test(message)) {
+        setPuterUsageText('Puter limit: sign in to Puter to see remaining free allowance.');
+      } else {
+        setPuterUsageText('Puter limit: could not load remaining free allowance.');
+      }
+      return null;
+    } finally {
+      puterUsageRefreshPromise = null;
+    }
+  })();
+
+  return puterUsageRefreshPromise;
+}
+
+async function schedulePuterUsageRefresh() {
+  if (!puterUsageFooter) {
+    return;
+  }
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (isPuterUsageAvailable()) {
+      await refreshPuterUsageFooter(true);
+      return;
+    }
+
+    if (attempt === 0) {
+      setPuterUsageText('Puter limit: waiting for usage data...');
+    }
+
+    await delay(700);
+  }
+
+  await refreshPuterUsageFooter(true);
 }
 
 async function loadSiteNotice() {
@@ -1219,6 +1328,20 @@ function getOrCreateBrowserId() {
       ? window.crypto.randomUUID()
       : `browser-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
+}
+
+function syncBrowserIdCookie() {
+  const browserId = getOrCreateBrowserId();
+  if (!browserId) {
+    return;
+  }
+
+  document.cookie = [
+    `pdmu_browser_id=${encodeURIComponent(browserId)}`,
+    'Path=/',
+    `Max-Age=${60 * 60 * 24 * 365}`,
+    'SameSite=Lax',
+  ].join('; ');
 }
 
 function getResolvedTimeZone() {

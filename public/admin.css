@@ -30,6 +30,23 @@ body{
   padding-right:max(16px, env(safe-area-inset-right));
   padding-bottom:max(40px, env(safe-area-inset-bottom));
 }
+.page-footer{
+  margin-top:18px;
+  display:flex;
+  justify-content:flex-end;
+}
+.puter-usage{
+  margin:0;
+  padding:10px 14px;
+  border-radius:999px;
+  border:1px solid rgba(31,41,55,.08);
+  background:rgba(255,253,248,.78);
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.4;
+  text-align:right;
+  backdrop-filter:blur(8px);
+}
 .site-notice{
   margin-bottom:16px;
   padding:18px 22px;
