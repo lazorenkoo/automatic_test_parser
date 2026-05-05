@@ -95,7 +95,7 @@ export function startTelegramBot() {
     '/aiban <browserId> [reason]',
     '/aiunban <browserId>',
     '/aibans [limit]',
-    '/deviceban <deviceId> <days> [reason]',
+    '/deviceban <deviceId> <days|hours> [reason]',
     '/deviceunban <deviceId>',
     '/devicebans [limit]',
     '/sites [page] [type=1] [tg=@user] [q=text] [ai=yes|no] [visited=yes|no] [min_devices=2] [max_devices=5] [status=active|banned|all] [before=2026-04-20] [after=2026-04-01]',
@@ -146,7 +146,7 @@ export function startTelegramBot() {
     { command: 'aiban', description: 'Ban AI device by browserId' },
     { command: 'aiunban', description: 'Unban AI device' },
     { command: 'aibans', description: 'List AI device bans' },
-    { command: 'deviceban', description: 'Ban site device for days' },
+    { command: 'deviceban', description: 'Ban site device for days/hours' },
     { command: 'deviceunban', description: 'Unban site device' },
     { command: 'devicebans', description: 'List site device bans' },
     { command: 'sites', description: 'List quiz sites' },
@@ -661,7 +661,7 @@ export function startTelegramBot() {
       return;
     }
 
-    const result = banSiteDevice(parsed.deviceId, parsed.days, parsed.reason);
+    const result = banSiteDevice(parsed.deviceId, parsed.durationMs, parsed.reason);
     await bot.sendMessage(msg.chat.id, formatSiteDeviceBanEntry(result, 'Site device banned.'));
   });
 
@@ -1845,29 +1845,57 @@ function parseAiBanArgs(rawValue, formatHint) {
 function parseSiteDeviceBanArgs(rawValue) {
   const value = String(rawValue || '').trim();
   if (!value) {
-    return { ok: false, error: 'Format: /deviceban <deviceId> <days> [reason]' };
+    return { ok: false, error: 'Format: /deviceban <deviceId> <3|12h|2d> [reason]' };
   }
 
   const parts = tokenizeArgs(value);
   if (parts.length < 2) {
-    return { ok: false, error: 'Format: /deviceban <deviceId> <days> [reason]' };
+    return { ok: false, error: 'Format: /deviceban <deviceId> <3|12h|2d> [reason]' };
   }
 
   const deviceId = String(parts[0] || '').trim();
-  const days = Number(parts[1]);
+  const duration = parseSiteDeviceBanDuration(parts[1]);
   if (!deviceId) {
     return { ok: false, error: 'Device ID is required.' };
   }
-  if (!Number.isInteger(days) || days < 1) {
-    return { ok: false, error: 'Days must be an integer 1 or greater.' };
+  if (!duration.ok) {
+    return { ok: false, error: duration.error };
   }
 
   return {
     ok: true,
     deviceId,
-    days,
+    durationMs: duration.durationMs,
     reason: parts.slice(2).join(' ').trim() || null,
   };
+}
+
+function parseSiteDeviceBanDuration(rawValue) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  if (!value) {
+    return { ok: false, error: 'Duration is required. Use 3, 12h or 2d.' };
+  }
+
+  const match = value.match(/^(\d+)([a-z]*)$/i);
+  if (!match) {
+    return { ok: false, error: 'Duration must look like 3, 12h or 2d.' };
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2] || 'd';
+  if (!Number.isInteger(amount) || amount < 1) {
+    return { ok: false, error: 'Duration must be an integer 1 or greater.' };
+  }
+
+  if (unit === 'd' || unit === 'day' || unit === 'days') {
+    return { ok: true, durationMs: amount * 24 * 60 * 60 * 1000 };
+  }
+
+  if (unit === 'h' || unit === 'hour' || unit === 'hours') {
+    return { ok: true, durationMs: amount * 60 * 60 * 1000 };
+  }
+
+  return { ok: false, error: 'Supported duration units: h for hours, d for days.' };
 }
 
 function normalizeOptionalLimit(rawValue, fallbackValue = 20, maxValue = 100) {

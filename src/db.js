@@ -1510,15 +1510,15 @@ export function listAiDeviceBans(limit = 20) {
   }));
 }
 
-export function banSiteDevice(deviceId, days, reason = null) {
+export function banSiteDevice(deviceId, durationMs, reason = null) {
   const normalized = sanitizeNullableValue(deviceId);
-  const numericDays = Number(days);
-  if (!normalized || !Number.isInteger(numericDays) || numericDays < 1) {
+  const numericDurationMs = Number(durationMs);
+  if (!normalized || !Number.isInteger(numericDurationMs) || numericDurationMs < 60 * 60 * 1000) {
     return null;
   }
 
   const createdAt = nowMs();
-  const expiresAt = createdAt + (numericDays * 24 * 60 * 60 * 1000);
+  const expiresAt = createdAt + numericDurationMs;
   upsertSiteDeviceBanStmt.run(normalized, sanitizeNullableValue(reason), createdAt, expiresAt);
   return getSiteDeviceBan(normalized, createdAt);
 }
