@@ -24,9 +24,10 @@ const closeMyTestsBtn = document.getElementById('closeMyTestsBtn');
 const siteNoticeCard = document.getElementById('siteNoticeCard');
 const siteNoticeText = document.getElementById('siteNoticeText');
 const siteNoticeTime = document.getElementById('siteNoticeTime');
-const deviceWarningCard = document.getElementById('deviceWarningCard');
-const deviceWarningText = document.getElementById('deviceWarningText');
-const deviceWarningTime = document.getElementById('deviceWarningTime');
+const deviceWarningModal = document.getElementById('deviceWarningModal');
+const deviceWarningModalText = document.getElementById('deviceWarningModalText');
+const deviceWarningModalTime = document.getElementById('deviceWarningModalTime');
+const deviceWarningCloseBtn = document.getElementById('deviceWarningCloseBtn');
 const puterUsageFooter = document.getElementById('puterUsageFooter');
 
 let currentDraftToken = '';
@@ -43,11 +44,11 @@ let adminBootstrap = {
 };
 
 loadSiteNotice();
-loadDeviceWarning();
 void loadAdminBootstrap();
 loadStoredClientTgUsername();
 void loadRememberedClientTgUsername();
 syncBrowserIdCookie();
+loadDeviceWarning();
 void schedulePuterUsageRefresh();
 syncOptionCountMode();
 syncAnswerIndexOptions();
@@ -65,6 +66,12 @@ aiCreateBtn?.addEventListener('click', prepareAiQuiz);
 reportIssueBtn?.addEventListener('click', reportCurrentUploadIssue);
 myTestsBtn?.addEventListener('click', openMyTestsPanel);
 closeMyTestsBtn?.addEventListener('click', closeMyTestsPanel);
+deviceWarningCloseBtn?.addEventListener('click', closeDeviceWarningModal);
+deviceWarningModal?.addEventListener('click', (event) => {
+  if (event.target === deviceWarningModal) {
+    closeDeviceWarningModal();
+  }
+});
 
 quizForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1335,7 +1342,7 @@ function getOrCreateBrowserId() {
 }
 
 async function loadDeviceWarning() {
-  if (!deviceWarningCard || !deviceWarningText || !deviceWarningTime) {
+  if (!deviceWarningModal || !deviceWarningModalText || !deviceWarningModalTime) {
     return;
   }
 
@@ -1348,18 +1355,36 @@ async function loadDeviceWarning() {
 
     const warning = payload.warning && typeof payload.warning === 'object' ? payload.warning : null;
     if (!warning || !String(warning.reason || '').trim()) {
-      deviceWarningCard.classList.add('hidden');
-      deviceWarningText.textContent = '';
-      deviceWarningTime.textContent = '';
+      closeDeviceWarningModal();
+      deviceWarningModalText.textContent = '';
+      deviceWarningModalTime.textContent = '';
       return;
     }
 
-    deviceWarningText.textContent = String(warning.reason || '').trim();
-    deviceWarningTime.textContent = Number(warning.createdAt || 0) > 0 ? formatNoticeDateTime(Number(warning.createdAt || 0)) : '';
-    deviceWarningCard.classList.remove('hidden');
+    deviceWarningModalText.textContent = String(warning.reason || '').trim();
+    deviceWarningModalTime.textContent = Number(warning.createdAt || 0) > 0 ? formatNoticeDateTime(Number(warning.createdAt || 0)) : '';
+    openDeviceWarningModal();
   } catch (_error) {
-    deviceWarningCard.classList.add('hidden');
+    closeDeviceWarningModal();
   }
+}
+
+function openDeviceWarningModal() {
+  if (!deviceWarningModal) {
+    return;
+  }
+
+  deviceWarningModal.classList.remove('hidden');
+  deviceWarningModal.setAttribute('aria-hidden', 'false');
+}
+
+function closeDeviceWarningModal() {
+  if (!deviceWarningModal) {
+    return;
+  }
+
+  deviceWarningModal.classList.add('hidden');
+  deviceWarningModal.setAttribute('aria-hidden', 'true');
 }
 
 function syncBrowserIdCookie() {

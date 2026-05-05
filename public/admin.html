@@ -8,20 +8,25 @@
 </head>
 <body>
   <main class="page">
+    <div id="deviceWarningModal" class="warning-modal-backdrop hidden" aria-hidden="true">
+      <section class="warning-modal-card" role="dialog" aria-modal="true" aria-labelledby="deviceWarningModalTitle">
+        <div class="warning-modal-head">
+          <p id="deviceWarningModalTitle" class="warning-modal-title">Warning for this device</p>
+          <button id="deviceWarningCloseBtn" class="warning-modal-close" type="button" aria-label="Close warning">×</button>
+        </div>
+        <div class="warning-modal-body">
+          <p id="deviceWarningModalTime" class="warning-modal-time"></p>
+          <div id="deviceWarningModalText" class="warning-modal-text"></div>
+        </div>
+      </section>
+    </div>
+
     <section id="siteNoticeCard" class="card site-notice hidden" aria-live="polite">
       <div class="site-notice-head">
         <p class="site-notice-kicker">Оголошення</p>
         <p id="siteNoticeTime" class="site-notice-time"></p>
       </div>
       <div id="siteNoticeText" class="site-notice-text"></div>
-    </section>
-
-    <section id="deviceWarningCard" class="card site-notice device-warning hidden" aria-live="polite">
-      <div class="site-notice-head">
-        <p class="site-notice-kicker">Warning</p>
-        <p id="deviceWarningTime" class="site-notice-time"></p>
-      </div>
-      <div id="deviceWarningText" class="site-notice-text"></div>
     </section>
 
     <section class="grid">

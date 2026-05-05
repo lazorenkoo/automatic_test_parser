@@ -87,6 +87,21 @@ h1{
   display:block;
   margin-bottom:6px;
 }
+.device-warning-modal{
+  position:fixed;
+  inset:0;
+  z-index:1300;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:18px;
+  background:rgba(15,23,42,.52);
+  backdrop-filter:blur(10px);
+}
+.device-warning-modal .modal-card{
+  border:1px solid #f2c28b;
+  background:linear-gradient(180deg, #fffaf3 0%, #fff5e8 100%);
+}
 .hidden{display:none !important}
 .meta{
   display:grid;
@@ -713,6 +728,7 @@ const i18n = {
   reportUnavailable: 'Зараз цей тест не може надсилати повідомлення.',
   warningTitle: 'Будь ласка, перевірте ще раз такі питання:',
   deviceWarningTitle: 'Увага для цього пристрою:',
+  deviceWarningClose: 'Закрити',
 };
 
 i18n.explain = '\u041F\u043E\u044F\u0441\u043D\u0435\u043D\u043D\u044F';
@@ -827,6 +843,10 @@ const els = {
   reportBtn: document.getElementById('reportBtn'),
   reportToast: document.getElementById('reportToast'),
   warningBox: document.getElementById('warningBox'),
+  deviceWarningModal: document.getElementById('deviceWarningModal'),
+  deviceWarningModalTitle: document.getElementById('deviceWarningModalTitle'),
+  deviceWarningModalText: document.getElementById('deviceWarningModalText'),
+  deviceWarningModalClose: document.getElementById('deviceWarningModalClose'),
 };
 
 function t(key, params = {}) {
@@ -913,11 +933,17 @@ function applyLanguage() {
   if (els.reportBtn) {
     els.reportBtn.textContent = t('report');
   }
+  if (els.deviceWarningModalTitle) {
+    els.deviceWarningModalTitle.textContent = t('deviceWarningTitle');
+  }
+  if (els.deviceWarningModalClose) {
+    els.deviceWarningModalClose.textContent = t('deviceWarningClose');
+  }
+  if (els.deviceWarningModalText) {
+    els.deviceWarningModalText.textContent = deviceWarning?.reason ? String(deviceWarning.reason) : '';
+  }
   if (els.warningBox) {
     const warningParts = [];
-    if (deviceWarning?.reason) {
-      warningParts.push('<strong>' + t('deviceWarningTitle') + '</strong>' + escapeHtml(String(deviceWarning.reason)));
-    }
     const warningNumbers = Array.from(new Set([
       ...aiDisagreements.map((item) => String(item.questionNumber || '?')),
       ...aiSuspiciousQuestions.map((item) => String(item.questionNumber || '?')),
@@ -957,6 +983,10 @@ function hide(node) {
     return;
   }
   node.classList.add('hidden');
+}
+
+function closeDeviceWarningModal() {
+  hide(els.deviceWarningModal);
 }
 
 function ensureExplanationUi() {
@@ -2458,8 +2488,18 @@ document.addEventListener('DOMContentLoaded', () => {
   els.resultsFilterWrongBtn?.addEventListener('click', () => setResultsFilter('wrong'));
   els.restartBtn?.addEventListener('click', resetQuiz);
   els.reportBtn?.addEventListener('click', reportBrokenQuiz);
+  els.deviceWarningModalClose?.addEventListener('click', closeDeviceWarningModal);
+  els.deviceWarningModal?.addEventListener('click', (event) => {
+    if (event.target === els.deviceWarningModal) {
+      closeDeviceWarningModal();
+    }
+  });
+  if (deviceWarning?.reason) {
+    show(els.deviceWarningModal);
+  }
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      closeDeviceWarningModal();
       closeExplanationPanel();
     }
   });
@@ -2503,6 +2543,17 @@ export function renderHostedQuizHtml(quiz, options = {}) {
 </head>
 <body>
   <div class="shell">
+    <div id="deviceWarningModal" class="device-warning-modal hidden">
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="deviceWarningModalTitle">
+        <div class="modal-head">
+          <h2 id="deviceWarningModalTitle" class="modal-title">Увага для цього пристрою</h2>
+          <button id="deviceWarningModalClose" class="btn secondary" type="button">Закрити</button>
+        </div>
+        <div class="modal-body">
+          <div id="deviceWarningModalText" class="modal-content"></div>
+        </div>
+      </section>
+    </div>
     <button id="reportBtn" class="btn secondary report-fab" type="button">Повідомити про помилку</button>
     <div id="reportToast" class="toast hidden" role="status" aria-live="polite"></div>
 
