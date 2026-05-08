@@ -42,6 +42,7 @@ let activeDeviceWarningSignature = '';
 let adminBootstrap = {
   puterParserRepairEnabled: true,
   puterParserRepairModel: 'google/gemini-2.5-flash-lite',
+  puterParserRepairBatchSize: 80,
 };
 
 loadSiteNotice();
@@ -184,6 +185,7 @@ async function loadAdminBootstrap(forceRefresh = false) {
         ...adminBootstrap,
         puterParserRepairEnabled: Boolean(payload.puterParserRepairEnabled),
         puterParserRepairModel: String(payload.puterParserRepairModel || adminBootstrap.puterParserRepairModel || 'google/gemini-2.5-flash-lite'),
+        puterParserRepairBatchSize: Math.max(1, Math.min(100, Number(payload.puterParserRepairBatchSize || adminBootstrap.puterParserRepairBatchSize || 80) || 80)),
       };
     } catch (_error) {
       // Keep default bootstrap values.
@@ -365,7 +367,7 @@ async function maybeRepairParsedDraft(payload) {
   }
 
   setParserProgressStatus(55);
-  const chunks = chunkQuestionsForRepair(questions, 80);
+  const chunks = chunkQuestionsForRepair(questions, adminBootstrap.puterParserRepairBatchSize || 80);
   const repairedQuestions = [];
   let usedRawText = false;
 

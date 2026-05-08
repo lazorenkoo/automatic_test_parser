@@ -147,6 +147,7 @@ app.get('/api/admin-bootstrap', (_req, res) => {
   return res.json({
     puterParserRepairEnabled: String(process.env.PUTER_PARSER_REPAIR_ENABLED || '1') !== '0',
     puterParserRepairModel: String(process.env.PUTER_PARSER_REPAIR_MODEL || 'google/gemini-2.5-flash-lite').trim(),
+    puterParserRepairBatchSize: Math.max(1, Math.min(100, Number(process.env.PUTER_PARSER_REPAIR_BATCH_SIZE || 80) || 80)),
   });
 });
 
@@ -1328,6 +1329,39 @@ app.delete('/api/admin/quizzes/:id', requireAdminSecret, (req, res) => {
   });
 });
 
+app.get('/api/admin/export-data', requireAdminAccess, (_req, res) => {
+  const { dataDir } = getDbMeta();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="pdmu-data-${timestamp}.zip"`);
+
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  archive.on('error', (error) => {
+    res.destroy(error);
+  });
+
+  archive.pipe(res);
+  archive.directory(dataDir, 'data');
+  archive.finalize();
+});
+
+app.post('/api/admin/wipe-data', requireAdminAccess, (req, res) => {
+  const expectedConfirmation = 'WIPE /app/data';
+  if (String(req.body?.confirm || '') !== expectedConfirmation) {
+    return res.status(400).json({
+      error: `ÐŸÑ–Ð´Ñ‚Ð²ÐµÑ€Ð´Ñ–Ñ‚ÑŒ Ð¾Ñ‡Ð¸Ñ‰ÐµÐ½Ð½Ñ Ñ‡ÐµÑ€ÐµÐ· confirm="${expectedConfirmation}".`,
+    });
+  }
+
+  const { dataDir } = getDbMeta();
+  wipeDirectoryContents(dataDir);
+
+  return res.json({
+    ok: true,
+    wipedPath: dataDir,
+  });
+});
+
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({
@@ -1355,6 +1389,49 @@ function requireAdminSecret(req, res, next) {
   }
 
   return next();
+}
+
+function requireAdminAccess(req, res, next) {
+  const suppliedSecret = readAdminSecret(req);
+  const expectedSecret = String(process.env.ADMIN_SECRET || '');
+
+  if (!expectedSecret || suppliedSecret !== expectedSecret) {
+    return res.status(403).json({ error: 'ÐÐµÐ²Ñ–Ñ€Ð½Ð¸Ð¹ admin secret.' });
+  }
+
+  return next();
+}
+
+function readAdminSecret(req) {
+  const headerSecret = String(req.get('X-Admin-Secret') || '').trim();
+  if (headerSecret) {
+    return headerSecret;
+  }
+
+  const querySecret = String(req.query?.secret || '').trim();
+  if (querySecret) {
+    return querySecret;
+  }
+
+  return String(req.body?.secret || '').trim();
+}
+
+function wipeDirectoryContents(dirPath) {
+  const resolvedDirPath = path.resolve(dirPath);
+  if (!fs.existsSync(resolvedDirPath)) {
+    fs.mkdirSync(resolvedDirPath, { recursive: true });
+    return;
+  }
+
+  for (const entry of fs.readdirSync(resolvedDirPath, { withFileTypes: true })) {
+    const entryPath = path.join(resolvedDirPath, entry.name);
+    if (entry.isDirectory()) {
+      fs.rmSync(entryPath, { recursive: true, force: true });
+      continue;
+    }
+
+    fs.rmSync(entryPath, { force: true });
+  }
 }
 
 function getCookieValue(req, key) {
