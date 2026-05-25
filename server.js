@@ -29,6 +29,7 @@ import {
   getSiteDeviceWarning,
   getUploadReportById,
   getQuizBySlug,
+  listQuizzesForAdmin,
   listQuizReports,
   listUploadReports,
   recordQuizVisit,
@@ -1345,6 +1346,47 @@ app.get('/api/admin/export-data', requireAdminAccess, (_req, res) => {
   archive.finalize();
 });
 
+app.get('/api/admin/export-quizzes-json', requireAdminAccess, (_req, res) => {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const quizzes = listQuizzesForAdmin()
+    .map((quiz) => getQuizById(quiz.id))
+    .filter(Boolean);
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="pdmu-quizzes-json-${timestamp}.zip"`);
+
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  archive.on('error', (error) => {
+    res.destroy(error);
+  });
+
+  archive.pipe(res);
+
+  for (const quiz of quizzes) {
+    const filename = buildQuizJsonExportFilename(quiz);
+    const payload = {
+      id: quiz.id,
+      slug: quiz.slug,
+      title: quiz.title,
+      courseNumber: quiz.courseNumber,
+      sourceFilename: quiz.sourceFilename,
+      answerIndex: quiz.answerIndex,
+      requestedCount: quiz.requestedCount,
+      parsedCount: quiz.parsedCount,
+      createdAt: quiz.createdAt,
+      expiresAt: quiz.expiresAt,
+      bannedAt: quiz.bannedAt,
+      siteType: quiz.siteType,
+      clientTgUsername: quiz.clientTgUsername,
+      questions: Array.isArray(quiz.questions) ? quiz.questions : [],
+    };
+
+    archive.append(`${JSON.stringify(payload, null, 2)}\n`, { name: filename });
+  }
+
+  archive.finalize();
+});
+
 app.post('/api/admin/wipe-data', requireAdminAccess, (req, res) => {
   const expectedConfirmation = 'WIPE /app/data';
   if (String(req.body?.confirm || '') !== expectedConfirmation) {
@@ -1666,6 +1708,22 @@ function normalizeClientUsername(value) {
 function buildStoredFilename(title) {
   const safeTitle = sanitizeText(title || '') || 'Тест';
   return `${safeTitle}.json`;
+}
+
+function buildQuizJsonExportFilename(quiz) {
+  const id = Number(quiz?.id || 0);
+  const slug = sanitizeText(quiz?.slug || `quiz-${id || 'unknown'}`);
+  const title = sanitizeText(quiz?.title || 'quiz')
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+    .slice(0, 80)
+    .trim();
+  const baseName = [id > 0 ? String(id).padStart(4, '0') : '', slug, title]
+    .filter(Boolean)
+    .join('-')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_');
+
+  return `${baseName || slug}.json`;
 }
 
 function resolveFinalizeAccessCode(rawAccessCode) {

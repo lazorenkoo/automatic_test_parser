@@ -10,7 +10,7 @@ const answerFileInput = document.getElementById('answerFile');
 const answerIndexSelect = document.getElementById('answerIndex');
 const optionCountInput = document.getElementById('optionCount');
 const optionCountAutoInput = document.getElementById('optionCountAuto');
-const longParserModeInput = document.getElementById('longParserMode');
+const fastParserModeInput = document.getElementById('fastParserMode');
 const answerModeSingleInput = document.getElementById('answerModeSingle');
 const answerModeFileInput = document.getElementById('answerModeFile');
 const singleAnswerField = document.getElementById('singleAnswerField');
@@ -133,9 +133,9 @@ quizForm.addEventListener('submit', async (event) => {
 
     currentDraftToken = payload.draftToken;
     currentDraftPayload = payload;
-    const repairedPayload = longParserModeInput?.checked
-      ? await maybeRepairParsedDraft(payload)
-      : payload;
+    const repairedPayload = fastParserModeInput?.checked
+      ? payload
+      : await maybeRepairParsedDraft(payload);
     currentDraftPayload = repairedPayload;
     setStatus('success', 'Тест готовий.');
     setParserProgressStatus(100);
