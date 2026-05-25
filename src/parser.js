@@ -3399,13 +3399,14 @@ function parseAutoQuestionBlock(lines) {
       continue;
     }
 
+    const autoOptionCountScore = optionLines.length >= 4 ? 60 : -45;
     const score = scoreExplicitQuestionBoundary(
       questionLines,
       optionLines,
       questionText,
       rawOptionLines,
       Math.max(optionLines.length, AUTO_OPTION_MIN),
-    ) + optionLines.length * 4 - Math.abs(optionLines.length - 5) * 3;
+    ) + optionLines.length * 4 - Math.abs(optionLines.length - 5) * 3 + autoOptionCountScore;
 
     if (!best || score > best.score) {
       best = {
@@ -4055,11 +4056,30 @@ function shouldContinueAutoOptionText(currentOption, nextLine) {
   }
 
   const nextWords = next.split(/\s+/).filter(Boolean).length;
-  if (/^[\p{Ll}\p{Lo}]/u.test(next) && nextWords <= 4 && next.length <= 36) {
+  if (
+    /^[\p{Ll}\p{Lo}]/u.test(next)
+    && nextWords <= 4
+    && next.length <= 36
+    && (
+      (nextWords > 1 && !looksLikeStandaloneOptionLine(current))
+      || endsWithOptionContinuationCue(current)
+    )
+  ) {
     return true;
   }
 
   return false;
+}
+
+function endsWithOptionContinuationCue(text) {
+  const value = sanitizeText(text);
+  if (!value) {
+    return false;
+  }
+
+  const lastWord = value.split(/\s+/).filter(Boolean).at(-1) || '';
+  return /^(попереду|позаду|перед|після|для|до|з|із|над|під)$/iu.test(lastWord)
+    || (/^\p{Ll}/u.test(lastWord) && /(?:им|ім|їм|ою|ею)$/iu.test(lastWord));
 }
 
 function looksLikeStandaloneOptionLine(line) {

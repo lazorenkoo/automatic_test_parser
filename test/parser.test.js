@@ -331,6 +331,41 @@ test('merges overflowed lowercase option tails in auto mode', async () => {
   );
 });
 
+test('keeps lowercase first answers in auto numbered blocks with four choices', async () => {
+  const sourceText = [
+    '21. Причини, що приводять до розриву матки в пологах',
+    'гiпертонiчна хвороба',
+    'клінічна невідповідність голівки плода й тазу роділлі',
+    'прееклампсія',
+    'двійня',
+    '22. Причини, що приводять до розриву матки в пологах',
+    'перенесений септичний ендометрит у минулому',
+    'передчаснi пологи',
+    'випадіння пуповини',
+    'олiгогiдрамнiон',
+  ].join('\n');
+
+  const result = await parseQuizFromFile({
+    buffer: Buffer.from(sourceText, 'utf8'),
+    filename: 'mixed-four-option-auto.txt',
+    answerIndex: 1,
+    optionCount: 'auto',
+  });
+
+  assert.equal(result.questions.length, 2);
+  assert.equal(result.questions[0].q, '21. Причини, що приводять до розриву матки в пологах');
+  assert.deepEqual(
+    result.questions[0].options,
+    [
+      'гiпертонiчна хвороба',
+      'клінічна невідповідність голівки плода й тазу роділлі',
+      'прееклампсія',
+      'двійня',
+    ],
+  );
+  assert.equal(result.questions[1].options.length, 4);
+});
+
 test('strips leading topic preamble from merged first question', async () => {
   const sourceText = [
     '1. Загальна мікробіологія.',
