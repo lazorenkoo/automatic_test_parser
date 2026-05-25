@@ -110,6 +110,7 @@ export function startTelegramBot() {
     '/site <id>',
     '/sitecount <fromId> <toId>',
     '/sitejson <id>',
+    '/ansers <id>',
     '/fixlogs [limit]',
     '/fixlog <id>',
     '/reports [limit]',
@@ -164,6 +165,7 @@ export function startTelegramBot() {
     { command: 'site', description: 'Show site details' },
     { command: 'sitecount', description: 'Sum questions for site id range' },
     { command: 'sitejson', description: 'Send parsed quiz JSON' },
+    { command: 'ansers', description: 'Send correct answers TXT' },
     { command: 'fixlogs', description: 'Latest manual corrections' },
     { command: 'fixlog', description: 'Show correction details' },
     { command: 'reports', description: 'Latest file reports' },
@@ -838,6 +840,33 @@ export function startTelegramBot() {
     }, {
       filename: `quiz-${quiz.id}.json`,
       contentType: 'application/json',
+    });
+  });
+
+  bot.onText(/^\/(?:ansers|answers)(?:@[\w_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+    if (!(await ensureAuthorized(bot, msg, adminUserId))) {
+      return;
+    }
+
+    const numericId = Number(String(match?.[1] || '').trim());
+    if (!Number.isInteger(numericId) || numericId < 1) {
+      await bot.sendMessage(msg.chat.id, 'Format: /ansers <id>');
+      return;
+    }
+
+    const quiz = getQuizById(numericId);
+    if (!quiz) {
+      await bot.sendMessage(msg.chat.id, `Site with id ${numericId} not found.`);
+      return;
+    }
+
+    const answerFileText = buildQuizAnswerKeyText(quiz);
+    const fileBuffer = Buffer.from(answerFileText, 'utf8');
+    await bot.sendDocument(msg.chat.id, fileBuffer, {
+      caption: `Correct answers for site ${quiz.id}`,
+    }, {
+      filename: `quiz-${quiz.id}-answers.txt`,
+      contentType: 'text/plain',
     });
   });
 
@@ -2888,6 +2917,34 @@ function normalizeQuestionCount(value) {
     return 0;
   }
   return numericValue;
+}
+
+function buildQuizAnswerKeyText(quiz) {
+  const questions = Array.isArray(quiz?.questions) ? quiz.questions : [];
+  const lines = questions.map((question, index) => {
+    const options = Array.isArray(question?.options) ? question.options : [];
+    const correctIndex = Number(question?.correctIndex);
+    const marker = formatAnswerMarker(correctIndex, options.length);
+    return `${index + 1}.${marker}`;
+  });
+
+  return `${lines.join('\n')}\n`;
+}
+
+function formatAnswerMarker(correctIndex, optionCount) {
+  const normalizedOptionCount = Number(optionCount || 0);
+  if (
+    !Number.isInteger(correctIndex)
+    || correctIndex < 0
+    || !Number.isInteger(normalizedOptionCount)
+    || normalizedOptionCount < 1
+    || correctIndex >= normalizedOptionCount
+  ) {
+    return '?';
+  }
+
+  const markers = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+  return markers[correctIndex] || String(correctIndex + 1);
 }
 
 function normalizePrice(value) {
