@@ -5067,7 +5067,8 @@ function matchOptionStart(line, optionCount) {
     .map((marker) => marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('|');
 
-  const regex = new RegExp(`^(${escapedMarkers})(\\s*[\\)\\.\\-${DASH_CHARS}:])(\\s*)(.+)$`);
+  const separatorPattern = '(?:\\)|\\.|-|\\u2013|\\u2014|:)';
+  const regex = new RegExp(`^(${escapedMarkers})(\\s*${separatorPattern})(\\s*)(.+)$`, 'u');
   const match = line.match(regex);
   if (!match) {
     return null;
@@ -5082,8 +5083,13 @@ function matchOptionStart(line, optionCount) {
   }
 
   const markerIsLetter = /^[A-Za-z\u0400-\u04FF]$/u.test(marker);
+  const markerIsNumeric = /^\d+$/.test(marker);
   const textStartsLowercase = /^\p{Ll}/u.test(text);
   const textStartsUppercaseOrDigit = /^[\p{Lu}\d]/u.test(text);
+
+  if (markerIsNumeric && /^\d/.test(text)) {
+    return null;
+  }
 
   // Prevent false positives like "В-рус ..." where the first letter is part of the word,
   // not an answer marker extracted from the source file.

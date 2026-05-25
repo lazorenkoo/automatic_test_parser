@@ -11,6 +11,7 @@
     "start": "node server.js",
     "test": "node --test test/*.test.js",
     "codes:create": "node scripts/create-codes.mjs",
+    "export:quizzes": "node scripts/export-quizzes.mjs",
     "smoke:test": "node scripts/smoke-test.mjs"
   },
   "keywords": [],

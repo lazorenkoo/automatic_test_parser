@@ -366,6 +366,48 @@ test('keeps lowercase first answers in auto numbered blocks with four choices', 
   assert.equal(result.questions[1].options.length, 4);
 });
 
+test('keeps numeric answer values intact in auto mode', async () => {
+  const sourceText = [
+    '38. Якою є середня частота передчасних пологів в Україні?',
+    '10 %',
+    '20 %',
+    '1 %',
+    '5 %',
+    '30 %',
+    '39. У якому віці слід планово призначати препарати заліза передчасно народженим дітям?',
+    '1 тиждень',
+    '4 тижні',
+    '2 місяці',
+    '3 тижні',
+    '1 місяць',
+    '49. Яка кількість молока необхідна для передчасно народженої дитини на перше годування?',
+    '1-3 мл',
+    '5 мл',
+    '4 мл',
+    '6 мл',
+    '7 мл',
+    '32. Температура повітря в палаті має бути:',
+    '25 С',
+    '23 С',
+    '28 С',
+    '18 С',
+    '22 С',
+  ].join('\n');
+
+  const result = await parseQuizFromFile({
+    buffer: Buffer.from(sourceText, 'utf8'),
+    filename: 'numeric-auto-options.txt',
+    answerIndex: 1,
+    optionCount: 'auto',
+  });
+
+  assert.equal(result.questions.length, 4);
+  assert.deepEqual(result.questions[0].options, ['10 %', '20 %', '1 %', '5 %', '30 %']);
+  assert.deepEqual(result.questions[1].options, ['1 тиждень', '4 тижні', '2 місяці', '3 тижні', '1 місяць']);
+  assert.deepEqual(result.questions[2].options, ['1-3 мл', '5 мл', '4 мл', '6 мл', '7 мл']);
+  assert.deepEqual(result.questions[3].options, ['25 С', '23 С', '28 С', '18 С', '22 С']);
+});
+
 test('strips leading topic preamble from merged first question', async () => {
   const sourceText = [
     '1. Загальна мікробіологія.',
