@@ -93,7 +93,7 @@ export async function parseQuizFromFile({
       notes.push(...resolved.notes);
     }
 
-    return choosePreferredDocxAutoResult(buildParsedQuizResult({
+    return await finalizePreferredAutoPdfResult(buildParsedQuizResult({
       parsed: exactParagraphCandidate,
       filename,
       questions,
@@ -102,7 +102,15 @@ export async function parseQuizFromFile({
       answerKey,
       notes,
       reviewBlocks,
-    }), fixedDocxResult);
+    }), fixedDocxResult, {
+      buffer,
+      filename,
+      answerIndex,
+      limit,
+      answerKey,
+      extension,
+      optionCount: normalizedOptionCount,
+    });
   }
 
   if (shouldPreferParagraphMarkers(extension, paragraphs, paragraphMarkersCandidate, normalizedOptionCount)) {
@@ -116,7 +124,7 @@ export async function parseQuizFromFile({
       notes.push(...resolved.notes);
     }
 
-    return choosePreferredDocxAutoResult(buildParsedQuizResult({
+    return await finalizePreferredAutoPdfResult(buildParsedQuizResult({
       parsed: paragraphMarkersCandidate,
       filename,
       questions,
@@ -125,7 +133,15 @@ export async function parseQuizFromFile({
       answerKey,
       notes,
       reviewBlocks,
-    }), fixedDocxResult);
+    }), fixedDocxResult, {
+      buffer,
+      filename,
+      answerIndex,
+      limit,
+      answerKey,
+      extension,
+      optionCount: normalizedOptionCount,
+    });
   }
 
   const candidates = [
@@ -189,7 +205,27 @@ export async function parseQuizFromFile({
   questions = shiftedRepair.questions;
   notes.push(...shiftedRepair.notes);
 
+  const tailRepair = repairQuestionTailOptionLeaks(questions, normalizedOptionCount);
+  questions = tailRepair.questions;
+  notes.push(...tailRepair.notes);
+
+  const crossQuestionRepair = repairCrossQuestionLeadingOptionLeaks(questions, normalizedOptionCount);
+  questions = crossQuestionRepair.questions;
+  notes.push(...crossQuestionRepair.notes);
+
+  const reviewRecovery = repairMissingNumberedQuestionsFromReviewBlocks(
+    questions,
+    reviewBlocks,
+    normalizedOptionCount,
+    safeAnswerIndex,
+  );
+  questions = reviewRecovery.questions;
+  notes.push(...reviewRecovery.notes);
+
   questions = normalizeParsedQuestionsForOutput(questions, normalizedOptionCount, safeAnswerIndex);
+  const normalizedTailRepair = repairNormalizedQuestionTailOptionLeaks(questions, normalizedOptionCount);
+  questions = normalizedTailRepair.questions;
+  notes.push(...normalizedTailRepair.notes);
 
   if (answerKey) {
     const resolved = applyAnswerKeyToQuestions(questions, answerKey);
@@ -197,7 +233,7 @@ export async function parseQuizFromFile({
     notes.push(...resolved.notes);
   }
 
-  return choosePreferredDocxAutoResult(buildParsedQuizResult({
+  return await finalizePreferredAutoPdfResult(buildParsedQuizResult({
     parsed,
     filename,
     questions,
@@ -206,15 +242,35 @@ export async function parseQuizFromFile({
     answerKey,
     notes,
     reviewBlocks,
-  }), fixedDocxResult);
+  }), fixedDocxResult, {
+    buffer,
+    filename,
+    answerIndex,
+    limit,
+    answerKey,
+    extension,
+    optionCount: normalizedOptionCount,
+  });
 }
 
 export const __test__ = {
   rebuildPdfPageTextForReadingOrder,
   repairEmbeddedQuestionLeaks,
+  repairCrossQuestionLeadingOptionLeaks,
+  repairMissingNumberedQuestionsFromReviewBlocks,
   normalizeParsedQuestionsForOutput,
   parseQuestionsBySequentialBlocks,
 };
+
+export function normalizeImportedQuestions(questions, {
+  answerIndex = 1,
+  optionCount = AUTO_OPTION_COUNT,
+} = {}) {
+  const normalizedOptionCount = normalizeOptionCountSetting(optionCount);
+  return (Array.isArray(questions) ? questions : [])
+    .map((item, index) => normalizeJsonQuestion(item, index + 1, answerIndex, normalizedOptionCount))
+    .filter(Boolean);
+}
 
 function parseQuizFromJsonFile({
   buffer,
@@ -380,6 +436,39 @@ function buildParsedQuizResult({
   };
 }
 
+async function finalizePreferredAutoPdfResult(autoResult, fixedDocxResult, context) {
+  const resolvedFixed = fixedDocxResult || await loadFixedPdfAutoFallback(context);
+  return choosePreferredDocxAutoResult(autoResult, resolvedFixed);
+}
+
+async function loadFixedPdfAutoFallback({
+  buffer,
+  filename,
+  answerIndex,
+  limit,
+  answerKey,
+  extension,
+  optionCount,
+}) {
+  if (!isAutoOptionCount(optionCount) || (extension !== '.docx' && extension !== '.pdf')) {
+    return null;
+  }
+
+  try {
+    return await parseQuizFromFile({
+      buffer,
+      filename,
+      answerIndex,
+      limit,
+      optionCount: 5,
+      answerKey,
+      preferDocxFixedAuto: false,
+    });
+  } catch {
+    return null;
+  }
+}
+
 function choosePreferredDocxAutoResult(autoResult, fixedDocxResult) {
   if (!fixedDocxResult) {
     return autoResult;
@@ -387,6 +476,13 @@ function choosePreferredDocxAutoResult(autoResult, fixedDocxResult) {
 
   const autoQuestionCount = autoResult.questions?.length || 0;
   const fixedQuestionCount = fixedDocxResult.questions?.length || 0;
+  const autoSuspiciousFragments = countSuspiciousLowercaseOptionFragments(autoResult.questions);
+  const fixedSuspiciousFragments = countSuspiciousLowercaseOptionFragments(fixedDocxResult.questions);
+
+  if (fixedQuestionCount <= autoQuestionCount && fixedSuspiciousFragments > autoSuspiciousFragments) {
+    return autoResult;
+  }
+
   if (fixedQuestionCount > autoQuestionCount) {
     return fixedDocxResult;
   }
@@ -411,6 +507,36 @@ function choosePreferredDocxAutoResult(autoResult, fixedDocxResult) {
   }
 
   return autoResult;
+}
+
+function countSuspiciousLowercaseOptionFragments(questions) {
+  return Array.isArray(questions)
+    ? questions.reduce((total, question) => total + countQuestionSuspiciousLowercaseOptionFragments(question), 0)
+    : 0;
+}
+
+function countQuestionSuspiciousLowercaseOptionFragments(question) {
+  const options = Array.isArray(question?.options)
+    ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+    : [];
+
+  let count = 0;
+  for (let index = 1; index < options.length; index += 1) {
+    const current = options[index];
+    const previous = options[index - 1];
+    const words = current.split(/\s+/).filter(Boolean).length;
+
+    if (
+      /^[\p{Ll}\p{Lo}]/u.test(current)
+      && words <= 3
+      && current.length <= 36
+      && !/[.?!:;]$/.test(previous)
+    ) {
+      count += 1;
+    }
+  }
+
+  return count;
 }
 
 function summarizeParsedOptionCounts(questions) {
@@ -616,25 +742,46 @@ function looksLikeHyphenatedReorderArtifact(lines, index) {
 
 function normalizeParsedQuestionsForOutput(questions, optionCount, answerIndex) {
   const expectedOptionCount = Number(optionCount);
-  if (!Number.isInteger(expectedOptionCount) || expectedOptionCount < 2) {
-    return Array.isArray(questions) ? questions : [];
-  }
+  const autoMode = isAutoOptionCount(optionCount);
 
-  return (Array.isArray(questions) ? questions : []).map((question) => {
-    const normalizedOptions = Array.isArray(question?.options)
-      ? question.options.map((option) => sanitizeText(option)).filter(Boolean).slice(0, expectedOptionCount)
-      : [];
+  return (Array.isArray(questions) ? questions : [])
+    .map((question) => {
+      const normalizedQuestionText = normalizeQuestionPromptForOutput(question?.q);
+      let normalizedOptions = Array.isArray(question?.options)
+        ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+        : [];
 
-    while (normalizedOptions.length < expectedOptionCount) {
-      normalizedOptions.push('');
-    }
+      if (autoMode) {
+        normalizedOptions = normalizeAutoOptionsForOutput(normalizedOptions);
+        if (!normalizedQuestionText || !isAcceptableOptionCount(normalizedOptions.length, AUTO_OPTION_COUNT)) {
+          return null;
+        }
 
-    return {
-      ...question,
-      options: normalizedOptions,
-      correctIndex: resolveQuestionCorrectIndex(answerIndex, expectedOptionCount),
-    };
-  });
+        return {
+          ...question,
+          q: normalizedQuestionText,
+          options: normalizedOptions,
+          correctIndex: resolveQuestionCorrectIndex(answerIndex, normalizedOptions.length),
+        };
+      }
+
+      if (!Number.isInteger(expectedOptionCount) || expectedOptionCount < 2) {
+        return null;
+      }
+
+      normalizedOptions = normalizedOptions.slice(0, expectedOptionCount);
+      while (normalizedOptions.length < expectedOptionCount) {
+        normalizedOptions.push('');
+      }
+
+      return {
+        ...question,
+        q: normalizedQuestionText,
+        options: normalizedOptions,
+        correctIndex: resolveQuestionCorrectIndex(answerIndex, expectedOptionCount),
+      };
+    })
+    .filter(Boolean);
 }
 
 function normalizeJsonQuestion(question, index, fallbackAnswerIndex, fallbackOptionCount) {
@@ -684,6 +831,155 @@ function normalizeExtractedText(text) {
     .replace(/\n[ ]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function normalizeQuestionPromptForOutput(questionText) {
+  return stripLeadingTopicPreamble(sanitizeText(questionText));
+}
+
+function normalizeAutoOptionsForOutput(optionsInput) {
+  let options = Array.isArray(optionsInput) ? optionsInput.map((option) => sanitizeText(option)).filter(Boolean) : [];
+
+  while (options.length > 5) {
+    const mergeIndex = findAutoOverflowMergeIndex(options);
+    if (mergeIndex <= 0 || mergeIndex >= options.length) {
+      break;
+    }
+
+    options[mergeIndex - 1] = joinFragments(options[mergeIndex - 1], options[mergeIndex]);
+    options.splice(mergeIndex, 1);
+  }
+
+  return options;
+}
+
+function findAutoOverflowMergeIndex(options) {
+  if (!Array.isArray(options) || options.length <= 5) {
+    return -1;
+  }
+
+  let bestIndex = -1;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let index = 1; index < options.length; index += 1) {
+    const previous = sanitizeText(options[index - 1]);
+    const current = sanitizeText(options[index]);
+    if (!previous || !current) {
+      continue;
+    }
+
+    const currentWordCount = current.split(/\s+/).filter(Boolean).length;
+    let score = Number.NEGATIVE_INFINITY;
+    if (looksLikeOverflowOptionContinuation(previous, current)) {
+      score = 80;
+    } else if (
+      /^[\p{Ll}\p{Lo}]/u.test(current)
+      && currentWordCount <= 3
+      && current.length <= 32
+    ) {
+      score = 70;
+    } else if (
+      shouldContinueOptionText(previous, current)
+      && currentWordCount <= 3
+      && current.length <= 32
+    ) {
+      score = 65;
+    } else if (currentWordCount <= 2 && current.length <= 28) {
+      score = 35;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+
+  return bestScore > 0 ? bestIndex : -1;
+}
+
+function stripLeadingTopicPreamble(questionText) {
+  const text = sanitizeText(questionText);
+  if (!text) {
+    return '';
+  }
+
+  const numberMatch = text.match(/^(\d+\.\s*)(.+)$/u);
+  const prefix = numberMatch ? numberMatch[1] : '';
+  const body = numberMatch ? numberMatch[2] : text;
+  const fragments = body.split(/(?<=[.?!:])\s+/u).map((fragment) => sanitizeText(fragment)).filter(Boolean);
+
+  if (fragments.length < 2) {
+    return text;
+  }
+
+  const cutIndex = fragments.findIndex((fragment, index) => {
+    if (index === 0) {
+      return false;
+    }
+    return looksLikeClinicalQuestionSentenceStart(fragment);
+  });
+
+  if (cutIndex <= 0) {
+    return text;
+  }
+
+  const headingLikePrefix = fragments.slice(0, cutIndex);
+  if (!headingLikePrefix.every(looksLikeTopicPreambleFragment)) {
+    return stripLeadingTopicPreambleBySentenceBoundary(text, prefix, body);
+  }
+
+  return sanitizeText(prefix + fragments.slice(cutIndex).join(' '));
+}
+
+function stripLeadingTopicPreambleBySentenceBoundary(fullText, prefix, body) {
+  const boundaryMatch = body.match(/(?:^|[.?!:]\s+)(У|В|До|При|Під|Після|На|Хвор(?:ий|а|ому|ого)|Пацієнт|У посіві|У хворого|У жінки|У чоловіка|У дитини|До лікарні|Під час|В експерименті)\b/u);
+  if (!boundaryMatch || boundaryMatch.index == null || boundaryMatch.index <= 0) {
+    return fullText;
+  }
+
+  const prefixText = sanitizeText(body.slice(0, boundaryMatch.index));
+  const prefixSentenceCount = (prefixText.match(/[.?!:]/g) || []).length;
+  if (prefixSentenceCount < 2) {
+    return fullText;
+  }
+
+  const suffixText = sanitizeText(body.slice(boundaryMatch.index));
+  if (!suffixText) {
+    return fullText;
+  }
+
+  return sanitizeText(prefix + suffixText);
+}
+
+function looksLikeClinicalQuestionSentenceStart(fragment) {
+  const text = sanitizeText(fragment);
+  if (!text) {
+    return false;
+  }
+
+  return /^(У|В|До|При|Під|Після|На|Хвор(ий|а|ому|ого)|Пацієнт|У посіві|У хворого|У жінки|У чоловіка|У дитини|До лікарні|Під час|В експерименті)(\s|$)/u.test(text);
+}
+
+function looksLikeTopicPreambleFragment(fragment) {
+  const text = sanitizeText(fragment);
+  if (!text) {
+    return false;
+  }
+
+  if (looksLikeClinicalQuestionSentenceStart(text)) {
+    return false;
+  }
+
+  if (/[?:]$/.test(text)) {
+    return false;
+  }
+
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  if (wordCount <= 12) {
+    return true;
+  }
+
+  return /^Змістовий модуль\b/iu.test(text);
 }
 
 function splitIntoLines(text) {
@@ -2201,6 +2497,22 @@ function extractTrailingOptionsFromQuestion(question, optionCount) {
     };
   }
 
+  const titleBoundaryIndex = findPromptTitleBoundary(questionText);
+  if (titleBoundaryIndex >= 0) {
+    const cleanQuestionText = sanitizeText(questionText.slice(0, titleBoundaryIndex + 1));
+    const leakedTail = sanitizeText(questionText.slice(titleBoundaryIndex + 1));
+    if (cleanQuestionText && leakedTail && cleanQuestionText.length >= 20) {
+      const leakedOptions = collectStandaloneTailOptions(leakedTail, expectedOptionCount - existingOptions.length);
+      const combinedOptions = [...leakedOptions, ...existingOptions];
+      if (leakedOptions.length && isAcceptableOptionCount(combinedOptions.length, optionCount)) {
+        return {
+          questionText: cleanQuestionText,
+          options: combinedOptions,
+        };
+      }
+    }
+  }
+
   return null;
 }
 
@@ -2226,7 +2538,7 @@ function findPromptBoundaryCandidates(text) {
 function collectStandaloneTailOptions(text, maxOptions) {
   const safeMaxOptions = Math.max(1, Number(maxOptions) || 0);
   const direct = sanitizeText(text);
-  if (direct && looksLikeStandaloneOptionLine(direct)) {
+  if (direct && (looksLikeStandaloneOptionLine(direct) || looksLikeLongStandaloneOptionText(direct))) {
     return [direct];
   }
 
@@ -2235,6 +2547,59 @@ function collectStandaloneTailOptions(text, maxOptions) {
     .filter(Boolean)
     .filter((option) => looksLikeStandaloneOptionLine(option))
     .slice(0, safeMaxOptions);
+}
+
+function findPromptTitleBoundary(text) {
+  const value = sanitizeText(text);
+  if (!value) {
+    return -1;
+  }
+
+  const lowerValue = value.toLowerCase();
+  const markers = [' до ', ' для ', ' при ', ' після ', ' перед ', ' щодо ', ' про ', ' за ', ' від '];
+  const titlePrefixes = ['дсанпін', 'дсту', 'дбн', 'закон', 'наказ', 'лист', 'санітарний', 'державні'];
+
+  let bestBoundaryIndex = -1;
+
+  for (const marker of markers) {
+    const markerIndex = lowerValue.lastIndexOf(marker);
+    if (markerIndex < 0) {
+      continue;
+    }
+
+    const tailStart = markerIndex + marker.length;
+    const tail = sanitizeText(value.slice(tailStart));
+    if (!tail) {
+      continue;
+    }
+
+    const lowerTail = tail.toLowerCase();
+    if (!titlePrefixes.some((prefix) => lowerTail.startsWith(prefix))) {
+      continue;
+    }
+
+    bestBoundaryIndex = Math.max(bestBoundaryIndex, markerIndex + marker.length - 2);
+  }
+
+  return bestBoundaryIndex;
+}
+
+function looksLikeLongStandaloneOptionText(text) {
+  const value = sanitizeText(text);
+  if (!value) {
+    return false;
+  }
+
+  if (looksLikeQuestionTail(value) && looksLikePromptSentence(value)) {
+    return false;
+  }
+
+  if (/[?:]$/.test(value)) {
+    return false;
+  }
+
+  const wordCount = value.split(/\s+/).filter(Boolean).length;
+  return wordCount >= 6 && value.length >= 45;
 }
 
 function repairShiftedQuestionLines(questions, optionCount) {
@@ -2307,6 +2672,355 @@ function repairShiftedQuestionLines(questions, optionCount) {
 
   if (movedToNextQuestionCount > 0) {
     notes.push(`Repaired questions where the next prompt leaked into the last answer option: ${movedToNextQuestionCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function repairQuestionTailOptionLeaks(questions, optionCount) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+  let repairedCount = 0;
+
+  if (expectedOptionCount !== 5) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  for (const question of repairedQuestions) {
+    const questionText = sanitizeText(question?.q);
+    const options = Array.isArray(question?.options)
+      ? question.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    if (!questionText || options.length !== 4) {
+      continue;
+    }
+
+    const titleBoundaryIndex = findPromptTitleBoundary(questionText);
+    if (titleBoundaryIndex < 0) {
+      continue;
+    }
+
+    const cleanQuestionText = sanitizeText(questionText.slice(0, titleBoundaryIndex + 1));
+    const leakedOption = sanitizeText(questionText.slice(titleBoundaryIndex + 1));
+    if (!cleanQuestionText || !looksLikeLongStandaloneOptionText(leakedOption)) {
+      continue;
+    }
+
+    question.q = cleanQuestionText;
+    question.options = [leakedOption, ...options];
+    question.correctIndex = Math.max(0, Math.min(question.options.length - 1, Number(question.correctIndex) + 1 || 0));
+    repairedCount += 1;
+  }
+
+  if (repairedCount > 0) {
+    notes.push(`Recovered leaked leading answer options from question tails: ${repairedCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function repairCrossQuestionLeadingOptionLeaks(questions, optionCount) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+  let repairedCount = 0;
+
+  if (expectedOptionCount !== 5) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  for (let index = 1; index < repairedQuestions.length; index += 1) {
+    const previous = repairedQuestions[index - 1];
+    const current = repairedQuestions[index];
+    const previousOptions = Array.isArray(previous?.options)
+      ? previous.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    const currentOptions = Array.isArray(current?.options)
+      ? current.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    const missingCount = expectedOptionCount - previousOptions.length;
+
+    if (missingCount < 1 || missingCount > 3 || currentOptions.length !== expectedOptionCount) {
+      continue;
+    }
+
+    const splitLeak = splitLeadingOptionWithNumericFragments(currentOptions[0], missingCount);
+    if (!splitLeak) {
+      continue;
+    }
+
+    previous.options = [...splitLeak.leakedOptions, ...previousOptions].slice(0, expectedOptionCount);
+    current.options = [splitLeak.currentOption, ...currentOptions.slice(1)];
+    repairedCount += 1;
+  }
+
+  if (repairedCount > 0) {
+    notes.push(`Recovered leaked answer options from the next question: ${repairedCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function repairMissingNumberedQuestionsFromReviewBlocks(questions, reviewBlocks, optionCount, answerIndex) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+
+  if (expectedOptionCount !== 5 || !Array.isArray(reviewBlocks) || !reviewBlocks.length) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  const availableBlocks = reviewBlocks
+    .filter((block) => /raw-explicit-number-block|explicit-number-block/i.test(String(block?.reason || '')))
+    .map((block, index) => ({ ...block, __index: index }))
+    .filter((block) => sanitizeText(block?.text));
+  if (!availableBlocks.length) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  const consumedBlockIndexes = new Set();
+  let repairedCount = 0;
+
+  for (let index = 1; index < repairedQuestions.length; index += 1) {
+    const previous = repairedQuestions[index - 1];
+    const current = repairedQuestions[index];
+    const previousNumber = extractLeadingQuestionNumber(previous?.q);
+    const currentNumber = extractLeadingQuestionNumber(current?.q);
+
+    if (!Number.isInteger(previousNumber) || !Number.isInteger(currentNumber) || currentNumber !== previousNumber + 2) {
+      continue;
+    }
+
+    const missingNumber = previousNumber + 1;
+    const currentOptions = Array.isArray(current?.options)
+      ? current.options.map((option) => sanitizeText(option)).filter(Boolean)
+      : [];
+    if (currentOptions.length !== expectedOptionCount) {
+      continue;
+    }
+
+    let recovered = null;
+    let recoveredBlockIndex = -1;
+    for (const block of availableBlocks) {
+      if (consumedBlockIndexes.has(block.__index)) {
+        continue;
+      }
+
+      const candidate = recoverMissingQuestionFromReviewBlock(
+        block.text,
+        missingNumber,
+        currentOptions[0],
+        expectedOptionCount,
+        answerIndex,
+      );
+      if (candidate) {
+        recovered = candidate;
+        recoveredBlockIndex = block.__index;
+        break;
+      }
+    }
+
+    if (!recovered) {
+      continue;
+    }
+
+    consumedBlockIndexes.add(recoveredBlockIndex);
+    current.options = [recovered.currentFirstOption, ...currentOptions.slice(1)];
+    repairedQuestions.splice(index, 0, recovered.question);
+    repairedCount += 1;
+    index += 1;
+  }
+
+  if (repairedCount > 0) {
+    notes.push(`Recovered dropped numbered questions from review blocks: ${repairedCount}.`);
+  }
+
+  return {
+    questions: repairedQuestions,
+    notes,
+  };
+}
+
+function splitLeadingOptionWithNumericFragments(optionText, missingCount) {
+  const text = sanitizeText(optionText);
+  if (!text || !Number.isInteger(missingCount) || missingCount < 1) {
+    return null;
+  }
+
+  const matches = [];
+  const numericRangePattern = /\d+\s*[\u2010-\u2015\u2212-]\s*\d+(?:\s+[^\d]+?)(?=(?:\s+\d+\s*[\u2010-\u2015\u2212-]\s*\d+\b)|$)/gu;
+  let match;
+  while ((match = numericRangePattern.exec(text)) !== null) {
+    matches.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      value: sanitizeText(match[0]),
+    });
+  }
+
+  if (matches.length !== missingCount) {
+    return null;
+  }
+
+  const currentOption = sanitizeText(text.slice(0, matches[0].start));
+  if (!currentOption || !looksLikeStandaloneOptionLine(currentOption)) {
+    return null;
+  }
+
+  const leakedOptions = matches.map((item) => item.value).filter(Boolean);
+  if (leakedOptions.length !== missingCount || !leakedOptions.every((item) => looksLikeStandaloneOptionLine(item))) {
+    return null;
+  }
+
+  return {
+    currentOption,
+    leakedOptions,
+  };
+}
+
+function recoverMissingQuestionFromReviewBlock(reviewText, missingNumber, currentFirstOption, expectedOptionCount, answerIndex) {
+  const text = sanitizeText(reviewText);
+  if (!text || !Number.isInteger(missingNumber)) {
+    return null;
+  }
+
+  const questionBoundaryIndex = findReviewBlockQuestionBoundary(text);
+  if (questionBoundaryIndex < 0) {
+    return null;
+  }
+
+  const questionText = sanitizeText(text.slice(0, questionBoundaryIndex + 1));
+  const tailText = sanitizeText(text.slice(questionBoundaryIndex + 1));
+  const recoveredTailOptions = extractNumericRangeOptions(tailText);
+  if (!questionText || !recoveredTailOptions.length || recoveredTailOptions.length >= expectedOptionCount) {
+    return null;
+  }
+
+  const missingCount = expectedOptionCount - recoveredTailOptions.length;
+  const splitLeak = splitLeadingOptionWithNumericFragments(currentFirstOption, missingCount);
+  if (!splitLeak) {
+    return null;
+  }
+
+  const options = [...splitLeak.leakedOptions, ...recoveredTailOptions].slice(0, expectedOptionCount);
+  if (options.length !== expectedOptionCount) {
+    return null;
+  }
+
+  return {
+    currentFirstOption: splitLeak.currentOption,
+    question: {
+      q: `${missingNumber}. ${questionText}`,
+      options,
+      correctIndex: resolveQuestionCorrectIndex(answerIndex, expectedOptionCount),
+      sourceQuestionNumber: missingNumber,
+    },
+  };
+}
+
+function findReviewBlockQuestionBoundary(text) {
+  const value = sanitizeText(text);
+  if (!value) {
+    return -1;
+  }
+
+  const colonIndex = value.lastIndexOf(':');
+  if (colonIndex >= 0) {
+    return colonIndex;
+  }
+
+  const questionIndex = value.lastIndexOf('?');
+  return questionIndex >= 0 ? questionIndex : -1;
+}
+
+function extractNumericRangeOptions(text) {
+  const normalized = sanitizeText(text);
+  if (!normalized) {
+    return [];
+  }
+
+  const matches = [];
+  const numericRangePattern = /\d+\s*[\u2010-\u2015\u2212-]\s*\d+(?:\s+[^\d]+?)(?=(?:\s+\d+\s*[\u2010-\u2015\u2212-]\s*\d+\b)|$)/gu;
+  let match;
+  while ((match = numericRangePattern.exec(normalized)) !== null) {
+    const value = sanitizeText(String(match[0] || '').replace(/[\uE000-\uF8FF]+/gu, ' '));
+    if (value) {
+      matches.push(value);
+    }
+  }
+
+  return matches;
+}
+
+function repairNormalizedQuestionTailOptionLeaks(questions, optionCount) {
+  const repairedQuestions = Array.isArray(questions)
+    ? questions.map((question) => ({
+      ...question,
+      options: Array.isArray(question?.options) ? [...question.options] : [],
+    }))
+    : [];
+  const notes = [];
+  const expectedOptionCount = maximumAllowedOptionCount(optionCount);
+  let repairedCount = 0;
+
+  if (expectedOptionCount !== 5) {
+    return { questions: repairedQuestions, notes };
+  }
+
+  for (const question of repairedQuestions) {
+    const questionText = sanitizeText(question?.q);
+    const options = Array.isArray(question?.options)
+      ? question.options.map((option) => sanitizeText(option))
+      : [];
+    const nonEmptyOptions = options.filter(Boolean);
+    if (!questionText || nonEmptyOptions.length !== 4 || options.at(-1)) {
+      continue;
+    }
+
+    const titleBoundaryIndex = findPromptTitleBoundary(questionText);
+    if (titleBoundaryIndex < 0) {
+      continue;
+    }
+
+    const cleanQuestionText = sanitizeText(questionText.slice(0, titleBoundaryIndex + 1));
+    const leakedOption = sanitizeText(questionText.slice(titleBoundaryIndex + 1));
+    if (!cleanQuestionText || !looksLikeLongStandaloneOptionText(leakedOption)) {
+      continue;
+    }
+
+    question.q = cleanQuestionText;
+    question.options = [leakedOption, ...nonEmptyOptions].slice(0, expectedOptionCount);
+    question.correctIndex = Math.max(0, Math.min(question.options.length - 1, Number(question.correctIndex) + 1 || 0));
+    repairedCount += 1;
+  }
+
+  if (repairedCount > 0) {
+    notes.push(`Recovered leaked leading answer options after normalization: ${repairedCount}.`);
   }
 
   return {
@@ -2685,13 +3399,14 @@ function parseAutoQuestionBlock(lines) {
       continue;
     }
 
+    const autoOptionCountScore = optionLines.length >= 4 ? 60 : -45;
     const score = scoreExplicitQuestionBoundary(
       questionLines,
       optionLines,
       questionText,
       rawOptionLines,
       Math.max(optionLines.length, AUTO_OPTION_MIN),
-    ) + optionLines.length * 4 - Math.abs(optionLines.length - 5) * 3;
+    ) + optionLines.length * 4 - Math.abs(optionLines.length - 5) * 3 + autoOptionCountScore;
 
     if (!best || score > best.score) {
       best = {
@@ -2717,6 +3432,11 @@ function normalizeAutoOptionLines(lines) {
     return [];
   }
 
+  const repartitionedFive = repartitionAutoOverflowOptions(cleanLines, 5);
+  if (repartitionedFive) {
+    return repartitionedFive;
+  }
+
   const groupedByMarkers = groupOptionLinesByMarkers(cleanLines);
   if (isAcceptableOptionCount(groupedByMarkers.length, AUTO_OPTION_COUNT)) {
     return groupedByMarkers;
@@ -2734,6 +3454,74 @@ function normalizeAutoOptionLines(lines) {
   }
 
   return [];
+}
+
+function repartitionAutoOverflowOptions(lines, targetCount) {
+  const cleanLines = Array.isArray(lines) ? lines.map((line) => sanitizeText(line)).filter(Boolean) : [];
+  if (!Number.isInteger(targetCount) || targetCount < 2) {
+    return null;
+  }
+
+  if (cleanLines.length <= targetCount || cleanLines.length > targetCount * 2) {
+    return null;
+  }
+
+  const hasShortLowercaseFragments = cleanLines.some((line) => {
+    const words = line.split(/\s+/).filter(Boolean).length;
+    return /^[\p{Ll}\p{Lo}]/u.test(line) && words <= 3 && line.length <= 36;
+  });
+
+  if (!hasShortLowercaseFragments) {
+    return null;
+  }
+
+  const entries = cleanLines.map((line) => ({ line }));
+  const resolved = partitionRecoveredOptionsWithValidator(entries, targetCount, isValidAutoOverflowChunk);
+  return resolved && resolved.length === targetCount ? resolved : null;
+}
+
+function partitionRecoveredOptionsWithValidator(entries, optionCount, validator) {
+  const memo = new Map();
+
+  function solve(position, groupsLeft) {
+    const key = `${position}:${groupsLeft}`;
+    if (memo.has(key)) {
+      return memo.get(key);
+    }
+
+    if (groupsLeft === 0) {
+      return position === entries.length ? [] : null;
+    }
+
+    const remaining = entries.length - position;
+    if (remaining < groupsLeft || remaining > groupsLeft * 3) {
+      return null;
+    }
+
+    for (let groupSize = 1; groupSize <= Math.min(3, remaining); groupSize += 1) {
+      const chunk = entries.slice(position, position + groupSize).map((entry) => entry.line);
+      if (!validator(chunk)) {
+        continue;
+      }
+
+      const optionText = sanitizeText(chunk.join(' '));
+      if (!optionText || (looksLikeQuestionTail(optionText) && looksLikePromptSentence(optionText))) {
+        continue;
+      }
+
+      const tail = solve(position + groupSize, groupsLeft - 1);
+      if (tail) {
+        const resolved = [optionText, ...tail];
+        memo.set(key, resolved);
+        return resolved;
+      }
+    }
+
+    memo.set(key, null);
+    return null;
+  }
+
+  return solve(0, optionCount);
 }
 
 function groupOptionLinesByMarkers(lines) {
@@ -2762,7 +3550,7 @@ function groupOptionLinesByMarkers(lines) {
       continue;
     }
 
-    if (shouldContinueOptionText(current, optionText) || !looksLikeStandaloneOptionLine(optionText)) {
+    if (shouldContinueAutoOptionText(current, optionText) || !looksLikeStandaloneOptionLine(optionText)) {
       current = joinFragments(current, optionText);
       continue;
     }
@@ -2793,7 +3581,7 @@ function groupOptionLinesByStandalone(lines) {
       continue;
     }
 
-    if (shouldContinueOptionText(current, optionText) || !looksLikeStandaloneOptionLine(optionText)) {
+    if (shouldContinueAutoOptionText(current, optionText) || !looksLikeStandaloneOptionLine(optionText)) {
       current = joinFragments(current, optionText);
       continue;
     }
@@ -3244,11 +4032,54 @@ function shouldContinueOptionText(currentOption, nextLine) {
     return true;
   }
 
-  if (/^[a-zа-яіїєґ]/u.test(next)) {
+  if (/^[\p{Ll}\p{Lo}]/u.test(next)) {
     return true;
   }
 
   return false;
+}
+
+function shouldContinueAutoOptionText(currentOption, nextLine) {
+  const current = sanitizeText(currentOption);
+  const next = sanitizeText(nextLine);
+
+  if (!current || !next) {
+    return false;
+  }
+
+  if (/[,:((\/\[]$/u.test(current) || new RegExp(`[${DASH_CHARS}]$`).test(current)) {
+    return true;
+  }
+
+  if (looksLikeOverflowOptionContinuation(current, next)) {
+    return true;
+  }
+
+  const nextWords = next.split(/\s+/).filter(Boolean).length;
+  if (
+    /^[\p{Ll}\p{Lo}]/u.test(next)
+    && nextWords <= 4
+    && next.length <= 36
+    && (
+      (nextWords > 1 && !looksLikeStandaloneOptionLine(current))
+      || endsWithOptionContinuationCue(current)
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function endsWithOptionContinuationCue(text) {
+  const value = sanitizeText(text);
+  if (!value) {
+    return false;
+  }
+
+  const lastWord = value.split(/\s+/).filter(Boolean).at(-1) || '';
+  return /^(попереду|позаду|перед|після|для|до|з|із|над|під)$/iu.test(lastWord)
+    || (/^\p{Ll}/u.test(lastWord) && /(?:им|ім|їм|ою|ею)$/iu.test(lastWord));
 }
 
 function looksLikeStandaloneOptionLine(line) {
@@ -3373,6 +4204,29 @@ function isValidRecoveredOptionChunk(chunk) {
 
   for (let index = 1; index < chunk.length; index += 1) {
     if (!shouldContinueOptionText(chunk[index - 1], chunk[index])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isValidAutoOverflowChunk(chunk) {
+  if (!Array.isArray(chunk) || !chunk.length) {
+    return false;
+  }
+
+  if (chunk.length === 1) {
+    const text = sanitizeText(chunk[0]);
+    const words = text.split(/\s+/).filter(Boolean).length;
+    if (/^[\p{Ll}\p{Lo}]/u.test(text) && words <= 3 && text.length <= 36) {
+      return false;
+    }
+    return looksLikeStandaloneOptionLine(text) || words >= 4;
+  }
+
+  for (let index = 1; index < chunk.length; index += 1) {
+    if (!shouldContinueAutoOptionText(chunk[index - 1], chunk[index]) && !looksLikeOverflowOptionContinuation(chunk[index - 1], chunk[index])) {
       return false;
     }
   }
@@ -4213,7 +5067,8 @@ function matchOptionStart(line, optionCount) {
     .map((marker) => marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('|');
 
-  const regex = new RegExp(`^(${escapedMarkers})(\\s*[\\)\\.\\-${DASH_CHARS}:])(\\s*)(.+)$`);
+  const separatorPattern = '(?:\\)|\\.|-|\\u2013|\\u2014|:)';
+  const regex = new RegExp(`^(${escapedMarkers})(\\s*${separatorPattern})(\\s*)(.+)$`, 'u');
   const match = line.match(regex);
   if (!match) {
     return null;
@@ -4228,8 +5083,13 @@ function matchOptionStart(line, optionCount) {
   }
 
   const markerIsLetter = /^[A-Za-z\u0400-\u04FF]$/u.test(marker);
+  const markerIsNumeric = /^\d+$/.test(marker);
   const textStartsLowercase = /^\p{Ll}/u.test(text);
   const textStartsUppercaseOrDigit = /^[\p{Lu}\d]/u.test(text);
+
+  if (markerIsNumeric && /^\d/.test(text)) {
+    return null;
+  }
 
   // Prevent false positives like "В-рус ..." where the first letter is part of the word,
   // not an answer marker extracted from the source file.
@@ -4495,4 +5355,22 @@ function normalizeAnswerText(value) {
     .trim();
 }
 
-export const __debug__ = { parseExplicitNumberBlock, findExplicitQuestionOptionBoundary, refineExplicitQuestionOptionBoundary, normalizeOptionLines, mergeWrappedOptionLines, scoreExplicitQuestionBoundary };
+export const __debug__ = {
+  extractTextFromFile,
+  normalizeExtractedText,
+  splitIntoLines,
+  splitIntoParagraphs,
+  parseQuestionsFromRawExplicitNumbers,
+  parseQuestionsFromExplicitNumbers,
+  parseQuestionsBySequentialBlocks,
+  parseQuestionsByDynamicScan,
+  parseQuestionsByForwardScan,
+  parseQuestionsFromText,
+  parseQuestionsFromLineBlocks,
+  parseQuestionsFromQuestionTails,
+  parseQuestionsFromParagraphs,
+  parseQuestionsByStride,
+  parseQuestionsFromExactParagraphBlocks,
+  parseQuestionsFromParagraphMarkers,
+  chooseBestParsedResult
+};
