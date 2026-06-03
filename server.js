@@ -822,14 +822,44 @@ app.post('/api/ai-quizzes/inspect', upload.fields([
       questionMode,
       questionLimit,
     });
+    const savedUploads = saveUploadedQuizFiles({ sourceFile, answerFile: null });
+    const draft = createQuizDraft({
+      courseNumber,
+      title: clientTitle,
+      sourceFilename: buildStoredFilename(clientTitle),
+      answerIndex: 1,
+      requestedCount: selectedQuiz.questions.length,
+      questions: selectedQuiz.questions,
+      reviewBlocks: selectedQuiz.reviewBlocks,
+      rawModelJson: {
+        ...(selectedQuiz.rawModelJson || {}),
+        aiMode: aiSettings.mode,
+        aiRequireCode: aiSettings.requireCode,
+        aiEnabled: aiSettings.enabled,
+      },
+      sourceUploadPath: savedUploads.sourceUploadPath,
+      sourceUploadName: savedUploads.sourceUploadName,
+      answerUploadPath: null,
+      answerUploadName: null,
+    });
 
     return res.json({
+      draftToken: draft.draftToken,
       title: clientTitle,
       courseNumber,
       parsedCount: selectedQuiz.questions.length,
       requestedCount: selectedQuiz.questions.length,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
       notes: selectedQuiz.notes,
+      questions: selectedQuiz.questions,
+      reviewBlocks: selectedQuiz.reviewBlocks || [],
+      extractedText: selectedQuiz.extractedText || '',
+      rawModelJson: {
+        ...(selectedQuiz.rawModelJson || {}),
+        aiMode: aiSettings.mode,
+        aiRequireCode: aiSettings.requireCode,
+        aiEnabled: aiSettings.enabled,
+      },
       aiMode: aiSettings.mode,
       aiRequireCode: aiSettings.requireCode,
       aiEnabled: aiSettings.enabled,

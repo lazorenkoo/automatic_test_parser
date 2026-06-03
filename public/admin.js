@@ -133,6 +133,7 @@ quizForm.addEventListener('submit', async (event) => {
     }
 
     currentDraftToken = payload.draftToken;
+    currentDraftToken = String(payload.draftToken || '');
     currentDraftPayload = payload;
     const repairedPayload = fastParserModeInput?.checked
       ? payload
