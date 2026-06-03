@@ -149,6 +149,7 @@ app.get('/api/admin-bootstrap', (_req, res) => {
     puterParserRepairEnabled: String(process.env.PUTER_PARSER_REPAIR_ENABLED || '1') !== '0',
     puterParserRepairModel: String(process.env.PUTER_PARSER_REPAIR_MODEL || 'google/gemini-2.5-flash-lite').trim(),
     puterParserRepairBatchSize: Math.max(1, Math.min(100, Number(process.env.PUTER_PARSER_REPAIR_BATCH_SIZE || 80) || 80)),
+    puterAnswerModel: String(process.env.PUTER_ANSWER_MODEL || 'google/gemini-2.5-flash-lite').trim(),
   });
 });
 

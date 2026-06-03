@@ -44,6 +44,7 @@ let adminBootstrap = {
   puterParserRepairEnabled: true,
   puterParserRepairModel: 'google/gemini-2.5-flash-lite',
   puterParserRepairBatchSize: 80,
+  puterAnswerModel: 'google/gemini-2.5-flash-lite',
 };
 
 loadSiteNotice();
@@ -189,6 +190,7 @@ async function loadAdminBootstrap(forceRefresh = false) {
         puterParserRepairEnabled: Boolean(payload.puterParserRepairEnabled),
         puterParserRepairModel: String(payload.puterParserRepairModel || adminBootstrap.puterParserRepairModel || 'google/gemini-2.5-flash-lite'),
         puterParserRepairBatchSize: Math.max(1, Math.min(100, Number(payload.puterParserRepairBatchSize || adminBootstrap.puterParserRepairBatchSize || 80) || 80)),
+        puterAnswerModel: String(payload.puterAnswerModel || adminBootstrap.puterAnswerModel || 'google/gemini-2.5-flash-lite'),
       };
     } catch (_error) {
       // Keep default bootstrap values.
@@ -1093,7 +1095,7 @@ function buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount) {
 
 async function requestPuterAnswerBatch(batchQuestions, batchIndex, batchCount) {
   const response = await window.puter.ai.chat(buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount), {
-    model: 'google/gemini-2.5-flash-lite',
+    model: adminBootstrap.puterAnswerModel,
   });
   const rawText = extractPuterChatText(response);
   const parsed = parseJsonFromModelText(rawText);
@@ -1162,7 +1164,7 @@ async function answerDraftWithPuter(payload) {
       aiAnswering: {
         provider: 'puter',
         mode: 'puter',
-        model: 'google/gemini-2.5-flash-lite',
+        model: adminBootstrap.puterAnswerModel,
         requireCode: false,
         answerMode: 'puter-browser',
         batchCount: chunks.length,
