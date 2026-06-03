@@ -291,6 +291,9 @@ app.post('/api/drafts/repair', async (req, res, next) => {
   const parserRepair = req.body.parserRepair && typeof req.body.parserRepair === 'object'
     ? req.body.parserRepair
     : {};
+  const aiAnswering = req.body.aiAnswering && typeof req.body.aiAnswering === 'object'
+    ? req.body.aiAnswering
+    : null;
 
   if (!draftToken) {
     return res.status(400).json({ error: 'Draft token is required.' });
@@ -318,14 +321,26 @@ app.post('/api/drafts/repair', async (req, res, next) => {
 
     const mergedRawModel = {
       ...(draft.rawModel || {}),
-      parserRepair: {
+    };
+    if (Object.keys(parserRepair).length > 0) {
+      mergedRawModel.parserRepair = {
         provider: 'puter',
         appliedAt: Date.now(),
         batchCount: Number(parserRepair.batchCount || 0),
         usedRawText: Boolean(parserRepair.usedRawText),
         model: sanitizeText(parserRepair.model || ''),
-      },
-    };
+      };
+    }
+
+    if (aiAnswering) {
+      mergedRawModel.aiProvider = sanitizeText(aiAnswering.provider || 'puter') || 'puter';
+      mergedRawModel.aiMode = sanitizeText(aiAnswering.mode || 'puter') || 'puter';
+      mergedRawModel.aiPrimaryModel = sanitizeText(aiAnswering.model || 'puter') || 'puter';
+      mergedRawModel.aiRequireCode = Boolean(aiAnswering.requireCode);
+      mergedRawModel.answerMode = sanitizeText(aiAnswering.answerMode || 'puter-browser');
+      mergedRawModel.aiResolvedAt = Date.now();
+      mergedRawModel.aiChunkCount = Math.max(1, Number(aiAnswering.batchCount || 1) || 1);
+    }
     const mergedNotes = Array.from(new Set([
       ...(Array.isArray(draft.rawModel?.repairNotes) ? draft.rawModel.repairNotes : []),
       ...notes,
@@ -367,6 +382,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
   const optionCount = readOptionCountSetting(req.body.optionCount);
   const questionMode = normalizeQuestionMode(req.body.questionMode);
   const questionLimit = questionMode === QUESTION_MODE_ALL ? null : Number(req.body.questionLimit);
+  const forceRequireCode = String(req.body.forceRequireCode || '').trim() === '1';
   const originalFilename = normalizeUploadedFilename(sourceFile?.originalname || '');
   const sourceExtension = path.extname(originalFilename).toLowerCase();
 
@@ -437,8 +453,9 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       });
     }
 
+    const shouldRequireCode = forceRequireCode || aiSettings.requireCode;
     let code = null;
-    if (aiSettings.requireCode) {
+    if (shouldRequireCode) {
       if (!accessCode) {
         return res.status(400).json({ error: 'Enter an access code.' });
       }
@@ -479,7 +496,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       optionCount,
       aiMode: aiSettings.mode,
       code,
-      aiRequireCode: aiSettings.requireCode,
+      aiRequireCode: shouldRequireCode,
       creatorSnapshot,
       adminContactTg: normalizePublicUsername(process.env.ADMIN_CONTACT_TG || process.env.PUBLIC_ADMIN_TG || ''),
     });
@@ -494,7 +511,7 @@ app.post('/api/ai-quizzes/prepare', upload.fields([
       progressPercent: job.progressPercent,
       message: job.message,
       aiMode: aiSettings.mode,
-      aiRequireCode: aiSettings.requireCode,
+      aiRequireCode: shouldRequireCode,
       aiDailyLimit: aiUsage.dailyLimit,
       aiUsedToday: aiUsage.usedToday,
     });

@@ -209,6 +209,14 @@ function isPuterParserRepairAvailable() {
   );
 }
 
+function isPuterAnsweringAvailable() {
+  return Boolean(
+    window.puter
+    && window.puter.ai
+    && typeof window.puter.ai.chat === 'function'
+  );
+}
+
 function buildParserRepairMessages(batchQuestions, sourceSnippet, batchIndex, batchCount) {
   const compactQuestions = batchQuestions.map((question, index) => ({
     sourceQuestionNumber: Number(question.sourceQuestionNumber || index + 1),
@@ -879,7 +887,16 @@ async function validateAiAccessCode() {
 }
 
 async function finalizeAiDraft() {
-  const requiresCode = Boolean(currentDraftPayload?.aiRequireCode);
+  if (isPuterAiModeSelected()) {
+    await finalizePuterAiDraft();
+    return;
+  }
+
+  await finalizeServerAiDraft();
+}
+
+async function finalizeServerAiDraft() {
+  const requiresCode = true;
   if (requiresCode && !validatedAccessCode) {
     setStatus('error', 'Спочатку підтвердьте код.');
     return;
@@ -929,6 +946,7 @@ async function finalizeAiDraft() {
     formData.append('sourceFile', sourceFile);
     formData.append('optionCount', getOptionCountRequestValue());
     formData.append('creatorProfile', JSON.stringify(await buildCreatorProfile()));
+    formData.append('forceRequireCode', '1');
     if (requiresCode && validatedAccessCode) {
       formData.append('accessCode', validatedAccessCode);
     }
@@ -963,6 +981,36 @@ async function finalizeAiDraft() {
     if (codeInput) {
       codeInput.disabled = false;
     }
+  } finally {
+    aiCreateBtn.disabled = false;
+    submitBtn.disabled = false;
+    reportIssueBtn.disabled = false;
+  }
+}
+
+async function finalizePuterAiDraft() {
+  if (!currentDraftPayload?.draftToken || !Array.isArray(currentDraftPayload?.questions) || !currentDraftPayload.questions.length) {
+    setStatus('error', 'Ð¡Ð¿Ð¾Ñ‡Ð°Ñ‚ÐºÑƒ Ð·Ð°Ð¿ÑƒÑÑ‚Ñ–Ñ‚ÑŒ AI-Ñ€ÐµÐ¶Ð¸Ð¼.');
+    return;
+  }
+
+  if (!isPuterAnsweringAvailable()) {
+    setStatus('error', 'Puter unavailable on this device right now.');
+    return;
+  }
+
+  aiCreateBtn.disabled = true;
+  submitBtn.disabled = true;
+  reportIssueBtn.disabled = true;
+  setStatus('loading', 'Puter Ð¾Ð±Ð¸Ñ€Ð°Ñ” Ð¿Ñ€Ð°Ð²Ð¸Ð»ÑŒÐ½Ñ– Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´Ñ–.');
+
+  try {
+    const answeredPayload = await answerDraftWithPuter(currentDraftPayload);
+    currentDraftToken = answeredPayload.draftToken;
+    currentDraftPayload = answeredPayload;
+    await finalizeCurrentDraft('');
+  } catch (error) {
+    setStatus('error', error.message || 'ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ Ð¾Ð±Ñ€Ð¾Ð±Ð¸Ñ‚Ð¸ Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´Ñ– Ñ‡ÐµÑ€ÐµÐ· Puter.');
   } finally {
     aiCreateBtn.disabled = false;
     submitBtn.disabled = false;
@@ -1020,6 +1068,120 @@ function delay(ms) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+}
+
+function buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount) {
+  const compactQuestions = batchQuestions.map((question, index) => ({
+    sourceQuestionNumber: Number(question.sourceQuestionNumber || index + 1),
+    q: question.q,
+    options: Array.isArray(question.options) ? question.options : [],
+  }));
+
+  return [{
+    role: 'user',
+    content: [
+      'Ð¢Ð¸ Ð²Ð¸Ð·Ð½Ð°Ñ‡Ð°Ñ”Ñˆ Ð¿Ñ€Ð°Ð²Ð¸Ð»ÑŒÐ½Ñ– Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´Ñ– Ð´Ð»Ñ Ð¼ÐµÐ´Ð¸Ñ‡Ð½Ð¾Ð³Ð¾ Ñ‚ÐµÑÑ‚Ñƒ.',
+      'Ð”Ð»Ñ ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ Ð¿Ð¸Ñ‚Ð°Ð½Ð½Ñ Ð¿Ð¾Ð²ÐµÑ€Ð½Ð¸ Ñ–Ð½Ð´ÐµÐºÑ Ð¿Ñ€Ð°Ð²Ð¸Ð»ÑŒÐ½Ð¾Ñ— Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´Ñ– correctIndex Ñƒ Ñ„Ð¾Ñ€Ð¼Ð°Ñ‚Ñ– 0-based.',
+      'ÐÐµ Ð¿ÐµÑ€ÐµÐ¿Ð¸ÑÑƒÐ¹ Ñ‚ÐµÐºÑÑ‚ Ð¿Ð¸Ñ‚Ð°Ð½ÑŒ Ñ‡Ð¸ Ð²Ð°Ñ€Ñ–Ð°Ð½Ñ‚Ñ–Ð².',
+      'ÐÐµ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ°Ð¹ Ð¿Ð¸Ñ‚Ð°Ð½Ð½Ñ.',
+      'ÐŸÐ¾Ð²ÐµÑ€Ð½Ð¸ Ñ‚Ñ–Ð»ÑŒÐºÐ¸ JSON Ð±ÐµÐ· markdown Ñƒ Ñ„Ð¾Ñ€Ð¼Ð°Ñ‚Ñ– {"answers":[{"sourceQuestionNumber":1,"correctIndex":0}]}.',
+      `Ð‘Ð°Ñ‚Ñ‡ ${batchIndex + 1} Ð· ${batchCount}.`,
+      `ÐŸÐ¸Ñ‚Ð°Ð½Ð½Ñ:\n${JSON.stringify(compactQuestions)}`,
+    ].join('\n\n'),
+  }];
+}
+
+async function requestPuterAnswerBatch(batchQuestions, batchIndex, batchCount) {
+  const response = await window.puter.ai.chat(buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount), {
+    model: 'google/gemini-2.5-flash-lite',
+  });
+  const rawText = extractPuterChatText(response);
+  const parsed = parseJsonFromModelText(rawText);
+  const answers = Array.isArray(parsed?.answers) ? parsed.answers : [];
+
+  if (answers.length !== batchQuestions.length) {
+    throw new Error(`Puter returned ${answers.length} answers for ${batchQuestions.length} questions.`);
+  }
+
+  return answers;
+}
+
+function normalizePuterAnsweredQuestions(questions, answers) {
+  const answerMap = new Map();
+  for (const answer of answers) {
+    const questionNumber = Number(answer?.sourceQuestionNumber || 0);
+    const correctIndex = Number(answer?.correctIndex);
+    if (!Number.isInteger(questionNumber) || !Number.isInteger(correctIndex)) {
+      throw new Error('Puter returned invalid answer data.');
+    }
+    answerMap.set(questionNumber, correctIndex);
+  }
+
+  return questions.map((question, index) => {
+    const sourceQuestionNumber = Number(question?.sourceQuestionNumber || index + 1);
+    const options = Array.isArray(question?.options) ? question.options : [];
+    const correctIndex = answerMap.get(sourceQuestionNumber);
+    if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= options.length) {
+      throw new Error(`Puter returned an invalid correct answer for question ${sourceQuestionNumber}.`);
+    }
+
+    return {
+      ...question,
+      correctIndex,
+    };
+  });
+}
+
+async function answerDraftWithPuter(payload) {
+  const draftToken = String(payload?.draftToken || '').trim();
+  const questions = Array.isArray(payload?.questions) ? payload.questions : [];
+  if (!draftToken || !questions.length) {
+    throw new Error('Ð§ÐµÑ€Ð½ÐµÑ‚ÐºÑƒ Ð´Ð»Ñ Puter Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.');
+  }
+
+  const chunks = chunkQuestionsForRepair(questions, 25);
+  const answers = [];
+
+  for (let batchIndex = 0; batchIndex < chunks.length; batchIndex += 1) {
+    setStatus('loading', `Puter Ð¾Ð±Ñ€Ð¾Ð±Ð»ÑÑ” Ð±Ð»Ð¾Ðº ${batchIndex + 1}/${chunks.length}.`);
+    const batchAnswers = await requestPuterAnswerBatch(chunks[batchIndex], batchIndex, chunks.length);
+    answers.push(...batchAnswers);
+  }
+
+  const answeredQuestions = normalizePuterAnsweredQuestions(questions, answers);
+  const repairResponse = await fetch('/api/drafts/repair', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      draftToken,
+      questions: answeredQuestions,
+      reviewBlocks: Array.isArray(payload.reviewBlocks) ? payload.reviewBlocks : [],
+      notes: ['ÐŸÑ€Ð°Ð²Ð¸Ð»ÑŒÐ½Ñ– Ð²Ñ–Ð´Ð¿Ð¾Ð²Ñ–Ð´Ñ– Ð²Ð¸Ð·Ð½Ð°Ñ‡ÐµÐ½Ñ– Ñ‡ÐµÑ€ÐµÐ· Puter.'],
+      aiAnswering: {
+        provider: 'puter',
+        mode: 'puter',
+        model: 'google/gemini-2.5-flash-lite',
+        requireCode: false,
+        answerMode: 'puter-browser',
+        batchCount: chunks.length,
+      },
+    }),
+  });
+  const repairPayload = await readJsonResponse(repairResponse);
+  if (!repairResponse.ok) {
+    throw new Error(repairPayload.error || 'Failed to save Puter answers.');
+  }
+
+  return {
+    ...payload,
+    draftToken,
+    parsedCount: repairPayload.parsedCount || payload.parsedCount,
+    notes: Array.isArray(repairPayload.notes) ? repairPayload.notes : payload.notes,
+    questions: answeredQuestions,
+    rawModelJson: repairPayload.rawModelJson || payload.rawModelJson || {},
+  };
 }
 
 async function reportCurrentUploadIssue() {
@@ -1119,22 +1281,54 @@ function renderAiCodeGate(payload) {
   resultBox.classList.remove('hidden');
 
   const requiresCode = Boolean(payload.aiRequireCode);
+  const puterAvailable = isPuterAnsweringAvailable();
 
   resultBox.innerHTML = `
     <h3>${escapeHtml(payload.title)}</h3>
     <div class="activation-box">
       <div style="margin-top:12px; display:grid; gap:10px;">
-        ${requiresCode ? '<input id="aiAccessCodeInput" type="text" placeholder="Access code" autocomplete="off" />' : ''}
-        ${requiresCode ? '<button id="aiCheckCodeBtn" class="secondary-btn" type="button">Check code</button>' : ''}
-        ${requiresCode ? '<p id="aiCodeMessage" style="margin:0; line-height:1.5;"></p>' : ''}
-        <button id="aiFinalizeBtn" class="primary-btn ${requiresCode ? 'hidden' : ''}" type="button">Send</button>
+        <label class="choice-row">
+          <input id="aiUsePuterCheckbox" type="checkbox" ${puterAvailable ? '' : 'disabled'} />
+          <span>Безкоштовно${puterAvailable ? '' : ' (недоступно на цьому пристрої)'}</span>
+        </label>
+        <p style="margin:0; color:#6b7280; font-size:14px;">
+          Якщо увімкнено, відповіді підбираються безкоштовно. Якщо вимкнено, використовується звичайний режим з кодом доступу.
+        </p>
+        <div id="aiCodeGateFields" style="display:grid; gap:10px;">
+          <input id="aiAccessCodeInput" type="text" placeholder="Код доступу" autocomplete="off" />
+          <button id="aiCheckCodeBtn" class="secondary-btn" type="button">Перевірити код</button>
+          <p id="aiCodeMessage" style="margin:0; line-height:1.5;"></p>
+        </div>
+        <button id="aiFinalizeBtn" class="primary-btn ${requiresCode ? 'hidden' : ''}" type="button">Надіслати</button>
       </div>
     </div>
   `;
 
+  const puterCheckbox = document.getElementById('aiUsePuterCheckbox');
+  const codeGateFields = document.getElementById('aiCodeGateFields');
   const codeInput = document.getElementById('aiAccessCodeInput');
   const checkBtn = document.getElementById('aiCheckCodeBtn');
   const sendBtn = document.getElementById('aiFinalizeBtn');
+
+  const syncAiGateMode = () => {
+    const usePuter = Boolean(puterCheckbox?.checked);
+    validatedAccessCode = '';
+    validatedCodePayload = null;
+    const messageBox = document.getElementById('aiCodeMessage');
+    if (messageBox) {
+      messageBox.textContent = '';
+    }
+
+    if (codeGateFields) {
+      codeGateFields.style.display = usePuter ? 'none' : 'grid';
+    }
+
+    if (sendBtn) {
+      const shouldShowSend = usePuter;
+      sendBtn.classList.toggle('hidden', !shouldShowSend);
+      sendBtn.disabled = false;
+    }
+  };
 
   codeInput?.addEventListener('input', () => {
     validatedAccessCode = '';
@@ -1148,6 +1342,7 @@ function renderAiCodeGate(payload) {
       sendBtn.disabled = true;
     }
   });
+  puterCheckbox?.addEventListener('change', syncAiGateMode);
   codeInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -1156,6 +1351,11 @@ function renderAiCodeGate(payload) {
   });
   checkBtn?.addEventListener('click', validateAiAccessCode);
   sendBtn?.addEventListener('click', finalizeAiDraft);
+  syncAiGateMode();
+}
+
+function isPuterAiModeSelected() {
+  return Boolean(document.getElementById('aiUsePuterCheckbox')?.checked);
 }
 
 function buildCodeSuccessMessage(payload) {
