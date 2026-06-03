@@ -1072,7 +1072,7 @@ function delay(ms) {
   });
 }
 
-function buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount) {
+function buildPuterAnswerMessagesOverride(batchQuestions, batchIndex, batchCount) {
   const compactQuestions = batchQuestions.map((question, index) => ({
     sourceQuestionNumber: Number(question.sourceQuestionNumber || index + 1),
     q: question.q,
@@ -1134,7 +1134,7 @@ function normalizePuterAnsweredQuestions(questions, answers) {
   });
 }
 
-async function answerDraftWithPuter(payload) {
+async function answerDraftWithPuterOverride(payload) {
   const draftToken = String(payload?.draftToken || '').trim();
   const questions = Array.isArray(payload?.questions) ? payload.questions : [];
   if (!draftToken || !questions.length) {
@@ -1759,3 +1759,191 @@ function escapeHtml(value) {
 function escapeAttr(value) {
   return escapeHtml(value);
 }
+
+// Re-declare Puter/free-mode helpers at the end of the file to override
+// mojibake-tainted strings introduced by a previous edit without touching
+// unrelated legacy UI strings in this file.
+function buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount) {
+  const compactQuestions = batchQuestions.map((question, index) => ({
+    sourceQuestionNumber: Number(question.sourceQuestionNumber || index + 1),
+    q: question.q,
+    options: Array.isArray(question.options) ? question.options : [],
+  }));
+
+  return [{
+    role: 'user',
+    content: [
+      'Ти визначаєш правильні відповіді для медичного тесту.',
+      'Для кожного питання поверни індекс правильної відповіді correctIndex у форматі 0-based.',
+      'Не переписуй текст питань чи варіантів.',
+      'Не пропускай питання.',
+      'Поверни тільки JSON без markdown у форматі {"answers":[{"sourceQuestionNumber":1,"correctIndex":0}]}.',
+      `Батч ${batchIndex + 1} з ${batchCount}.`,
+      `Питання:\n${JSON.stringify(compactQuestions)}`,
+    ].join('\n\n'),
+  }];
+}
+
+async function answerDraftWithPuter(payload) {
+  const draftToken = String(payload?.draftToken || '').trim();
+  const questions = Array.isArray(payload?.questions) ? payload.questions : [];
+  if (!draftToken || !questions.length) {
+    throw new Error('Чернетку для безкоштовного режиму не знайдено.');
+  }
+
+  const chunks = chunkQuestionsForRepair(questions, 25);
+  const answers = [];
+
+  for (let batchIndex = 0; batchIndex < chunks.length; batchIndex += 1) {
+    setStatus('loading', `Безкоштовний режим обробляє блок ${batchIndex + 1}/${chunks.length}.`);
+    const batchAnswers = await requestPuterAnswerBatch(chunks[batchIndex], batchIndex, chunks.length);
+    answers.push(...batchAnswers);
+  }
+
+  const answeredQuestions = normalizePuterAnsweredQuestions(questions, answers);
+  const repairResponse = await fetch('/api/drafts/repair', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      draftToken,
+      questions: answeredQuestions,
+      reviewBlocks: Array.isArray(payload.reviewBlocks) ? payload.reviewBlocks : [],
+      notes: ['Правильні відповіді визначені у безкоштовному режимі.'],
+      aiAnswering: {
+        provider: 'puter',
+        mode: 'puter',
+        model: adminBootstrap.puterAnswerModel,
+        requireCode: false,
+        answerMode: 'puter-browser',
+        batchCount: chunks.length,
+      },
+    }),
+  });
+  const repairPayload = await readJsonResponse(repairResponse);
+  if (!repairResponse.ok) {
+    throw new Error(repairPayload.error || 'Failed to save free-mode answers.');
+  }
+
+  return {
+    ...payload,
+    draftToken,
+    parsedCount: repairPayload.parsedCount || payload.parsedCount,
+    notes: Array.isArray(repairPayload.notes) ? repairPayload.notes : payload.notes,
+    questions: answeredQuestions,
+    rawModelJson: repairPayload.rawModelJson || payload.rawModelJson || {},
+  };
+}
+
+async function finalizePuterAiDraftOverride() {
+  if (!currentDraftPayload?.draftToken || !Array.isArray(currentDraftPayload?.questions) || !currentDraftPayload.questions.length) {
+    setStatus('error', 'Спочатку запустіть AI-режим.');
+    return;
+  }
+
+  if (!isPuterAnsweringAvailable()) {
+    setStatus('error', 'Безкоштовний режим недоступний на цьому пристрої.');
+    return;
+  }
+
+  aiCreateBtn.disabled = true;
+  submitBtn.disabled = true;
+  reportIssueBtn.disabled = true;
+  setStatus('loading', 'Безкоштовний режим підбирає правильні відповіді.');
+
+  try {
+    const answeredPayload = await answerDraftWithPuterOverride(currentDraftPayload);
+    currentDraftToken = answeredPayload.draftToken;
+    currentDraftPayload = answeredPayload;
+    await finalizeCurrentDraft('');
+  } catch (error) {
+    setStatus('error', error.message || 'Не вдалося обробити відповіді у безкоштовному режимі.');
+  } finally {
+    aiCreateBtn.disabled = false;
+    submitBtn.disabled = false;
+    reportIssueBtn.disabled = false;
+  }
+}
+
+function renderAiCodeGateOverride(payload) {
+  resultBox.classList.remove('hidden');
+
+  const requiresCode = Boolean(payload.aiRequireCode);
+  const puterAvailable = isPuterAnsweringAvailable();
+
+  resultBox.innerHTML = `
+    <h3>${escapeHtml(payload.title)}</h3>
+    <div class="activation-box">
+      <div style="margin-top:12px; display:grid; gap:10px;">
+        <label class="choice-row">
+          <input id="aiUsePuterCheckbox" type="checkbox" ${puterAvailable ? '' : 'disabled'} />
+          <span>Безкоштовно${puterAvailable ? '' : ' (недоступно на цьому пристрої)'}</span>
+        </label>
+        <p style="margin:0; color:#6b7280; font-size:14px;">
+          Якщо увімкнено, відповіді підбираються безкоштовно. Якщо вимкнено, використовується звичайний режим з кодом доступу.
+        </p>
+        <div id="aiCodeGateFields" style="display:grid; gap:10px;">
+          <input id="aiAccessCodeInput" type="text" placeholder="Код доступу" autocomplete="off" />
+          <button id="aiCheckCodeBtn" class="secondary-btn" type="button">Перевірити код</button>
+          <p id="aiCodeMessage" style="margin:0; line-height:1.5;"></p>
+        </div>
+        <button id="aiFinalizeBtn" class="primary-btn ${requiresCode ? 'hidden' : ''}" type="button">Надіслати</button>
+      </div>
+    </div>
+  `;
+
+  const puterCheckbox = document.getElementById('aiUsePuterCheckbox');
+  const codeGateFields = document.getElementById('aiCodeGateFields');
+  const codeInput = document.getElementById('aiAccessCodeInput');
+  const checkBtn = document.getElementById('aiCheckCodeBtn');
+  const sendBtn = document.getElementById('aiFinalizeBtn');
+
+  const syncAiGateMode = () => {
+    const usePuter = Boolean(puterCheckbox?.checked);
+    validatedAccessCode = '';
+    validatedCodePayload = null;
+    const messageBox = document.getElementById('aiCodeMessage');
+    if (messageBox) {
+      messageBox.textContent = '';
+    }
+
+    if (codeGateFields) {
+      codeGateFields.style.display = usePuter ? 'none' : 'grid';
+    }
+
+    if (sendBtn) {
+      const shouldShowSend = usePuter;
+      sendBtn.classList.toggle('hidden', !shouldShowSend);
+      sendBtn.disabled = false;
+    }
+  };
+
+  codeInput?.addEventListener('input', () => {
+    validatedAccessCode = '';
+    validatedCodePayload = null;
+    const messageBox = document.getElementById('aiCodeMessage');
+    if (messageBox) {
+      messageBox.textContent = '';
+    }
+    sendBtn?.classList.add('hidden');
+    if (sendBtn) {
+      sendBtn.disabled = true;
+    }
+  });
+  puterCheckbox?.addEventListener('change', syncAiGateMode);
+  codeInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      validateAiAccessCode();
+    }
+  });
+  checkBtn?.addEventListener('click', validateAiAccessCode);
+  sendBtn?.addEventListener('click', finalizeAiDraft);
+  syncAiGateMode();
+}
+
+buildPuterAnswerMessages = buildPuterAnswerMessagesOverride;
+answerDraftWithPuter = answerDraftWithPuterOverride;
+finalizePuterAiDraft = finalizePuterAiDraftOverride;
+renderAiCodeGate = renderAiCodeGateOverride;
