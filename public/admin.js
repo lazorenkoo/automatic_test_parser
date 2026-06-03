@@ -1113,18 +1113,17 @@ function normalizePuterAnsweredQuestions(questions, answers) {
   const answerMap = new Map();
   for (const answer of answers) {
     const questionNumber = Number(answer?.sourceQuestionNumber || 0);
-    const rawCorrectIndex = answer?.correctIndex;
     if (!Number.isInteger(questionNumber)) {
       throw new Error('Puter returned invalid answer data.');
     }
-    answerMap.set(questionNumber, rawCorrectIndex);
+    answerMap.set(questionNumber, answer);
   }
 
   return questions.map((question, index) => {
     const sourceQuestionNumber = Number(question?.sourceQuestionNumber || index + 1);
     const options = Array.isArray(question?.options) ? question.options : [];
-    const rawCorrectIndex = answerMap.get(sourceQuestionNumber);
-    const correctIndex = normalizeReturnedCorrectIndex(rawCorrectIndex, options.length);
+    const answer = answerMap.get(sourceQuestionNumber);
+    const correctIndex = normalizeReturnedCorrectIndex(answer, options);
     if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= options.length) {
       throw new Error(`Puter returned an invalid correct answer for question ${sourceQuestionNumber}.`);
     }
@@ -1136,11 +1135,49 @@ function normalizePuterAnsweredQuestions(questions, answers) {
   });
 }
 
-function normalizeReturnedCorrectIndex(value, optionCount) {
+function normalizeReturnedCorrectIndex(answer, options) {
+  const optionCount = Array.isArray(options) ? options.length : 0;
   if (!Number.isInteger(optionCount) || optionCount < 1) {
     return Number.NaN;
   }
 
+  const directValueCandidates = [
+    answer?.correctIndex,
+    answer?.correctAnswer,
+    answer?.answerIndex,
+    answer?.answer,
+    answer?.correctOption,
+    answer?.correctOptionText,
+    answer?.option,
+    answer,
+  ];
+
+  for (const candidate of directValueCandidates) {
+    const normalizedFromPrimitive = normalizeReturnedCorrectIndexPrimitive(candidate, optionCount);
+    if (Number.isInteger(normalizedFromPrimitive)) {
+      return normalizedFromPrimitive;
+    }
+  }
+
+  const normalizedOptionMap = new Map();
+  options.forEach((option, index) => {
+    const normalizedOption = normalizeOptionText(option);
+    if (normalizedOption && !normalizedOptionMap.has(normalizedOption)) {
+      normalizedOptionMap.set(normalizedOption, index);
+    }
+  });
+
+  for (const candidate of directValueCandidates) {
+    const normalizedCandidate = normalizeOptionText(candidate);
+    if (normalizedCandidate && normalizedOptionMap.has(normalizedCandidate)) {
+      return normalizedOptionMap.get(normalizedCandidate);
+    }
+  }
+
+  return Number.NaN;
+}
+
+function normalizeReturnedCorrectIndexPrimitive(value, optionCount) {
   if (Number.isInteger(value)) {
     if (value >= 0 && value < optionCount) {
       return value;
@@ -1172,7 +1209,22 @@ function normalizeReturnedCorrectIndex(value, optionCount) {
     }
   }
 
+  const prefixMatch = normalizedText.match(/^([A-Z]|\d+)\s*[).:-]?$/);
+  if (prefixMatch) {
+    return normalizeReturnedCorrectIndexPrimitive(prefixMatch[1], optionCount);
+  }
+
   return Number.NaN;
+}
+
+function normalizeOptionText(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/^[a-zа-яіїєґ]\s*[).:-]\s*/iu, '')
+    .replace(/^\d+\s*[).:-]\s*/u, '')
+    .trim();
 }
 
 async function answerDraftWithPuterOverride(payload) {
