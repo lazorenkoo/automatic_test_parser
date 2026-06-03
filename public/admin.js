@@ -1095,18 +1095,9 @@ function buildPuterAnswerMessagesOverride(batchQuestions, batchIndex, batchCount
 }
 
 async function requestPuterAnswerBatch(batchQuestions, batchIndex, batchCount) {
-  const puterRequest = window.puter.ai.chat(buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount), {
+  const response = await window.puter.ai.chat(buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount), {
     model: adminBootstrap.puterAnswerModel,
   });
-  const timeoutMs = 90000;
-  const response = await Promise.race([
-    puterRequest,
-    new Promise((_, reject) => {
-      window.setTimeout(() => {
-        reject(new Error('Безкоштовний режим не отримав відповідь вчасно. Спробуйте ще раз або увійдіть у Puter.'));
-      }, timeoutMs);
-    }),
-  ]);
   const rawText = extractPuterChatText(response);
   const parsed = parseJsonFromModelText(rawText);
   const answers = Array.isArray(parsed?.answers) ? parsed.answers : [];
@@ -1191,7 +1182,7 @@ async function answerDraftWithPuterOverride(payload) {
     throw new Error('Ð§ÐµÑ€Ð½ÐµÑ‚ÐºÑƒ Ð´Ð»Ñ Puter Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.');
   }
 
-  const chunks = chunkQuestionsForRepair(questions, 25);
+  const chunks = chunkQuestionsForRepair(questions, 40);
   const answers = [];
 
   for (let batchIndex = 0; batchIndex < chunks.length; batchIndex += 1) {
@@ -1841,7 +1832,7 @@ async function answerDraftWithPuter(payload) {
     throw new Error('Чернетку для безкоштовного режиму не знайдено.');
   }
 
-  const chunks = chunkQuestionsForRepair(questions, 25);
+  const chunks = chunkQuestionsForRepair(questions, 40);
   const answers = [];
 
   for (let batchIndex = 0; batchIndex < chunks.length; batchIndex += 1) {
