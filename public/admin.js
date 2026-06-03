@@ -1122,17 +1122,18 @@ function normalizePuterAnsweredQuestions(questions, answers) {
   const answerMap = new Map();
   for (const answer of answers) {
     const questionNumber = Number(answer?.sourceQuestionNumber || 0);
-    const correctIndex = Number(answer?.correctIndex);
-    if (!Number.isInteger(questionNumber) || !Number.isInteger(correctIndex)) {
+    const rawCorrectIndex = answer?.correctIndex;
+    if (!Number.isInteger(questionNumber)) {
       throw new Error('Puter returned invalid answer data.');
     }
-    answerMap.set(questionNumber, correctIndex);
+    answerMap.set(questionNumber, rawCorrectIndex);
   }
 
   return questions.map((question, index) => {
     const sourceQuestionNumber = Number(question?.sourceQuestionNumber || index + 1);
     const options = Array.isArray(question?.options) ? question.options : [];
-    const correctIndex = answerMap.get(sourceQuestionNumber);
+    const rawCorrectIndex = answerMap.get(sourceQuestionNumber);
+    const correctIndex = normalizeReturnedCorrectIndex(rawCorrectIndex, options.length);
     if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= options.length) {
       throw new Error(`Puter returned an invalid correct answer for question ${sourceQuestionNumber}.`);
     }
@@ -1142,6 +1143,45 @@ function normalizePuterAnsweredQuestions(questions, answers) {
       correctIndex,
     };
   });
+}
+
+function normalizeReturnedCorrectIndex(value, optionCount) {
+  if (!Number.isInteger(optionCount) || optionCount < 1) {
+    return Number.NaN;
+  }
+
+  if (Number.isInteger(value)) {
+    if (value >= 0 && value < optionCount) {
+      return value;
+    }
+    if (value >= 1 && value <= optionCount) {
+      return value - 1;
+    }
+  }
+
+  const normalizedText = String(value || '').trim().toUpperCase();
+  if (!normalizedText) {
+    return Number.NaN;
+  }
+
+  if (/^\d+$/.test(normalizedText)) {
+    const numericValue = Number(normalizedText);
+    if (numericValue >= 0 && numericValue < optionCount) {
+      return numericValue;
+    }
+    if (numericValue >= 1 && numericValue <= optionCount) {
+      return numericValue - 1;
+    }
+  }
+
+  if (/^[A-Z]$/.test(normalizedText)) {
+    const alphaIndex = normalizedText.charCodeAt(0) - 65;
+    if (alphaIndex >= 0 && alphaIndex < optionCount) {
+      return alphaIndex;
+    }
+  }
+
+  return Number.NaN;
 }
 
 async function answerDraftWithPuterOverride(payload) {
