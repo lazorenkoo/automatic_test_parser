@@ -1095,9 +1095,18 @@ function buildPuterAnswerMessagesOverride(batchQuestions, batchIndex, batchCount
 }
 
 async function requestPuterAnswerBatch(batchQuestions, batchIndex, batchCount) {
-  const response = await window.puter.ai.chat(buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount), {
+  const puterRequest = window.puter.ai.chat(buildPuterAnswerMessages(batchQuestions, batchIndex, batchCount), {
     model: adminBootstrap.puterAnswerModel,
   });
+  const timeoutMs = 90000;
+  const response = await Promise.race([
+    puterRequest,
+    new Promise((_, reject) => {
+      window.setTimeout(() => {
+        reject(new Error('Безкоштовний режим не отримав відповідь вчасно. Спробуйте ще раз або увійдіть у Puter.'));
+      }, timeoutMs);
+    }),
+  ]);
   const rawText = extractPuterChatText(response);
   const parsed = parseJsonFromModelText(rawText);
   const answers = Array.isArray(parsed?.answers) ? parsed.answers : [];
