@@ -683,6 +683,7 @@ const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOp
   ? Math.max(0, Number(bootstrapData.configuredOptionCount))
   : 0;
 const quizStorageSlug = String(bootstrapData.slug || bootstrapData.quizUrl || 'quiz').trim() || 'quiz';
+const quizDeviceId = String(bootstrapData.deviceId || 'device').trim() || 'device';
 const deviceWarningSignature = buildDeviceWarningSignature(deviceWarning);
 
 const i18n = {
@@ -1005,7 +1006,7 @@ function hide(node) {
 }
 
 function getMistakesStorageKey() {
-  return 'pdmu_quiz_mistakes::' + quizStorageSlug;
+  return 'pdmu_quiz_mistakes::' + quizStorageSlug + '::' + quizDeviceId;
 }
 
 function normalizeSourceQuestionIndexes(value) {
@@ -2771,6 +2772,7 @@ export function renderHostedQuizHtml(quiz, options = {}) {
     correctionUrl,
     puterExplanationsEnabled,
     puterExplanationModel,
+    deviceId: typeof options === 'object' && options ? options.deviceId || '' : '',
     title: quiz.title,
     configuredOptionCount: Number.isInteger(Number(quiz.rawModelJson?.optionCount))
       ? Number(quiz.rawModelJson.optionCount)

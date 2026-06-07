@@ -1078,6 +1078,7 @@ app.get('/quiz/:slug', (req, res) => {
     correctionUrl: buildAbsoluteUrl(req, `/api/quizzes/${quiz.slug}/corrections`),
     puterExplanationsEnabled: String(process.env.PUTER_EXPLANATIONS_ENABLED || '1') !== '0',
     puterExplanationModel: String(process.env.PUTER_EXPLANATION_MODEL || 'google/gemini-2.5-pro').trim(),
+    deviceId,
     deviceWarning: getCurrentSiteDeviceWarning(req, res),
   }));
 });
