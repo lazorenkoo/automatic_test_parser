@@ -682,6 +682,7 @@ const explanationsEnabled = puterExplanationsEnabled;
 const configuredOptionCount = Number.isInteger(Number(bootstrapData.configuredOptionCount))
   ? Math.max(0, Number(bootstrapData.configuredOptionCount))
   : 0;
+const quizStorageSlug = String(bootstrapData.slug || bootstrapData.quizUrl || 'quiz').trim() || 'quiz';
 const deviceWarningSignature = buildDeviceWarningSignature(deviceWarning);
 
 const i18n = {
@@ -751,6 +752,9 @@ i18n.timerRemainingQuestion = '\u0417\u0430\u043B\u0438\u0448\u0438\u043B\u043E\
 i18n.timerRemainingTotal = '\u0417\u0430\u043B\u0438\u0448\u0438\u043B\u043E\u0441\u044C \u043D\u0430 \u0442\u0435\u0441\u0442: {time}';
 i18n.timerExpiredQuestion = '\u0427\u0430\u0441 \u043D\u0430 \u0446\u0435 \u043F\u0438\u0442\u0430\u043D\u043D\u044F \u0432\u0438\u0439\u0448\u043E\u0432.';
 i18n.timerExpiredTotal = '\u0427\u0430\u0441 \u043D\u0430 \u0442\u0435\u0441\u0442 \u0432\u0438\u0439\u0448\u043E\u0432.';
+i18n.mistakesAction = '\u0422\u0435\u0441\u0442 \u043D\u0430 \u043F\u043E\u043C\u0438\u043B\u043A\u0430\u0445';
+i18n.mistakesNote = '\u0417\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E \u043F\u043E\u043C\u0438\u043B\u043A\u0438: {count}';
+i18n.mistakesUnavailable = '\u041D\u0435\u043C\u0430\u0454 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u0438\u0445 \u043F\u043E\u043C\u0438\u043B\u043E\u043A \u0434\u043B\u044F \u0446\u044C\u043E\u0433\u043E \u0442\u0435\u0441\u0442\u0443.';
 i18n.selectionTitle = '\u041A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u043F\u0438\u0442\u0430\u043D\u044C';
 i18n.selectionMode = '\u0420\u0435\u0436\u0438\u043C \u0432\u0438\u0431\u043E\u0440\u0443';
 i18n.selectionAll = '\u0423\u0441\u0456 \u043F\u0438\u0442\u0430\u043D\u043D\u044F';
@@ -763,17 +767,20 @@ i18n.timerNote = '\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0437\u0440\u0443\
 
 const state = {
   questions: sourceQuestions,
+  sourceQuestionIndexes: sourceQuestions.map((_, index) => index),
   order: [],
   optsOrder: [],
   chosenAt: [],
   cur: 0,
   startedAt: null,
+  mode: 'all',
   shuffleQuestions: false,
   correctionOpen: false,
   configuredOptionCount,
   resultsFilter: 'all',
   resultsSnapshot: null,
   explanationsByQuestion: {},
+  savedMistakeSourceIndexes: [],
   timerMode: 'off',
   timerPerQuestionSeconds: 30,
   timerTotalSeconds: 20 * 60,
@@ -848,6 +855,9 @@ const els = {
   deviceWarningModalTitle: document.getElementById('deviceWarningModalTitle'),
   deviceWarningModalText: document.getElementById('deviceWarningModalText'),
   deviceWarningModalClose: document.getElementById('deviceWarningModalClose'),
+  startMistakesBtn: null,
+  startMistakesNote: null,
+  resultsMistakesBtn: null,
 };
 
 function t(key, params = {}) {
@@ -931,6 +941,12 @@ function applyLanguage() {
   if (els.restartBtn) {
     els.restartBtn.textContent = t('restart');
   }
+  if (els.startMistakesBtn) {
+    els.startMistakesBtn.textContent = t('mistakesAction');
+  }
+  if (els.resultsMistakesBtn) {
+    els.resultsMistakesBtn.textContent = t('mistakesAction');
+  }
   if (els.reportBtn) {
     els.reportBtn.textContent = t('report');
   }
@@ -970,6 +986,8 @@ function applyLanguage() {
   } else if (els.questionCounter) {
     els.questionCounter.textContent = t('questionShort');
   }
+
+  syncMistakePracticeButtons();
 }
 
 function show(node) {
@@ -984,6 +1002,108 @@ function hide(node) {
     return;
   }
   node.classList.add('hidden');
+}
+
+function getMistakesStorageKey() {
+  return 'pdmu_quiz_mistakes::' + quizStorageSlug;
+}
+
+function normalizeSourceQuestionIndexes(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const result = [];
+  value.forEach((item) => {
+    const numericValue = Number(item);
+    if (!Number.isInteger(numericValue) || numericValue < 0 || numericValue >= sourceQuestions.length || seen.has(numericValue)) {
+      return;
+    }
+    seen.add(numericValue);
+    result.push(numericValue);
+  });
+  return result;
+}
+
+function readSavedMistakeSourceIndexes() {
+  try {
+    const rawValue = window.localStorage.getItem(getMistakesStorageKey());
+    if (!rawValue) {
+      return [];
+    }
+    const payload = JSON.parse(rawValue);
+    return normalizeSourceQuestionIndexes(payload?.sourceQuestionIndexes);
+  } catch {
+    return [];
+  }
+}
+
+function persistMistakeSourceIndexes(sourceQuestionIndexes) {
+  const normalizedIndexes = normalizeSourceQuestionIndexes(sourceQuestionIndexes);
+  state.savedMistakeSourceIndexes = normalizedIndexes;
+
+  try {
+    if (!normalizedIndexes.length) {
+      window.localStorage.removeItem(getMistakesStorageKey());
+      return;
+    }
+    window.localStorage.setItem(getMistakesStorageKey(), JSON.stringify({
+      sourceQuestionIndexes: normalizedIndexes,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function extractWrongSourceIndexesFromSnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.items)) {
+    return [];
+  }
+
+  return normalizeSourceQuestionIndexes(
+    snapshot.items
+      .filter((item) => item && item.isCorrect === false)
+      .map((item) => item.sourceQuestionIndex)
+  );
+}
+
+function getAvailableMistakeSourceIndexes() {
+  const currentWrongIndexes = extractWrongSourceIndexesFromSnapshot(state.resultsSnapshot);
+  if (currentWrongIndexes.length) {
+    return currentWrongIndexes;
+  }
+  return normalizeSourceQuestionIndexes(state.savedMistakeSourceIndexes);
+}
+
+function syncMistakePracticeButtons() {
+  const availableIndexes = getAvailableMistakeSourceIndexes();
+  const count = availableIndexes.length;
+
+  if (els.startMistakesBtn) {
+    els.startMistakesBtn.textContent = count
+      ? t('mistakesAction') + ' (' + count + ')'
+      : t('mistakesAction');
+    els.startMistakesBtn.classList.toggle('hidden', count < 1);
+  }
+
+  if (els.startMistakesNote) {
+    if (count > 0) {
+      els.startMistakesNote.textContent = t('mistakesNote', { count });
+      els.startMistakesNote.classList.remove('hidden');
+    } else {
+      els.startMistakesNote.textContent = '';
+      els.startMistakesNote.classList.add('hidden');
+    }
+  }
+
+  if (els.resultsMistakesBtn) {
+    els.resultsMistakesBtn.textContent = count
+      ? t('mistakesAction') + ' (' + count + ')'
+      : t('mistakesAction');
+    els.resultsMistakesBtn.classList.toggle('hidden', count < 1);
+  }
 }
 
 function buildDeviceWarningSignature(warning) {
@@ -1175,6 +1295,44 @@ function ensureQuestionSelectionUi() {
   syncQuestionSelectionUi();
 }
 
+function ensureMistakePracticeUi() {
+  const startSection = document.getElementById('start');
+  const startControls = startSection?.querySelector('.controls:last-child');
+  const resultsSection = document.getElementById('results');
+  const resultsControls = resultsSection?.querySelector('.controls');
+
+  if (startControls && !els.startMistakesBtn) {
+    const button = document.createElement('button');
+    button.id = 'startMistakesBtn';
+    button.type = 'button';
+    button.className = 'btn secondary hidden';
+    button.textContent = t('mistakesAction');
+    startControls.insertBefore(button, els.startBtn || startControls.firstChild || null);
+    els.startMistakesBtn = button;
+  }
+
+  if (startSection && !els.startMistakesNote) {
+    const note = document.createElement('p');
+    note.id = 'startMistakesNote';
+    note.className = 'small hidden';
+    note.style.marginTop = '12px';
+    startSection.appendChild(note);
+    els.startMistakesNote = note;
+  }
+
+  if (resultsControls && !els.resultsMistakesBtn) {
+    const button = document.createElement('button');
+    button.id = 'resultsMistakesBtn';
+    button.type = 'button';
+    button.className = 'btn secondary hidden';
+    button.textContent = t('mistakesAction');
+    resultsControls.insertBefore(button, els.restartBtn || resultsControls.lastElementChild || null);
+    els.resultsMistakesBtn = button;
+  }
+
+  syncMistakePracticeButtons();
+}
+
 function syncQuestionSelectionUi() {
   const mode = getQuestionSelectionMode();
   const useAll = mode === 'all';
@@ -1197,20 +1355,28 @@ function getQuestionSelectionMode() {
   return normalized === 'manual' || normalized === 'random' ? normalized : 'all';
 }
 
+function buildQuestionSetFromSourceIndexes(sourceQuestionIndexes) {
+  const normalizedIndexes = normalizeSourceQuestionIndexes(sourceQuestionIndexes);
+  return {
+    questions: normalizedIndexes.map((index) => sourceQuestions[index]),
+    sourceQuestionIndexes: normalizedIndexes,
+  };
+}
+
 function buildQuestionSetForStart() {
   const mode = getQuestionSelectionMode();
-  const baseQuestions = sourceQuestions.slice();
+  const baseQuestionIndexes = sourceQuestions.map((_, index) => index);
   const requestedLimit = Math.max(1, Number(els.questionLimitInput?.value || 20) || 20);
 
-  if (mode === 'all' || requestedLimit >= baseQuestions.length) {
-    return baseQuestions;
+  if (mode === 'all' || requestedLimit >= baseQuestionIndexes.length) {
+    return buildQuestionSetFromSourceIndexes(baseQuestionIndexes);
   }
 
   if (mode === 'manual') {
-    return baseQuestions.slice(0, requestedLimit);
+    return buildQuestionSetFromSourceIndexes(baseQuestionIndexes.slice(0, requestedLimit));
   }
 
-  return shuffleArray(baseQuestions).slice(0, requestedLimit);
+  return buildQuestionSetFromSourceIndexes(shuffleArray(baseQuestionIndexes).slice(0, requestedLimit));
 }
 
 function syncTimerConfigUi() {
@@ -1295,6 +1461,7 @@ function tickTimer() {
 
 function handleQuestionTimerExpired() {
   const { sourceQuestionIndex } = getCurrentQuestionContext();
+  const originalSourceQuestionIndex = Number(state.sourceQuestionIndexes[sourceQuestionIndex]);
   if (state.chosenAt[sourceQuestionIndex] === null) {
     state.chosenAt[sourceQuestionIndex] = -1;
   }
@@ -1382,8 +1549,20 @@ function getEditableOptionCount(question) {
   return currentCount || state.configuredOptionCount || 0;
 }
 
-function startQuiz() {
-  state.questions = buildQuestionSetForStart();
+function startQuiz(options = {}) {
+  const explicitIndexes = Array.isArray(options?.sourceQuestionIndexes) ? options.sourceQuestionIndexes : null;
+  const questionSet = explicitIndexes?.length
+    ? buildQuestionSetFromSourceIndexes(explicitIndexes)
+    : buildQuestionSetForStart();
+
+  if (!Array.isArray(questionSet.questions) || !questionSet.questions.length) {
+    showToast(t('mistakesUnavailable'));
+    return;
+  }
+
+  state.mode = explicitIndexes?.length ? 'mistakes' : 'all';
+  state.questions = questionSet.questions;
+  state.sourceQuestionIndexes = questionSet.sourceQuestionIndexes;
   const totalQuestions = state.questions.length;
   state.order = [...Array(totalQuestions).keys()];
   state.shuffleQuestions = Boolean(els.shuffle?.checked);
@@ -2282,6 +2461,9 @@ async function submitCorrection() {
     }
 
     state.questions[sourceQuestionIndex] = result.question;
+    if (Number.isInteger(originalSourceQuestionIndex) && originalSourceQuestionIndex >= 0 && originalSourceQuestionIndex < sourceQuestions.length) {
+      sourceQuestions[originalSourceQuestionIndex] = result.question;
+    }
     const nextOptionCount = Array.isArray(result.question.options) ? result.question.options.length : 0;
     state.configuredOptionCount = nextOptionCount;
     state.optsOrder[sourceQuestionIndex] = Array.from({ length: nextOptionCount }, (_, optionIndex) => optionIndex);
@@ -2313,6 +2495,7 @@ function buildResultsSnapshot() {
 
   answered.forEach((questionIndex) => {
     const question = state.questions[questionIndex];
+    const sourceQuestionIndex = Number(state.sourceQuestionIndexes[questionIndex]);
     const optionOrder = state.optsOrder[questionIndex];
     const chosenRenderedIndex = state.chosenAt[questionIndex];
     const correctRenderedIndex = optionOrder.findIndex((index) => index === question.correctIndex);
@@ -2326,6 +2509,8 @@ function buildResultsSnapshot() {
       chosenRenderedIndex,
       correctRenderedIndex,
       isCorrect,
+      sourceQuestionIndex,
+      sourceQuestionNumber: Number.isInteger(sourceQuestionIndex) ? sourceQuestionIndex + 1 : questionIndex + 1,
     });
   });
 
@@ -2403,8 +2588,10 @@ function showResults() {
   hide(els.quiz);
   show(els.results);
   state.resultsSnapshot = buildResultsSnapshot();
+  persistMistakeSourceIndexes(extractWrongSourceIndexesFromSnapshot(state.resultsSnapshot));
   state.resultsFilter = 'all';
   updateResultsFilterButtons();
+  syncMistakePracticeButtons();
   renderResultsList();
 
   const snapshot = state.resultsSnapshot;
@@ -2412,6 +2599,18 @@ function showResults() {
     correct: snapshot.correctCount,
     answered: snapshot.answeredCount,
     time: msToClock(snapshot.durationMs),
+  });
+}
+
+function startMistakePractice() {
+  const sourceQuestionIndexes = getAvailableMistakeSourceIndexes();
+  if (!sourceQuestionIndexes.length) {
+    showToast(t('mistakesUnavailable'));
+    return;
+  }
+
+  startQuiz({
+    sourceQuestionIndexes,
   });
 }
 
@@ -2428,15 +2627,19 @@ function setResultsFilter(filter) {
 function resetQuiz() {
   clearTimerState();
   state.correctionOpen = false;
+  state.mode = 'all';
   state.resultsFilter = 'all';
   state.resultsSnapshot = null;
   state.explanationsByQuestion = {};
   state.questions = sourceQuestions;
+  state.sourceQuestionIndexes = sourceQuestions.map((_, index) => index);
+  state.savedMistakeSourceIndexes = readSavedMistakeSourceIndexes();
   clearExplainCooldown();
   closeExplanationPanel();
   hide(els.quiz);
   hide(els.results);
   show(els.start);
+  syncMistakePracticeButtons();
   applyLanguage();
 }
 
@@ -2507,9 +2710,12 @@ document.addEventListener('DOMContentLoaded', () => {
   ensureQuestionSelectionUi();
   ensureTimerUi();
   ensureExplanationUi();
+  ensureMistakePracticeUi();
+  state.savedMistakeSourceIndexes = readSavedMistakeSourceIndexes();
   applyLanguage();
 
   els.startBtn?.addEventListener('click', startQuiz);
+  els.startMistakesBtn?.addEventListener('click', startMistakePractice);
   els.next?.addEventListener('click', nextQuestion);
   els.finish?.addEventListener('click', confirmFinishQuiz);
   els.correctionOpenBtn?.addEventListener('click', openCorrectionPanel);
@@ -2526,6 +2732,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   els.resultsFilterAllBtn?.addEventListener('click', () => setResultsFilter('all'));
   els.resultsFilterWrongBtn?.addEventListener('click', () => setResultsFilter('wrong'));
+  els.resultsMistakesBtn?.addEventListener('click', startMistakePractice);
   els.restartBtn?.addEventListener('click', resetQuiz);
   els.reportBtn?.addEventListener('click', reportBrokenQuiz);
   els.deviceWarningModalClose?.addEventListener('click', closeDeviceWarningModal);
