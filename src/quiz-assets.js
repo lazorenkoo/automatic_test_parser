@@ -2587,7 +2587,9 @@ function showResults() {
   hide(els.quiz);
   show(els.results);
   state.resultsSnapshot = buildResultsSnapshot();
-  persistMistakeSourceIndexes(extractWrongSourceIndexesFromSnapshot(state.resultsSnapshot));
+  if (state.mode === 'all') {
+    persistMistakeSourceIndexes(extractWrongSourceIndexesFromSnapshot(state.resultsSnapshot));
+  }
   state.resultsFilter = 'all';
   updateResultsFilterButtons();
   syncMistakePracticeButtons();
