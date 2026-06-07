@@ -1298,8 +1298,7 @@ function ensureQuestionSelectionUi() {
 function ensureMistakePracticeUi() {
   const startSection = document.getElementById('start');
   const startControls = startSection?.querySelector('.controls:last-child');
-  const resultsSection = document.getElementById('results');
-  const resultsControls = resultsSection?.querySelector('.controls');
+  const resultsToolbar = document.getElementById('resultsFilters');
 
   if (startControls && !els.startMistakesBtn) {
     const button = document.createElement('button');
@@ -1320,13 +1319,13 @@ function ensureMistakePracticeUi() {
     els.startMistakesNote = note;
   }
 
-  if (resultsControls && !els.resultsMistakesBtn) {
+  if (resultsToolbar && !els.resultsMistakesBtn) {
     const button = document.createElement('button');
     button.id = 'resultsMistakesBtn';
     button.type = 'button';
     button.className = 'btn secondary hidden';
     button.textContent = t('mistakesAction');
-    resultsControls.insertBefore(button, els.restartBtn || resultsControls.lastElementChild || null);
+    resultsToolbar.appendChild(button);
     els.resultsMistakesBtn = button;
   }
 
